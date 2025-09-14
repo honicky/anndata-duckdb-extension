@@ -287,9 +287,9 @@ void H5Reader::ReadObsColumn(const std::string &column_name, Vector &result, idx
 
 						for (size_t i = 0; i < cat_dims[0]; i++) {
 							if (str_buffer[i]) {
-								categories.push_back(std::string(str_buffer[i]));
+								categories.emplace_back(str_buffer[i]);
 							} else {
-								categories.push_back("");
+								categories.emplace_back("");
 							}
 						}
 
@@ -304,7 +304,7 @@ void H5Reader::ReadObsColumn(const std::string &column_name, Vector &result, idx
 						for (size_t i = 0; i < cat_dims[0]; i++) {
 							char *str_ptr = buffer.data() + i * str_size;
 							size_t len = strnlen(str_ptr, str_size);
-							categories.push_back(std::string(str_ptr, len));
+							categories.emplace_back(str_ptr, len);
 						}
 					}
 				}
@@ -490,9 +490,9 @@ void H5Reader::ReadVarColumn(const std::string &column_name, Vector &result, idx
 
 						for (size_t i = 0; i < cat_dims[0]; i++) {
 							if (str_buffer[i]) {
-								categories.push_back(std::string(str_buffer[i]));
+								categories.emplace_back(str_buffer[i]);
 							} else {
-								categories.push_back("");
+								categories.emplace_back("");
 							}
 						}
 
@@ -507,7 +507,7 @@ void H5Reader::ReadVarColumn(const std::string &column_name, Vector &result, idx
 						for (size_t i = 0; i < cat_dims[0]; i++) {
 							char *str_ptr = buffer.data() + i * str_size;
 							size_t len = strnlen(str_ptr, str_size);
-							categories.push_back(std::string(str_ptr, len));
+							categories.emplace_back(str_ptr, len);
 						}
 					}
 				}
@@ -667,18 +667,22 @@ LogicalType H5Reader::H5TypeToDuckDBType(const H5::DataType &h5_type) {
 	switch (type_class) {
 	case H5T_INTEGER: {
 		size_t size = h5_type.getSize();
-		if (size <= 1)
+		if (size <= 1) {
 			return LogicalType::TINYINT;
-		if (size <= 2)
+}
+		if (size <= 2) {
 			return LogicalType::SMALLINT;
-		if (size <= 4)
+}
+		if (size <= 4) {
 			return LogicalType::INTEGER;
+}
 		return LogicalType::BIGINT;
 	}
 	case H5T_FLOAT: {
 		size_t size = h5_type.getSize();
-		if (size <= 4)
+		if (size <= 4) {
 			return LogicalType::FLOAT;
+}
 		return LogicalType::DOUBLE;
 	}
 	case H5T_STRING:
