@@ -3,34 +3,48 @@ cmake_minimum_required(VERSION 3.5)
 # Set extension name here
 set(TARGET_NAME anndata)
 
-# Find HDF5 using CONFIG mode for VCPKG or fall back to MODULE mode
-find_package(hdf5 CONFIG QUIET)
-if(hdf5_FOUND)
-    message(STATUS "Found HDF5 via CONFIG mode (VCPKG)")
-    set(HDF5_LIBRARIES hdf5::hdf5-shared hdf5::hdf5_cpp-shared)
-    # For static builds, use static libraries
-    if(EXTENSION_STATIC_BUILD)
-        set(HDF5_LIBRARIES hdf5::hdf5-static hdf5::hdf5_cpp-static)
-    endif()
-else()
-    # Fall back to traditional FindHDF5 for system installations
-    message(STATUS "HDF5 CONFIG not found, trying MODULE mode")
-    find_package(HDF5 REQUIRED COMPONENTS C CXX)
-    if(HDF5_FOUND)
-        include_directories(${HDF5_INCLUDE_DIRS})
-        add_definitions(${HDF5_DEFINITIONS})
-        message(STATUS "HDF5 found via MODULE mode: ${HDF5_VERSION}")
-        message(STATUS "HDF5 libraries: ${HDF5_LIBRARIES}")
-    else()
-        message(FATAL_ERROR "HDF5 not found. Please install HDF5 or use VCPKG.")
-    endif()
-endif()
-
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
 set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 
 project(${TARGET_NAME})
 include_directories(src/include)
+
+# Find HDF5 - use h5wasm for WASM builds, native HDF5 for others
+if(EMSCRIPTEN)
+    # For WASM builds, use prebuilt h5wasm libraries
+    message(STATUS "Building for WASM - using h5wasm")
+    include(FetchContent)
+    FetchContent_Declare(
+        libhdf5-wasm
+        URL https://github.com/usnistgov/libhdf5-wasm/releases/download/v0.4.6_3.1.68/HDF5-1.14.6-Emscripten.tar.gz
+    )
+    FetchContent_MakeAvailable(libhdf5-wasm)
+    set(HDF5_LIBRARIES hdf5-static hdf5_cpp-static)
+    message(STATUS "Using h5wasm libraries: ${HDF5_LIBRARIES}")
+else()
+    # For native builds, use system HDF5
+    find_package(hdf5 CONFIG QUIET)
+    if(hdf5_FOUND)
+        message(STATUS "Found HDF5 via CONFIG mode (VCPKG)")
+        set(HDF5_LIBRARIES hdf5::hdf5-shared hdf5::hdf5_cpp-shared)
+        # For static builds, use static libraries
+        if(EXTENSION_STATIC_BUILD)
+            set(HDF5_LIBRARIES hdf5::hdf5-static hdf5::hdf5_cpp-static)
+        endif()
+    else()
+        # Fall back to traditional FindHDF5 for system installations
+        message(STATUS "HDF5 CONFIG not found, trying MODULE mode")
+        find_package(HDF5 REQUIRED COMPONENTS C CXX)
+        if(HDF5_FOUND)
+            include_directories(${HDF5_INCLUDE_DIRS})
+            add_definitions(${HDF5_DEFINITIONS})
+            message(STATUS "HDF5 found via MODULE mode: ${HDF5_VERSION}")
+            message(STATUS "HDF5 libraries: ${HDF5_LIBRARIES}")
+        else()
+            message(FATAL_ERROR "HDF5 not found. Please install HDF5 or use VCPKG.")
+        endif()
+    endif()
+endif()
 
 set(EXTENSION_SOURCES 
     src/anndata_extension.cpp
