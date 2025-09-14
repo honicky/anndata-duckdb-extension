@@ -1,10 +1,14 @@
 {
-        "dependencies": [
-                "openssl"
-        ],
-        "vcpkg-configuration": {
-                "overlay-ports": [
-                        "./extension-ci-tools/vcpkg_ports"
-                ]
-        }
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg/master/scripts/vcpkg.schema.json",
+  "name": "anndata",
+  "version-string": "0.1.0",
+  "description": "DuckDB extension for reading AnnData (.h5ad) files",
+  "homepage": "https://github.com/rj/anndata-duckdb",
+  "license": "MIT",
+  "dependencies": [
+    {
+      "name": "hdf5",
+      "features": ["cpp"]
+    }
+  ]
 }
