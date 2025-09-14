@@ -19,8 +19,15 @@ if(EMSCRIPTEN)
         URL https://github.com/usnistgov/libhdf5-wasm/releases/download/v0.4.6_3.1.68/HDF5-1.14.6-Emscripten.tar.gz
     )
     FetchContent_MakeAvailable(libhdf5-wasm)
-    set(HDF5_LIBRARIES hdf5-static hdf5_cpp-static)
+    # Set up HDF5 libraries and includes for WASM
+    set(HDF5_LIBRARIES 
+        ${libhdf5-wasm_SOURCE_DIR}/lib/libhdf5.a 
+        ${libhdf5-wasm_SOURCE_DIR}/lib/libhdf5_cpp.a
+    )
+    set(HDF5_INCLUDE_DIRS ${libhdf5-wasm_SOURCE_DIR}/include)
+    include_directories(${HDF5_INCLUDE_DIRS})
     message(STATUS "Using h5wasm libraries: ${HDF5_LIBRARIES}")
+    message(STATUS "Using h5wasm includes: ${HDF5_INCLUDE_DIRS}")
 else()
     # For native builds, use system HDF5
     find_package(hdf5 CONFIG QUIET)
