@@ -28,6 +28,14 @@ if(EMSCRIPTEN)
     include_directories(${HDF5_INCLUDE_DIRS})
     message(STATUS "Using h5wasm libraries: ${HDF5_LIBRARIES}")
     message(STATUS "Using h5wasm includes: ${HDF5_INCLUDE_DIRS}")
+elseif(CLANG_TIDY)
+    # For tidy-check builds, skip HDF5 dependency
+    message(STATUS "Clang-tidy build detected - skipping HDF5 dependency")
+    # Define dummy variables to satisfy build
+    set(HDF5_LIBRARIES "")
+    set(HDF5_INCLUDE_DIRS "")
+    # Add compile definitions to handle missing HDF5 in code
+    add_compile_definitions(DUCKDB_NO_HDF5)
 else()
     # For native builds, use system HDF5
     find_package(hdf5 CONFIG QUIET)
