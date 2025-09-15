@@ -669,20 +669,20 @@ LogicalType H5Reader::H5TypeToDuckDBType(const H5::DataType &h5_type) {
 		size_t size = h5_type.getSize();
 		if (size <= 1) {
 			return LogicalType::TINYINT;
-}
+		}
 		if (size <= 2) {
 			return LogicalType::SMALLINT;
-}
+		}
 		if (size <= 4) {
 			return LogicalType::INTEGER;
-}
+		}
 		return LogicalType::BIGINT;
 	}
 	case H5T_FLOAT: {
 		size_t size = h5_type.getSize();
 		if (size <= 4) {
 			return LogicalType::FLOAT;
-}
+		}
 		return LogicalType::DOUBLE;
 	}
 	case H5T_STRING:
