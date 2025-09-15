@@ -35,6 +35,7 @@ jobs:
         with:
           fetch-depth: 0
           submodules: 'true'
+          lfs: true
 
       - name: Checkout DuckDB to version
         if: ${{ matrix.duckdb_version != '<submodule_version>'}}
@@ -81,6 +82,7 @@ jobs:
         with:
           fetch-depth: 0
           submodules: 'true'
+          lfs: true
 
       - name: Install Ninja
         run: brew install ninja
@@ -132,6 +134,7 @@ jobs:
         with:
           fetch-depth: 0
           submodules: 'true'
+          lfs: true
 
       - uses: actions/setup-python@v2
         with:

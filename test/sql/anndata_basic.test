@@ -1,6 +1,6 @@
 # name: test/sql/anndata_basic.test
 # description: Test basic AnnData extension functionality
-# group: [anndata]
+# group: [sql]
 
 # Before we load the extension, this will fail
 statement error
