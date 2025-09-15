@@ -1,0 +1,40 @@
+# name: test/sql/anndata_basic.test
+# description: Test basic AnnData extension functionality
+# group: [anndata]
+
+# Before we load the extension, this will fail
+statement error
+SELECT * FROM anndata_scan_obs('test/data/test_small.h5ad');
+----
+Catalog Error: Table Function with name anndata_scan_obs does not exist!
+
+# Require statement will ensure this test is run with this extension loaded
+require anndata
+
+# Test reading observation metadata
+query I
+SELECT COUNT(*) FROM anndata_scan_obs('test/data/test_small.h5ad');
+----
+100
+
+# Test reading variable metadata
+query I
+SELECT COUNT(*) FROM anndata_scan_var('test/data/test_small.h5ad');
+----
+50
+
+# Test column names in obs table
+query I
+SELECT COUNT(*) FROM (
+    SELECT * FROM anndata_scan_obs('test/data/test_small.h5ad') LIMIT 1
+) t WHERE t.n_genes IS NOT NULL;
+----
+1
+
+# Test column names in var table
+query I
+SELECT COUNT(*) FROM (
+    SELECT * FROM anndata_scan_var('test/data/test_small.h5ad') LIMIT 1
+) t WHERE t.gene_id IS NOT NULL;
+----
+1

@@ -76,3 +76,23 @@ anndata_duckdb/
 - use the documents in the `spec/` folder to guide the development process
 - keep the specs in the `spec/implementation-plan.md` up to date as design decisions change
 - use `uv` for all python package management. Prefer `uv add` over `uv pip install` in order to manage the package list with pyproject.toml
+
+## Code Quality Checks Before Committing
+
+**IMPORTANT**: Always run these checks before committing and pushing code to ensure CI/CD passes:
+
+1. **Format Check**: 
+   - Run `uv run make format` to check code formatting
+   - If it reports changes needed, run `uv run make format-fix` to automatically fix formatting issues
+   - The CI/CD uses DuckDB's formatting standards (tabs for indentation, specific spacing rules)
+
+2. **Tidy Check**: 
+   - Run `make tidy-check` to check for clang-tidy issues
+   - Fix any reported issues before committing
+   - Common issues include: missing explicit casts, using push_back instead of emplace_back, missing braces
+
+3. **Build Verification**:
+   - Ensure the extension builds successfully: `make`
+   - For WASM builds, test locally if possible: `VCPKG_TOOLCHAIN_PATH="" make wasm_mvp`
+
+Only commit and push after all checks pass locally. The CI/CD pipeline will fail if format or tidy checks don't pass.
