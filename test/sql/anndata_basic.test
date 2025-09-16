@@ -73,3 +73,29 @@ ORDER BY o.obs_idx;
 0	1
 1	1
 2	1
+
+# Test using custom var column for gene names
+# Default (_index/var_names) gives Gene_000, Gene_001, etc.
+# Using 'gene_id' parameter gives ENSG00000000000, ENSG00000000001, etc.
+query I
+SELECT COUNT(*) 
+FROM anndata_scan_x('test/data/test_small.h5ad', 'gene_id')
+WHERE obs_idx = 0;
+----
+1
+
+# Verify gene_id column names are used (ENSG format) instead of default gene_name
+query II
+SELECT obs_idx, ENSG00000000000 IS NOT NULL as has_ensembl_column
+FROM anndata_scan_x('test/data/test_small.h5ad', 'gene_id')
+WHERE obs_idx = 0;
+----
+0	true
+
+# Verify default uses gene_name (Gene_XXX format)
+query II
+SELECT obs_idx, Gene_000 IS NOT NULL as has_default_column
+FROM anndata_scan_x('test/data/test_small.h5ad')
+WHERE obs_idx = 0;
+----
+0	true

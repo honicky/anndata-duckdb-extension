@@ -47,7 +47,7 @@ struct AnndataBindData : public TableFunctionData {
 	idx_t n_obs = 0;
 	idx_t n_var = 0;
 	vector<string> var_names;
-	string var_name_column = "_index";  // Default column for gene names
+	string var_name_column = "_index";  // Default column for gene names (var_names in AnnData, stored as _index in HDF5)
 
 	AnndataBindData(const string &path) : file_path(path), row_count(0), column_count(0) {
 	}
