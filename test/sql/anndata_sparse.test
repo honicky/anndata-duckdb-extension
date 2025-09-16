@@ -1,0 +1,70 @@
+# name: test/sql/anndata_sparse.test
+# description: Test sparse matrix support in AnnData extension
+# group: [sql]
+
+# Require statement will ensure this test is run with this extension loaded
+require anndata
+
+# Test reading sparse X matrix - should return wide format with genes as columns
+query I
+SELECT COUNT(*) FROM anndata_scan_x('test/data/test_sparse.h5ad');
+----
+10
+
+# Test that we have the correct number of columns (obs_idx + 20 genes)
+query I
+SELECT COUNT(*) FROM (
+    SELECT * FROM anndata_scan_x('test/data/test_sparse.h5ad') LIMIT 1
+) t;
+----
+1
+
+# Test first observation has gene expression values (most should be 0 due to sparsity)
+query II
+SELECT obs_idx, Gene_000 IS NOT NULL as has_value
+FROM anndata_scan_x('test/data/test_sparse.h5ad')
+WHERE obs_idx = 0;
+----
+0	true
+
+# Test that sparse values are correctly returned
+# Since the matrix is 90% sparse, most values should be 0
+query I
+SELECT COUNT(*) 
+FROM (
+    SELECT obs_idx,
+           Gene_000, Gene_001, Gene_002, Gene_003, Gene_004
+    FROM anndata_scan_x('test/data/test_sparse.h5ad')
+    WHERE obs_idx = 0
+) t;
+----
+1
+
+# Test joining sparse X with obs metadata
+query II
+SELECT o.obs_idx, o.cell_type
+FROM anndata_scan_obs('test/data/test_sparse.h5ad') o
+JOIN anndata_scan_x('test/data/test_sparse.h5ad') x 
+  ON o.obs_idx = x.obs_idx
+WHERE o.obs_idx < 3
+ORDER BY o.obs_idx;
+----
+0	TypeA
+1	TypeA
+2	TypeA
+
+# Test using custom var column for gene names with sparse matrix
+query I
+SELECT COUNT(*) 
+FROM anndata_scan_x('test/data/test_sparse.h5ad', 'gene_id')
+WHERE obs_idx = 0;
+----
+1
+
+# Verify gene_id column names are used (ENSG format) with sparse matrix
+query II
+SELECT obs_idx, ENSG00000000 IS NOT NULL as has_ensembl_column
+FROM anndata_scan_x('test/data/test_sparse.h5ad', 'gene_id')
+WHERE obs_idx = 0;
+----
+0	true

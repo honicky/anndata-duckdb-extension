@@ -3,7 +3,12 @@ name = "anndata-duckdb-extension"
 version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "anndata>=0.12.2",
+    "numpy>=2.3.3",
+    "pandas>=2.3.2",
+    "scipy>=1.16.2",
+]
 
 [dependency-groups]
 dev = [

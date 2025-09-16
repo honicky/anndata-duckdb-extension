@@ -49,13 +49,22 @@ public:
 		LogicalType dtype = LogicalType::DOUBLE;
 	};
 	XMatrixInfo GetXMatrixInfo();
-	
+
 	// Read gene names from var
 	std::vector<std::string> GetVarNames(const std::string &column_name = "_index");
-	
+
 	// Read X matrix values for a row range and column range
-	void ReadXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count, 
-	                 std::vector<double> &values);
+	void ReadXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count, std::vector<double> &values);
+
+	// Sparse matrix data structure
+	struct SparseMatrixData {
+		std::vector<idx_t> row_indices;
+		std::vector<idx_t> col_indices;
+		std::vector<double> values;
+	};
+
+	// Read sparse X matrix - returns only non-zero values
+	SparseMatrixData ReadSparseXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count);
 
 private:
 	std::unique_ptr<H5::H5File> file;

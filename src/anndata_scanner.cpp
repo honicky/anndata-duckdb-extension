@@ -161,7 +161,7 @@ static unique_ptr<LocalTableFunctionState> AnndataInitLocal(ExecutionContext &co
 unique_ptr<FunctionData> AnndataScanner::XBind(ClientContext &context, TableFunctionBindInput &input,
                                                vector<LogicalType> &return_types, vector<string> &names) {
 	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
-	
+
 	// Check for optional var_name_column parameter
 	if (input.inputs.size() > 1) {
 		bind_data->var_name_column = input.inputs[1].GetValue<string>();
@@ -183,14 +183,14 @@ unique_ptr<FunctionData> AnndataScanner::XBind(ClientContext &context, TableFunc
 	bind_data->n_obs = x_info.n_obs;
 	bind_data->n_var = x_info.n_var;
 	bind_data->is_x_scan = true;
-	
+
 	// Get variable names for column headers
 	bind_data->var_names = reader.GetVarNames(bind_data->var_name_column);
-	
+
 	// Set up columns: obs_idx + one column per gene
 	names.push_back("obs_idx");
 	return_types.push_back(LogicalType::BIGINT);
-	
+
 	// Add one column for each gene
 	for (size_t i = 0; i < bind_data->n_var && i < bind_data->var_names.size(); i++) {
 		names.push_back(bind_data->var_names[i]);
@@ -218,32 +218,56 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 	// Calculate how many observations to read
 	idx_t remaining = bind_data.n_obs - gstate.current_row;
 	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, remaining);
-	
+
 	if (count == 0) {
 		return;
 	}
 
-	// Read the matrix data for these observations
-	std::vector<double> values;
-	gstate.h5_reader->ReadXMatrix(gstate.current_row, count, 0, bind_data.n_var, values);
-	
 	// First column is obs_idx
 	auto &obs_idx_vec = output.data[0];
 	for (idx_t i = 0; i < count; i++) {
 		obs_idx_vec.SetValue(i, Value::BIGINT(gstate.current_row + i));
 	}
-	
-	// Fill gene expression columns
+
+	// Initialize all gene columns with zeros (NULL would be better but DOUBLE(0.0) for now)
 	for (idx_t var_idx = 0; var_idx < bind_data.n_var; var_idx++) {
-		auto &gene_vec = output.data[var_idx + 1];  // +1 to skip obs_idx column
-		
+		auto &gene_vec = output.data[var_idx + 1]; // +1 to skip obs_idx column
 		for (idx_t obs_idx = 0; obs_idx < count; obs_idx++) {
-			// Matrix is stored row-major: [obs][var]
-			idx_t matrix_idx = obs_idx * bind_data.n_var + var_idx;
-			if (matrix_idx < values.size()) {
-				gene_vec.SetValue(obs_idx, Value::DOUBLE(values[matrix_idx]));
-			} else {
-				gene_vec.SetValue(obs_idx, Value::DOUBLE(0.0));
+			gene_vec.SetValue(obs_idx, Value::DOUBLE(0.0));
+		}
+	}
+
+	// Check if matrix is sparse
+	auto x_info = gstate.h5_reader->GetXMatrixInfo();
+	if (x_info.is_sparse) {
+		// Read sparse matrix - only non-zero values
+		auto sparse_data = gstate.h5_reader->ReadSparseXMatrix(gstate.current_row, count, 0, bind_data.n_var);
+
+		// Fill in the non-zero values
+		for (size_t i = 0; i < sparse_data.values.size(); i++) {
+			idx_t obs_idx = sparse_data.row_indices[i];
+			idx_t var_idx = sparse_data.col_indices[i];
+			double value = sparse_data.values[i];
+
+			// Set the value in the appropriate column
+			auto &gene_vec = output.data[var_idx + 1]; // +1 to skip obs_idx column
+			gene_vec.SetValue(obs_idx, Value::DOUBLE(value));
+		}
+	} else {
+		// Read dense matrix
+		std::vector<double> values;
+		gstate.h5_reader->ReadXMatrix(gstate.current_row, count, 0, bind_data.n_var, values);
+
+		// Fill gene expression columns from dense matrix
+		for (idx_t var_idx = 0; var_idx < bind_data.n_var; var_idx++) {
+			auto &gene_vec = output.data[var_idx + 1]; // +1 to skip obs_idx column
+
+			for (idx_t obs_idx = 0; obs_idx < count; obs_idx++) {
+				// Matrix is stored row-major: [obs][var]
+				idx_t matrix_idx = obs_idx * bind_data.n_var + var_idx;
+				if (matrix_idx < values.size()) {
+					gene_vec.SetValue(obs_idx, Value::DOUBLE(values[matrix_idx]));
+				}
 			}
 		}
 	}
@@ -271,11 +295,10 @@ void RegisterAnndataTableFunctions(DatabaseInstance &db) {
 	                     AnndataInitGlobal, AnndataInitLocal);
 	x_func.name = "anndata_scan_x";
 	ExtensionUtil::RegisterFunction(db, x_func);
-	
+
 	// Also register with optional var_name_column parameter
-	TableFunction x_func_with_param("anndata_scan_x", {LogicalType::VARCHAR, LogicalType::VARCHAR}, 
-	                                AnndataScanner::XScan, AnndataScanner::XBind,
-	                                AnndataInitGlobal, AnndataInitLocal);
+	TableFunction x_func_with_param("anndata_scan_x", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                                AnndataScanner::XScan, AnndataScanner::XBind, AnndataInitGlobal, AnndataInitLocal);
 	x_func_with_param.name = "anndata_scan_x";
 	ExtensionUtil::RegisterFunction(db, x_func_with_param);
 
