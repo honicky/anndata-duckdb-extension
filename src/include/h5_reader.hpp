@@ -63,8 +63,14 @@ public:
 		std::vector<double> values;
 	};
 
-	// Read sparse X matrix - returns only non-zero values
+	// Read sparse X matrix - automatically detects format and dispatches to appropriate reader
 	SparseMatrixData ReadSparseXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count);
+
+	// Read CSR format sparse matrix
+	SparseMatrixData ReadSparseXMatrixCSR(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count);
+
+	// Read CSC format sparse matrix
+	SparseMatrixData ReadSparseXMatrixCSC(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count);
 
 private:
 	std::unique_ptr<H5::H5File> file;
