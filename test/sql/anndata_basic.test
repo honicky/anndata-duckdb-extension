@@ -23,11 +23,11 @@ SELECT COUNT(*) FROM anndata_scan_var('test/data/test_small.h5ad');
 ----
 50
 
-# Test column names in obs table
+# Test column names in obs table - should have obs_idx as first column
 query I
 SELECT COUNT(*) FROM (
     SELECT * FROM anndata_scan_obs('test/data/test_small.h5ad') LIMIT 1
-) t WHERE t.n_genes IS NOT NULL;
+) t WHERE t.obs_idx IS NOT NULL AND t.n_genes IS NOT NULL;
 ----
 1
 
@@ -38,3 +38,38 @@ SELECT COUNT(*) FROM (
 ) t WHERE t.gene_id IS NOT NULL;
 ----
 1
+
+# Test reading X matrix - should return one row per observation
+query I
+SELECT COUNT(*) FROM anndata_scan_x('test/data/test_small.h5ad');
+----
+100
+
+# Test first observation has gene expression values
+query II
+SELECT obs_idx, Gene_000 IS NOT NULL as has_value
+FROM anndata_scan_x('test/data/test_small.h5ad')
+LIMIT 1;
+----
+0	true
+
+# Test selecting specific genes by column name
+query I
+SELECT COUNT(*) FROM anndata_scan_x('test/data/test_small.h5ad')
+WHERE obs_idx < 3;
+----
+3
+
+# Test joining obs and X tables on obs_idx
+query II
+SELECT o.obs_idx, COUNT(*) as cnt
+FROM anndata_scan_obs('test/data/test_small.h5ad') o
+JOIN anndata_scan_x('test/data/test_small.h5ad') x 
+  ON o.obs_idx = x.obs_idx
+WHERE o.obs_idx < 3
+GROUP BY o.obs_idx
+ORDER BY o.obs_idx;
+----
+0	1
+1	1
+2	1

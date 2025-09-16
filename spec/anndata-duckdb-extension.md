@@ -100,7 +100,48 @@ Becomes:
 
 ## User Interface
 
-### Attaching AnnData Files
+### Current Implementation: Table Functions
+
+The current implementation provides table functions for direct access to AnnData components:
+
+```sql
+-- Load the extension
+LOAD 'anndata.duckdb_extension';
+
+-- Query observation (cell) metadata
+SELECT * FROM anndata_scan_obs('path/to/data.h5ad');
+
+-- Query variable (gene) metadata
+SELECT * FROM anndata_scan_var('path/to/data.h5ad');
+
+-- Query expression matrix in wide format (genes as columns)
+SELECT * FROM anndata_scan_x('path/to/data.h5ad');
+
+-- Use custom gene name column (default is '_index')
+SELECT * FROM anndata_scan_x('path/to/data.h5ad', 'gene_symbols');
+
+-- Join observation metadata with expression data using obs_idx
+SELECT 
+    o.cell_type,
+    o.sample_id,
+    x.Gene_000,
+    x.Gene_001
+FROM anndata_scan_obs('data.h5ad') o
+JOIN anndata_scan_x('data.h5ad') x ON o.obs_idx = x.obs_idx
+WHERE o.cell_type = 'T cell';
+
+-- Aggregate gene expression by cell type
+SELECT 
+    o.cell_type,
+    AVG(x.Gene_000) as avg_gene_0_expression
+FROM anndata_scan_x('data.h5ad') x
+JOIN anndata_scan_obs('data.h5ad') o ON x.obs_idx = o.obs_idx
+GROUP BY o.cell_type;
+```
+
+### Future Goal: ATTACH/DETACH Interface
+
+The future implementation will support ATTACH/DETACH syntax similar to SQLite extension:
 
 ```sql
 -- Attach an AnnData file with alias
@@ -125,11 +166,7 @@ ATTACH 'path/to/data.h5ad' AS mydata (
 
 -- List available tables in attached AnnData
 SHOW TABLES FROM mydata;
-```
 
-### Querying Data
-
-```sql
 -- Query main expression matrix
 SELECT * FROM mydata.main LIMIT 10;
 
@@ -153,18 +190,53 @@ WHERE gene_name LIKE 'CD%';
 -- Access layers (alternative expression matrices)
 SELECT * FROM mydata.layers_raw_counts;
 SELECT * FROM mydata.layers_normalized;
-```
 
-### Detaching
-
-```sql
 -- Detach the AnnData file
 DETACH mydata;
 ```
 
+### Comparison of Approaches
+
+| Feature | Table Functions (Current) | ATTACH/DETACH (Future) |
+|---------|--------------------------|------------------------|
+| **Syntax** | `anndata_scan_x('file.h5ad')` | `mydata.main` after ATTACH |
+| **Multiple Files** | Specify path in each query | Attach multiple with different aliases |
+| **Configuration** | Parameters in function call | Options in ATTACH statement |
+| **Performance** | Opens file per query | File stays open during session |
+| **Use Case** | Quick exploration, one-off queries | Extended analysis sessions |
+
 ## Schema Details
 
-### Main Expression Matrix (`main`)
+### Current Implementation: Table Functions
+
+#### Expression Matrix - Wide Format (`anndata_scan_x`)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `obs_idx` | BIGINT | Observation (cell) index |
+| `Gene_000`, `Gene_001`, ... | DOUBLE | Expression values for each gene |
+
+The column names for genes are derived from the variable names in the AnnData file. By default, uses the `_index` column from `var`, but can be configured with the second parameter.
+
+#### Observations Table (`anndata_scan_obs`)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `obs_idx` | BIGINT | Primary key, observation index |
+| `<metadata_columns>` | VARIES | User-defined metadata columns from the .obs DataFrame |
+
+Types are automatically inferred from the AnnData file. The `obs_idx` column is consistent with the one in `anndata_scan_x` for easy joins.
+
+#### Variables Table (`anndata_scan_var`)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `var_idx` | BIGINT | Primary key, variable index |
+| `<metadata_columns>` | VARIES | User-defined metadata columns from the .var DataFrame |
+
+### Future ATTACH/DETACH Schema
+
+#### Main Expression Matrix (`main`) - Long Format
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -177,7 +249,7 @@ For sparse matrices, only non-zero values are stored.
 
 Note: Both `var_id` and `var_name` are included to allow querying by either identifier. The actual columns used are configurable at attach time.
 
-### Observations Table (`obs`)
+#### Observations Table (`obs`)
 
 | Column | Type | Description |
 |--------|------|-------------|

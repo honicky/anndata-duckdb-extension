@@ -41,6 +41,22 @@ public:
 	// Read categorical data
 	std::string GetCategoricalValue(const std::string &group_path, const std::string &column_name, idx_t index);
 
+	// Read X matrix
+	struct XMatrixInfo {
+		size_t n_obs;
+		size_t n_var;
+		bool is_sparse = false;
+		LogicalType dtype = LogicalType::DOUBLE;
+	};
+	XMatrixInfo GetXMatrixInfo();
+	
+	// Read gene names from var
+	std::vector<std::string> GetVarNames(const std::string &column_name = "_index");
+	
+	// Read X matrix values for a row range and column range
+	void ReadXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count, 
+	                 std::vector<double> &values);
+
 private:
 	std::unique_ptr<H5::H5File> file;
 	std::string file_path;

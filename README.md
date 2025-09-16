@@ -5,8 +5,11 @@ This extension provides DuckDB with the ability to read AnnData (`.h5ad`) files,
 ## Features
 
 - Read-only access to AnnData HDF5 files
-- Table function interface for querying expression matrices
-- Support for categorical data in observation metadata
+- Query observation (cell) metadata from `.obs`
+- Query variable (gene) metadata from `.var`
+- Query expression matrix (`.X`) in wide format with genes as columns
+- Support for categorical data in observation and variable metadata
+- Configurable gene name columns for expression matrix
 - Efficient HDF5 data reading with proper memory management
 
 ## Building
@@ -58,10 +61,29 @@ The built extension will be located at:
 -- Load the extension
 LOAD 'path/to/anndata.duckdb_extension';
 
--- Query an AnnData file
-SELECT * FROM anndata_scan('data.h5ad', 'obs');
-SELECT * FROM anndata_scan('data.h5ad', 'var');
-SELECT * FROM anndata_scan('data.h5ad', 'X');
+-- Query observation (cell) metadata
+SELECT * FROM anndata_scan_obs('data.h5ad');
+
+-- Query variable (gene) metadata  
+SELECT * FROM anndata_scan_var('data.h5ad');
+
+-- Query expression matrix in wide format (rows=cells, columns=genes)
+SELECT * FROM anndata_scan_x('data.h5ad');
+
+-- Select specific genes by column name
+SELECT obs_idx, gene_0, gene_10, gene_20
+FROM anndata_scan_x('data.h5ad')
+WHERE obs_idx < 10;
+
+-- Use custom gene name column (default is '_index')
+SELECT * FROM anndata_scan_x('data.h5ad', 'gene_symbols');
+
+-- Join expression data with cell metadata using obs_idx
+SELECT o.cell_type, AVG(x.Gene_000) as avg_gene_0_expression
+FROM anndata_scan_x('data.h5ad') x
+JOIN anndata_scan_obs('data.h5ad') o 
+  ON x.obs_idx = o.obs_idx
+GROUP BY o.cell_type;
 ```
 
 ## Development

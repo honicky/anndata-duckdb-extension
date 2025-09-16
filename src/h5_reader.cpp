@@ -95,13 +95,20 @@ size_t H5Reader::GetVarCount() {
 
 std::vector<H5Reader::ColumnInfo> H5Reader::GetObsColumns() {
 	std::vector<ColumnInfo> columns;
+	
+	// Add obs_idx as the first column (row index)
+	ColumnInfo idx_col;
+	idx_col.name = "obs_idx";
+	idx_col.type = LogicalType::BIGINT;
+	idx_col.is_categorical = false;
+	columns.push_back(idx_col);
 
 	try {
 		auto members = GetGroupMembers("/obs");
 
 		for (const auto &member : members) {
-			if (member == "__categories" || member == "index") {
-				continue; // Skip metadata
+			if (member == "__categories" || member == "index" || member == "_index") {
+				continue; // Skip metadata and index columns (we're using obs_idx instead)
 			}
 
 			ColumnInfo col;
@@ -257,6 +264,14 @@ std::vector<H5Reader::ColumnInfo> H5Reader::GetVarColumns() {
 
 void H5Reader::ReadObsColumn(const std::string &column_name, Vector &result, idx_t offset, idx_t count) {
 	try {
+		// Handle obs_idx column (row index)
+		if (column_name == "obs_idx") {
+			for (idx_t i = 0; i < count; i++) {
+				result.SetValue(i, Value::BIGINT(offset + i));
+			}
+			return;
+		}
+		
 		// Check if it's a categorical column
 		std::string group_path = "/obs/" + column_name;
 		if (IsGroupPresent(group_path)) {
@@ -727,6 +742,158 @@ std::vector<std::string> H5Reader::GetGroupMembers(const std::string &group_name
 	}
 
 	return members;
+}
+
+H5Reader::XMatrixInfo H5Reader::GetXMatrixInfo() {
+	XMatrixInfo info;
+	info.n_obs = GetObsCount();
+	info.n_var = GetVarCount();
+	
+	try {
+		// Check if X is a dataset (dense) or group (sparse)
+		if (IsDatasetPresent("/", "X")) {
+			// Dense matrix
+			H5::DataSet dataset = file->openDataSet("/X");
+			H5::DataSpace dataspace = dataset.getSpace();
+			
+			// Get dimensions
+			hsize_t dims[2];
+			int ndims = dataspace.getSimpleExtentDims(dims);
+			if (ndims == 2) {
+				info.n_obs = dims[0];
+				info.n_var = dims[1];
+			}
+			
+			// Get data type
+			H5::DataType dtype = dataset.getDataType();
+			if (dtype.getClass() == H5T_FLOAT) {
+				info.dtype = (dtype.getSize() <= 4) ? LogicalType::FLOAT : LogicalType::DOUBLE;
+			} else if (dtype.getClass() == H5T_INTEGER) {
+				info.dtype = LogicalType::INTEGER;
+			}
+			
+			info.is_sparse = false;
+		} else if (IsGroupPresent("/X")) {
+			// Sparse matrix - not yet implemented
+			info.is_sparse = true;
+		}
+	} catch (const H5::Exception &e) {
+		// Return default info
+	}
+	
+	return info;
+}
+
+std::vector<std::string> H5Reader::GetVarNames(const std::string &column_name) {
+	std::vector<std::string> names;
+	size_t var_count = GetVarCount();
+	names.reserve(var_count);
+	
+	try {
+		std::string dataset_path = "/var/" + column_name;
+		
+		if (IsDatasetPresent("/var", column_name)) {
+			H5::DataSet dataset = file->openDataSet(dataset_path);
+			H5::DataType dtype = dataset.getDataType();
+			
+			if (dtype.getClass() == H5T_STRING) {
+				H5::StrType str_type = dataset.getStrType();
+				H5::DataSpace dataspace = dataset.getSpace();
+				
+				if (str_type.isVariableStr()) {
+					// Variable-length strings
+					std::vector<char *> str_buffer(var_count);
+					dataset.read(str_buffer.data(), str_type);
+					
+					for (size_t i = 0; i < var_count; i++) {
+						if (str_buffer[i]) {
+							names.emplace_back(str_buffer[i]);
+						} else {
+							names.emplace_back("gene_" + std::to_string(i));
+						}
+					}
+					
+					// Clean up
+					dataset.vlenReclaim(str_buffer.data(), str_type, dataspace);
+				} else {
+					// Fixed-length strings
+					size_t str_size = str_type.getSize();
+					std::vector<char> buffer(var_count * str_size);
+					dataset.read(buffer.data(), str_type);
+					
+					for (size_t i = 0; i < var_count; i++) {
+						char *str_ptr = buffer.data() + i * str_size;
+						size_t len = strnlen(str_ptr, str_size);
+						std::string name(str_ptr, len);
+						// Trim whitespace
+						name.erase(name.find_last_not_of(" \t\n\r\f\v") + 1);
+						if (!name.empty()) {
+							names.push_back(name);
+						} else {
+							names.push_back("gene_" + std::to_string(i));
+						}
+					}
+				}
+			}
+		}
+	} catch (const H5::Exception &e) {
+		// Fall back to generic names
+	}
+	
+	// If we couldn't read names, generate generic ones
+	if (names.empty()) {
+		for (size_t i = 0; i < var_count; i++) {
+			names.push_back("gene_" + std::to_string(i));
+		}
+	}
+	
+	return names;
+}
+
+void H5Reader::ReadXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count,
+                           std::vector<double> &values) {
+	values.clear();
+	values.resize(obs_count * var_count, 0.0);
+	
+	try {
+		if (IsDatasetPresent("/", "X")) {
+			H5::DataSet dataset = file->openDataSet("/X");
+			H5::DataSpace dataspace = dataset.getSpace();
+			
+			// Select hyperslab in file
+			hsize_t h_offset[2] = {static_cast<hsize_t>(obs_start), static_cast<hsize_t>(var_start)};
+			hsize_t h_count[2] = {static_cast<hsize_t>(obs_count), static_cast<hsize_t>(var_count)};
+			dataspace.selectHyperslab(H5S_SELECT_SET, h_count, h_offset);
+			
+			// Create memory dataspace
+			H5::DataSpace mem_space(2, h_count);
+			
+			// Read the data
+			H5::DataType dtype = dataset.getDataType();
+			if (dtype.getClass() == H5T_FLOAT) {
+				if (dtype.getSize() <= 4) {
+					std::vector<float> float_values(obs_count * var_count);
+					dataset.read(float_values.data(), H5::PredType::NATIVE_FLOAT, mem_space, dataspace);
+					for (size_t i = 0; i < float_values.size(); i++) {
+						values[i] = static_cast<double>(float_values[i]);
+					}
+				} else {
+					dataset.read(values.data(), H5::PredType::NATIVE_DOUBLE, mem_space, dataspace);
+				}
+			} else if (dtype.getClass() == H5T_INTEGER) {
+				std::vector<int32_t> int_values(obs_count * var_count);
+				dataset.read(int_values.data(), H5::PredType::NATIVE_INT32, mem_space, dataspace);
+				for (size_t i = 0; i < int_values.size(); i++) {
+					values[i] = static_cast<double>(int_values[i]);
+				}
+			}
+		} else if (IsGroupPresent("/X")) {
+			// Sparse matrix support - not yet implemented
+			// For now, just return zeros
+		}
+	} catch (const H5::Exception &e) {
+		// On error, values remain as zeros
+	}
 }
 
 } // namespace duckdb
