@@ -194,6 +194,13 @@ std::vector<H5Reader::ColumnInfo> H5Reader::GetObsColumns() {
 
 std::vector<H5Reader::ColumnInfo> H5Reader::GetVarColumns() {
 	std::vector<ColumnInfo> columns;
+	
+	// Add var_idx as the first column (row index)
+	ColumnInfo idx_col;
+	idx_col.name = "var_idx";
+	idx_col.type = LogicalType::BIGINT;
+	idx_col.is_categorical = false;
+	columns.push_back(idx_col);
 
 	try {
 		auto members = GetGroupMembers("/var");
@@ -474,6 +481,14 @@ void H5Reader::ReadObsColumn(const std::string &column_name, Vector &result, idx
 }
 
 void H5Reader::ReadVarColumn(const std::string &column_name, Vector &result, idx_t offset, idx_t count) {
+	// Handle var_idx column
+	if (column_name == "var_idx") {
+		for (idx_t i = 0; i < count; i++) {
+			result.SetValue(i, Value::BIGINT(offset + i));
+		}
+		return;
+	}
+	
 	try {
 		// Check if it's a categorical column
 		std::string group_path = "/var/" + column_name;
@@ -1151,6 +1166,218 @@ H5Reader::SparseMatrixData H5Reader::ReadSparseXMatrixCSC(idx_t obs_start, idx_t
 	}
 
 	return sparse_data;
+}
+
+std::vector<H5Reader::MatrixInfo> H5Reader::GetObsmMatrices() {
+	std::vector<MatrixInfo> matrices;
+
+	try {
+		if (IsGroupPresent("/obsm")) {
+			H5::Group obsm_group = file->openGroup("/obsm");
+
+			// Get number of datasets in obsm group
+			hsize_t num_datasets = obsm_group.getNumObjs();
+
+			for (hsize_t i = 0; i < num_datasets; i++) {
+				std::string matrix_name = obsm_group.getObjnameByIdx(i);
+
+				// Skip if not a dataset
+				H5G_obj_t obj_type = obsm_group.getObjTypeByIdx(i);
+				if (obj_type != H5G_DATASET) {
+					continue;
+				}
+
+				// Open dataset and get dimensions
+				H5::DataSet dataset = obsm_group.openDataSet(matrix_name);
+				H5::DataSpace dataspace = dataset.getSpace();
+
+				int ndims = dataspace.getSimpleExtentNdims();
+				if (ndims == 2) {
+					hsize_t dims[2];
+					dataspace.getSimpleExtentDims(dims);
+
+					MatrixInfo info;
+					info.name = matrix_name;
+					info.rows = dims[0];
+					info.cols = dims[1];
+					info.dtype = H5TypeToDuckDBType(dataset.getDataType());
+
+					matrices.push_back(info);
+				}
+			}
+		}
+	} catch (const H5::Exception &e) {
+		// Return empty list on error
+	}
+
+	return matrices;
+}
+
+std::vector<H5Reader::MatrixInfo> H5Reader::GetVarmMatrices() {
+	std::vector<MatrixInfo> matrices;
+
+	try {
+		if (IsGroupPresent("/varm")) {
+			H5::Group varm_group = file->openGroup("/varm");
+
+			// Get number of datasets in varm group
+			hsize_t num_datasets = varm_group.getNumObjs();
+
+			for (hsize_t i = 0; i < num_datasets; i++) {
+				std::string matrix_name = varm_group.getObjnameByIdx(i);
+
+				// Skip if not a dataset
+				H5G_obj_t obj_type = varm_group.getObjTypeByIdx(i);
+				if (obj_type != H5G_DATASET) {
+					continue;
+				}
+
+				// Open dataset and get dimensions
+				H5::DataSet dataset = varm_group.openDataSet(matrix_name);
+				H5::DataSpace dataspace = dataset.getSpace();
+
+				int ndims = dataspace.getSimpleExtentNdims();
+				if (ndims == 2) {
+					hsize_t dims[2];
+					dataspace.getSimpleExtentDims(dims);
+
+					MatrixInfo info;
+					info.name = matrix_name;
+					info.rows = dims[0];
+					info.cols = dims[1];
+					info.dtype = H5TypeToDuckDBType(dataset.getDataType());
+
+					matrices.push_back(info);
+				}
+			}
+		}
+	} catch (const H5::Exception &e) {
+		// Return empty list on error
+	}
+
+	return matrices;
+}
+
+void H5Reader::ReadObsmMatrix(const std::string &matrix_name, idx_t row_start, idx_t row_count, idx_t col_idx,
+                              Vector &result) {
+	try {
+		std::string dataset_path = "/obsm/" + matrix_name;
+		H5::DataSet dataset = file->openDataSet(dataset_path);
+		H5::DataSpace dataspace = dataset.getSpace();
+
+		// Get dimensions
+		hsize_t dims[2];
+		dataspace.getSimpleExtentDims(dims);
+
+		// Ensure col_idx is valid
+		if (col_idx >= dims[1]) {
+			throw InvalidInputException("Column index out of bounds for obsm matrix %s", matrix_name.c_str());
+		}
+
+		// Select hyperslab for the requested column
+		hsize_t offset[2] = {static_cast<hsize_t>(row_start), static_cast<hsize_t>(col_idx)};
+		hsize_t count[2] = {static_cast<hsize_t>(row_count), 1};
+		dataspace.selectHyperslab(H5S_SELECT_SET, count, offset);
+
+		// Create memory dataspace
+		hsize_t mem_dims[1] = {static_cast<hsize_t>(row_count)};
+		H5::DataSpace memspace(1, mem_dims);
+
+		// Read data based on type
+		H5::DataType dtype = dataset.getDataType();
+		if (dtype.getClass() == H5T_FLOAT) {
+			if (dtype.getSize() == 4) {
+				std::vector<float> values(row_count);
+				dataset.read(values.data(), H5::PredType::NATIVE_FLOAT, memspace, dataspace);
+				for (idx_t i = 0; i < row_count; i++) {
+					result.SetValue(i, Value::FLOAT(values[i]));
+				}
+			} else {
+				std::vector<double> values(row_count);
+				dataset.read(values.data(), H5::PredType::NATIVE_DOUBLE, memspace, dataspace);
+				for (idx_t i = 0; i < row_count; i++) {
+					result.SetValue(i, Value::DOUBLE(values[i]));
+				}
+			}
+		} else if (dtype.getClass() == H5T_INTEGER) {
+			if (dtype.getSize() <= 4) {
+				std::vector<int32_t> values(row_count);
+				dataset.read(values.data(), H5::PredType::NATIVE_INT32, memspace, dataspace);
+				for (idx_t i = 0; i < row_count; i++) {
+					result.SetValue(i, Value::INTEGER(values[i]));
+				}
+			} else {
+				std::vector<int64_t> values(row_count);
+				dataset.read(values.data(), H5::PredType::NATIVE_INT64, memspace, dataspace);
+				for (idx_t i = 0; i < row_count; i++) {
+					result.SetValue(i, Value::BIGINT(values[i]));
+				}
+			}
+		}
+	} catch (const H5::Exception &e) {
+		throw InvalidInputException("Failed to read obsm matrix %s: %s", matrix_name.c_str(), e.getCDetailMsg());
+	}
+}
+
+void H5Reader::ReadVarmMatrix(const std::string &matrix_name, idx_t row_start, idx_t row_count, idx_t col_idx,
+                              Vector &result) {
+	try {
+		std::string dataset_path = "/varm/" + matrix_name;
+		H5::DataSet dataset = file->openDataSet(dataset_path);
+		H5::DataSpace dataspace = dataset.getSpace();
+
+		// Get dimensions
+		hsize_t dims[2];
+		dataspace.getSimpleExtentDims(dims);
+
+		// Ensure col_idx is valid
+		if (col_idx >= dims[1]) {
+			throw InvalidInputException("Column index out of bounds for varm matrix %s", matrix_name.c_str());
+		}
+
+		// Select hyperslab for the requested column
+		hsize_t offset[2] = {static_cast<hsize_t>(row_start), static_cast<hsize_t>(col_idx)};
+		hsize_t count[2] = {static_cast<hsize_t>(row_count), 1};
+		dataspace.selectHyperslab(H5S_SELECT_SET, count, offset);
+
+		// Create memory dataspace
+		hsize_t mem_dims[1] = {static_cast<hsize_t>(row_count)};
+		H5::DataSpace memspace(1, mem_dims);
+
+		// Read data based on type
+		H5::DataType dtype = dataset.getDataType();
+		if (dtype.getClass() == H5T_FLOAT) {
+			if (dtype.getSize() == 4) {
+				std::vector<float> values(row_count);
+				dataset.read(values.data(), H5::PredType::NATIVE_FLOAT, memspace, dataspace);
+				for (idx_t i = 0; i < row_count; i++) {
+					result.SetValue(i, Value::FLOAT(values[i]));
+				}
+			} else {
+				std::vector<double> values(row_count);
+				dataset.read(values.data(), H5::PredType::NATIVE_DOUBLE, memspace, dataspace);
+				for (idx_t i = 0; i < row_count; i++) {
+					result.SetValue(i, Value::DOUBLE(values[i]));
+				}
+			}
+		} else if (dtype.getClass() == H5T_INTEGER) {
+			if (dtype.getSize() <= 4) {
+				std::vector<int32_t> values(row_count);
+				dataset.read(values.data(), H5::PredType::NATIVE_INT32, memspace, dataspace);
+				for (idx_t i = 0; i < row_count; i++) {
+					result.SetValue(i, Value::INTEGER(values[i]));
+				}
+			} else {
+				std::vector<int64_t> values(row_count);
+				dataset.read(values.data(), H5::PredType::NATIVE_INT64, memspace, dataspace);
+				for (idx_t i = 0; i < row_count; i++) {
+					result.SetValue(i, Value::BIGINT(values[i]));
+				}
+			}
+		}
+	} catch (const H5::Exception &e) {
+		throw InvalidInputException("Failed to read varm matrix %s: %s", matrix_name.c_str(), e.getCDetailMsg());
+	}
 }
 
 } // namespace duckdb

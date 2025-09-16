@@ -72,6 +72,28 @@ public:
 	// Read CSC format sparse matrix
 	SparseMatrixData ReadSparseXMatrixCSC(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count);
 
+	// Get obsm/varm matrix info
+	struct MatrixInfo {
+		std::string name;
+		size_t rows;
+		size_t cols;
+		LogicalType dtype;
+	};
+
+	// Get list of obsm matrices
+	std::vector<MatrixInfo> GetObsmMatrices();
+
+	// Get list of varm matrices
+	std::vector<MatrixInfo> GetVarmMatrices();
+
+	// Read obsm matrix
+	void ReadObsmMatrix(const std::string &matrix_name, idx_t row_start, idx_t row_count, idx_t col_idx,
+	                    Vector &result);
+
+	// Read varm matrix
+	void ReadVarmMatrix(const std::string &matrix_name, idx_t row_start, idx_t row_count, idx_t col_idx,
+	                    Vector &result);
+
 private:
 	std::unique_ptr<H5::H5File> file;
 	std::string file_path;

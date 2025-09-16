@@ -1,0 +1,237 @@
+# name: test/sql/anndata_obsm_varm.test
+# description: Test obsm and varm matrix reading functionality
+# group: [anndata]
+
+require anndata
+
+statement ok
+LOAD 'build/release/extension/anndata/anndata.duckdb_extension';
+
+# Test basic obsm matrices with float64 data type
+query II
+SELECT COUNT(*) as row_count, COUNT(*) FILTER (X_pca_0 IS NOT NULL) as non_null_count
+FROM anndata_scan_obsm('test/data/test_obsm_varm_types.h5ad', 'X_pca');
+----
+50	50
+
+# Test obsm X_pca dimensions (float64)
+query I
+SELECT COUNT(*) FROM (
+    SELECT obs_idx, X_pca_0, X_pca_1, X_pca_2, X_pca_3, X_pca_4, 
+           X_pca_5, X_pca_6, X_pca_7, X_pca_8, X_pca_9
+    FROM anndata_scan_obsm('test/data/test_obsm_varm_types.h5ad', 'X_pca')
+    LIMIT 1
+)
+----
+1
+
+# Test obsm X_umap with float32 data type
+query II
+SELECT COUNT(*) as row_count, COUNT(X_umap_0) as col0_count
+FROM anndata_scan_obsm('test/data/test_obsm_varm_types.h5ad', 'X_umap');
+----
+50	50
+
+# Verify X_umap has 2 dimensions
+query I
+SELECT COUNT(*) FROM (
+    SELECT obs_idx, X_umap_0, X_umap_1
+    FROM anndata_scan_obsm('test/data/test_obsm_varm_types.h5ad', 'X_umap')
+    LIMIT 1
+)
+----
+1
+
+# Test obsm with int32 data type (cluster_distances)
+query II
+SELECT COUNT(*) as row_count, COUNT(cluster_distances_0) as col0_count
+FROM anndata_scan_obsm('test/data/test_obsm_varm_types.h5ad', 'cluster_distances');
+----
+50	50
+
+# Verify cluster_distances has 5 dimensions and integer values
+query I
+SELECT COUNT(*) FROM (
+    SELECT obs_idx, cluster_distances_0, cluster_distances_1, 
+           cluster_distances_2, cluster_distances_3, cluster_distances_4
+    FROM anndata_scan_obsm('test/data/test_obsm_varm_types.h5ad', 'cluster_distances')
+    WHERE cluster_distances_0 BETWEEN -1000 AND 1000
+    LIMIT 1
+)
+----
+1
+
+# Test obsm with int64 data type (feature_counts)
+query II
+SELECT COUNT(*) as row_count, COUNT(feature_counts_0) as col0_count
+FROM anndata_scan_obsm('test/data/test_obsm_varm_types.h5ad', 'feature_counts');
+----
+50	50
+
+# Verify feature_counts has 8 dimensions
+query I
+SELECT COUNT(*) FROM (
+    SELECT obs_idx, feature_counts_0, feature_counts_1, feature_counts_2, 
+           feature_counts_3, feature_counts_4, feature_counts_5, 
+           feature_counts_6, feature_counts_7
+    FROM anndata_scan_obsm('test/data/test_obsm_varm_types.h5ad', 'feature_counts')
+    LIMIT 1
+)
+----
+1
+
+# Test varm matrices with float64 data type (PCs)
+query II
+SELECT COUNT(*) as row_count, COUNT(PCs_0) as col0_count
+FROM anndata_scan_varm('test/data/test_obsm_varm_types.h5ad', 'PCs');
+----
+100	100
+
+# Verify PCs has 10 dimensions
+query I
+SELECT COUNT(*) FROM (
+    SELECT var_idx, PCs_0, PCs_1, PCs_2, PCs_3, PCs_4, 
+           PCs_5, PCs_6, PCs_7, PCs_8, PCs_9
+    FROM anndata_scan_varm('test/data/test_obsm_varm_types.h5ad', 'PCs')
+    LIMIT 1
+)
+----
+1
+
+# Test varm with float32 data type (gene_loadings)
+query II
+SELECT COUNT(*) as row_count, COUNT(gene_loadings_0) as col0_count
+FROM anndata_scan_varm('test/data/test_obsm_varm_types.h5ad', 'gene_loadings');
+----
+100	100
+
+# Verify gene_loadings has 3 dimensions
+query I
+SELECT COUNT(*) FROM (
+    SELECT var_idx, gene_loadings_0, gene_loadings_1, gene_loadings_2
+    FROM anndata_scan_varm('test/data/test_obsm_varm_types.h5ad', 'gene_loadings')
+    LIMIT 1
+)
+----
+1
+
+# Test varm with int32 data type (module_assignment)
+query II
+SELECT COUNT(*) as row_count, COUNT(module_assignment_0) as col0_count
+FROM anndata_scan_varm('test/data/test_obsm_varm_types.h5ad', 'module_assignment');
+----
+100	100
+
+# Verify module_assignment values are integers between 0 and 10
+query I
+SELECT COUNT(*) 
+FROM anndata_scan_varm('test/data/test_obsm_varm_types.h5ad', 'module_assignment')
+WHERE module_assignment_0 >= 0 AND module_assignment_0 < 10;
+----
+100
+
+# Test varm with int64 data type (expression_ranks)
+query II
+SELECT COUNT(*) as row_count, COUNT(expression_ranks_0) as col0_count
+FROM anndata_scan_varm('test/data/test_obsm_varm_types.h5ad', 'expression_ranks');
+----
+100	100
+
+# Verify expression_ranks has 6 dimensions with proper integer values
+query I
+SELECT COUNT(*) FROM (
+    SELECT var_idx, expression_ranks_0, expression_ranks_1, expression_ranks_2, 
+           expression_ranks_3, expression_ranks_4, expression_ranks_5
+    FROM anndata_scan_varm('test/data/test_obsm_varm_types.h5ad', 'expression_ranks')
+    WHERE expression_ranks_0 >= 1 AND expression_ranks_0 <= 1000
+    LIMIT 1
+)
+----
+1
+
+# Test joining obsm data with obs metadata
+query I
+SELECT COUNT(*)
+FROM anndata_scan_obsm('test/data/test_obsm_varm_types.h5ad', 'X_pca') obsm
+JOIN anndata_scan_obs('test/data/test_obsm_varm_types.h5ad') obs
+ON obsm.obs_idx = obs.obs_idx;
+----
+50
+
+# Test joining varm data with var metadata
+query I
+SELECT COUNT(*)
+FROM anndata_scan_varm('test/data/test_obsm_varm_types.h5ad', 'PCs') varm
+JOIN anndata_scan_var('test/data/test_obsm_varm_types.h5ad') var
+ON varm.var_idx = var.var_idx;
+----
+100
+
+# Test aggregation on obsm data
+query RR
+SELECT AVG(X_pca_0) as avg_pc0, STDDEV(X_pca_0) as std_pc0
+FROM anndata_scan_obsm('test/data/test_obsm_varm_types.h5ad', 'X_pca')
+WHERE obs_idx < 10;
+----
+0.2998461017856037	0.8034077810150907
+
+# Test aggregation on varm data
+query RR
+SELECT MIN(PCs_0) as min_pc0, MAX(PCs_0) as max_pc0
+FROM anndata_scan_varm('test/data/test_obsm_varm_types.h5ad', 'PCs')
+WHERE var_idx < 20;
+----
+-1.6564328651711504	2.546048333404475
+
+# Test filtering on integer obsm matrices
+query I
+SELECT COUNT(*)
+FROM anndata_scan_obsm('test/data/test_obsm_varm_types.h5ad', 'cluster_distances')
+WHERE cluster_distances_0 < 0;
+----
+22
+
+# Test filtering on integer varm matrices
+query I
+SELECT COUNT(*)
+FROM anndata_scan_varm('test/data/test_obsm_varm_types.h5ad', 'module_assignment')
+WHERE module_assignment_0 = 2;
+----
+13
+
+# Error test: non-existent obsm matrix
+statement error
+SELECT * FROM anndata_scan_obsm('test/data/test_obsm_varm_types.h5ad', 'nonexistent');
+----
+obsm matrix 'nonexistent' not found in file
+
+# Error test: non-existent varm matrix
+statement error
+SELECT * FROM anndata_scan_varm('test/data/test_obsm_varm_types.h5ad', 'nonexistent');
+----
+varm matrix 'nonexistent' not found in file
+
+# Error test: missing matrix name parameter
+statement error
+SELECT * FROM anndata_scan_obsm('test/data/test_obsm_varm_types.h5ad');
+----
+requires file path and matrix name
+
+# Error test: missing file parameter  
+statement error
+SELECT * FROM anndata_scan_obsm();
+----
+Binder Error
+
+# Test with original test file to ensure backwards compatibility
+query I
+SELECT COUNT(*) 
+FROM anndata_scan_obsm('test/data/test_obsm_varm.h5ad', 'X_pca');
+----
+100
+
+query I
+SELECT COUNT(*) 
+FROM anndata_scan_varm('test/data/test_obsm_varm.h5ad', 'PCs');
+----
+200

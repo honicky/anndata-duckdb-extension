@@ -29,6 +29,16 @@ public:
 	                                      vector<LogicalType> &return_types, vector<string> &names);
 	static void XScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
+	// Table function for scanning obsm matrices
+	static unique_ptr<FunctionData> ObsmBind(ClientContext &context, TableFunctionBindInput &input,
+	                                         vector<LogicalType> &return_types, vector<string> &names);
+	static void ObsmScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
+
+	// Table function for scanning varm matrices
+	static unique_ptr<FunctionData> VarmBind(ClientContext &context, TableFunctionBindInput &input,
+	                                         vector<LogicalType> &return_types, vector<string> &names);
+	static void VarmScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
+
 	// Utility functions
 	static bool IsAnndataFile(const string &path);
 	static string GetAnndataInfo(const string &path);
@@ -48,6 +58,13 @@ struct AnndataBindData : public TableFunctionData {
 	idx_t n_var = 0;
 	vector<string> var_names;
 	string var_name_column = "_index"; // Default column for gene names (var_names in AnnData, stored as _index in HDF5)
+
+	// For obsm/varm matrix scanning
+	bool is_obsm_scan = false;
+	bool is_varm_scan = false;
+	string matrix_name;
+	idx_t matrix_rows = 0;
+	idx_t matrix_cols = 0;
 
 	AnndataBindData(const string &path) : file_path(path), row_count(0), column_count(0) {
 	}
