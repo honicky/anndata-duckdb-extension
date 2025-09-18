@@ -38,6 +38,9 @@ public:
 	void ReadObsColumn(const std::string &column_name, Vector &result, idx_t offset, idx_t count);
 	void ReadVarColumn(const std::string &column_name, Vector &result, idx_t offset, idx_t count);
 
+	// Read a single string value from var column (for getting gene names)
+	std::string ReadVarColumnString(const std::string &column_name, idx_t index);
+
 	// Read categorical data
 	std::string GetCategoricalValue(const std::string &group_path, const std::string &column_name, idx_t index);
 
@@ -46,6 +49,7 @@ public:
 		size_t n_obs;
 		size_t n_var;
 		bool is_sparse = false;
+		std::string sparse_format; // "csr" or "csc" if sparse
 		LogicalType dtype = LogicalType::DOUBLE;
 	};
 	XMatrixInfo GetXMatrixInfo();
@@ -94,7 +98,31 @@ public:
 	void ReadVarmMatrix(const std::string &matrix_name, idx_t row_start, idx_t row_count, idx_t col_idx,
 	                    Vector &result);
 
+	// Layer information structure
+	struct LayerInfo {
+		std::string name;
+		size_t rows;
+		size_t cols;
+		LogicalType dtype;
+		bool is_sparse;
+		std::string sparse_format; // "csr" or "csc" if sparse
+	};
+
+	// Get list of available layers
+	std::vector<LayerInfo> GetLayers();
+
+	// Read layer matrix data (similar to X matrix)
+	void ReadLayerMatrix(const std::string &layer_name, idx_t row_idx, idx_t start_col, idx_t count, DataChunk &output,
+	                     const std::vector<std::string> &var_names);
+
 private:
+	// Helper function to read sparse matrix at any path
+	SparseMatrixData ReadSparseMatrixAtPath(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start,
+	                                        idx_t var_count);
+	SparseMatrixData ReadSparseMatrixCSR(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start,
+	                                     idx_t var_count);
+	SparseMatrixData ReadSparseMatrixCSC(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start,
+	                                     idx_t var_count);
 	std::unique_ptr<H5::H5File> file;
 	std::string file_path;
 

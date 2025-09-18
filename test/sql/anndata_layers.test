@@ -1,0 +1,91 @@
+# name: test/sql/anndata_layers.test
+# description: Test layer matrix reading functionality
+# group: [sql]
+
+require anndata
+
+statement ok
+LOAD 'build/release/extension/anndata/anndata.duckdb_extension';
+
+# Test getting anndata info
+query I
+SELECT anndata_info('test/data/test_layers.h5ad') LIKE '%layers:%binary%log_norm%raw_counts%scaled%';
+----
+true
+
+# Test reading from raw_counts layer (sparse CSR, int32)
+query IIII
+SELECT obs_idx, Gene_000, Gene_001, Gene_002 FROM anndata_scan_layers('test/data/test_layers.h5ad', 'raw_counts') WHERE obs_idx < 3 ORDER BY obs_idx;
+----
+0	3	4	5
+1	6	6	8
+2	5	4	3
+
+# Test reading from log_norm layer (dense float32)
+query IRRR
+SELECT obs_idx, ROUND(Gene_000, 2), ROUND(Gene_001, 2), ROUND(Gene_002, 2) FROM anndata_scan_layers('test/data/test_layers.h5ad', 'log_norm') WHERE obs_idx < 3 ORDER BY obs_idx;
+----
+0	1.39	1.61	1.79
+1	1.95	1.95	2.20
+2	1.79	1.61	1.39
+
+# Test reading from scaled layer (dense float64)
+query IRRR
+SELECT obs_idx, ROUND(Gene_000, 2), ROUND(Gene_001, 2), ROUND(Gene_002, 2) FROM anndata_scan_layers('test/data/test_layers.h5ad', 'scaled') WHERE obs_idx < 3 ORDER BY obs_idx;
+----
+0	-1.44	-2.10	-0.38
+1	1.46	-0.98	-0.45
+2	0.99	-0.01	-0.60
+
+# Test reading from binary layer (sparse CSC, int32)
+query IIII
+SELECT obs_idx, Gene_000, Gene_001, Gene_002 FROM anndata_scan_layers('test/data/test_layers.h5ad', 'binary') WHERE obs_idx < 3 ORDER BY obs_idx;
+----
+0	0	0	0
+1	1	1	1
+2	0	0	0
+
+# Test reading specific columns from layers  
+# Note: The 3rd parameter is var column name, not column list
+query IRR
+SELECT obs_idx, ROUND(Gene_003, 2), ROUND(Gene_004, 2) FROM anndata_scan_layers('test/data/test_layers.h5ad', 'log_norm') WHERE obs_idx < 3 ORDER BY obs_idx;
+----
+0	1.95	2.08
+1	2.20	2.08
+2	2.30	2.08
+
+# Test COUNT aggregate on layer
+query I
+SELECT COUNT(*) FROM anndata_scan_layers('test/data/test_layers.h5ad', 'raw_counts');
+----
+100
+
+# Test MAX on sparse layer
+query I
+SELECT MAX(Gene_000) FROM anndata_scan_layers('test/data/test_layers.h5ad', 'raw_counts');
+----
+12
+
+# Test SUM on dense layer
+query R
+SELECT ROUND(SUM(Gene_001), 2) FROM anndata_scan_layers('test/data/test_layers.h5ad', 'log_norm');
+----
+165.08
+
+# Test filtering with WHERE clause
+query III
+SELECT obs_idx, Gene_000, Gene_001 FROM anndata_scan_layers('test/data/test_layers.h5ad', 'binary') WHERE Gene_000 = 1 ORDER BY obs_idx LIMIT 7;
+----
+1	1	1
+14	1	1
+25	1	1
+28	1	0
+29	1	1
+32	1	1
+35	1	0
+
+# Test error handling for non-existent layer
+statement error
+SELECT * FROM anndata_scan_layers('test/data/test_layers.h5ad', 'non_existent_layer');
+----
+Layer 'non_existent_layer' not found

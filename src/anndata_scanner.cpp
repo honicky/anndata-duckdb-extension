@@ -27,9 +27,53 @@ string AnndataScanner::GetAnndataInfo(const string &path) {
 		throw InvalidInputException("File is not a valid AnnData file: " + path);
 	}
 
-	// For now, return basic info
-	// In real implementation, we'd read HDF5 metadata
-	return StringUtil::Format("AnnData file: %s", path.c_str());
+	H5Reader reader(path);
+	std::stringstream info;
+
+	info << "AnnData file: " << path << "\n";
+	info << "  Observations: " << reader.GetObsCount() << "\n";
+	info << "  Variables: " << reader.GetVarCount() << "\n";
+
+	// Get X matrix info
+	auto x_info = reader.GetXMatrixInfo();
+	info << "  X matrix: " << x_info.n_obs << " x " << x_info.n_var;
+	if (x_info.is_sparse) {
+		info << " (sparse, " << x_info.sparse_format << ")";
+	}
+	info << "\n";
+
+	// List obsm matrices
+	auto obsm_matrices = reader.GetObsmMatrices();
+	if (!obsm_matrices.empty()) {
+		info << "  obsm matrices:\n";
+		for (const auto &matrix : obsm_matrices) {
+			info << "    - " << matrix.name << ": " << matrix.rows << " x " << matrix.cols << "\n";
+		}
+	}
+
+	// List varm matrices
+	auto varm_matrices = reader.GetVarmMatrices();
+	if (!varm_matrices.empty()) {
+		info << "  varm matrices:\n";
+		for (const auto &matrix : varm_matrices) {
+			info << "    - " << matrix.name << ": " << matrix.rows << " x " << matrix.cols << "\n";
+		}
+	}
+
+	// List layers
+	auto layers = reader.GetLayers();
+	if (!layers.empty()) {
+		info << "  layers:\n";
+		for (const auto &layer : layers) {
+			info << "    - " << layer.name << ": " << layer.rows << " x " << layer.cols;
+			if (layer.is_sparse) {
+				info << " (sparse, " << layer.sparse_format << ")";
+			}
+			info << "\n";
+		}
+	}
+
+	return info.str();
 }
 
 // Table function implementations for .obs table
@@ -465,6 +509,152 @@ unique_ptr<FunctionData> VarmBindError(ClientContext &context, TableFunctionBind
 	throw InvalidInputException("anndata_scan_varm requires file path and matrix name");
 }
 
+// Layer scanning implementation
+unique_ptr<FunctionData> AnndataScanner::LayerBind(ClientContext &context, TableFunctionBindInput &input,
+                                                   vector<LogicalType> &return_types, vector<string> &names) {
+	auto result = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
+	result->is_layer_scan = true;
+	result->layer_name = input.inputs[1].GetValue<string>();
+
+	// Open file to get layer information
+	H5Reader reader(result->file_path);
+	auto layers = reader.GetLayers();
+
+	// Find the requested layer
+	bool found = false;
+	H5Reader::LayerInfo layer_info;
+	for (const auto &layer : layers) {
+		if (layer.name == result->layer_name) {
+			layer_info = layer;
+			found = true;
+			break;
+		}
+	}
+
+	if (!found) {
+		throw InvalidInputException("Layer '%s' not found in file %s", result->layer_name.c_str(),
+		                            result->file_path.c_str());
+	}
+
+	// Get dimensions
+	result->n_obs = layer_info.rows;
+	result->n_var = layer_info.cols;
+
+	// Get variable names - allow custom column selection
+	string var_column;
+	if (input.inputs.size() > 2) {
+		var_column = input.inputs[2].GetValue<string>();
+	} else {
+		// Try to find a suitable default column
+		auto var_columns = reader.GetVarColumns();
+		bool has_gene_name = false;
+		bool has_gene_id = false;
+		for (const auto &col : var_columns) {
+			if (col.name == "gene_name")
+				has_gene_name = true;
+			if (col.name == "gene_id")
+				has_gene_id = true;
+		}
+
+		// Use gene_name if available, otherwise gene_id, otherwise generate generic names
+		if (has_gene_name) {
+			var_column = "gene_name";
+		} else if (has_gene_id) {
+			var_column = "gene_id";
+		} else {
+			var_column = ""; // Will generate generic names
+		}
+	}
+
+	// Validate var column if specified
+	if (!var_column.empty()) {
+		auto var_columns = reader.GetVarColumns();
+		bool var_column_found = false;
+		for (const auto &col : var_columns) {
+			if (col.name == var_column) {
+				var_column_found = true;
+				break;
+			}
+		}
+
+		if (!var_column_found) {
+			throw InvalidInputException("Variable column '%s' not found in var table", var_column.c_str());
+		}
+	}
+
+	// Read variable names for column headers
+	result->var_names.resize(result->n_var);
+	for (idx_t i = 0; i < result->n_var; i++) {
+		string var_name;
+		if (var_column.empty()) {
+			// Generate generic names
+			var_name = "gene_" + std::to_string(i);
+		} else {
+			var_name = reader.ReadVarColumnString(var_column, i);
+			// Sanitize column names
+			std::replace(var_name.begin(), var_name.end(), ' ', '_');
+			std::replace(var_name.begin(), var_name.end(), '-', '_');
+			std::replace(var_name.begin(), var_name.end(), '.', '_');
+		}
+		result->var_names[i] = var_name;
+	}
+
+	// Set up column schema: obs_idx + all gene columns
+	names.push_back("obs_idx");
+	return_types.push_back(LogicalType::BIGINT);
+
+	for (const auto &var_name : result->var_names) {
+		names.push_back(var_name);
+		return_types.push_back(layer_info.dtype);
+	}
+
+	result->column_names = names;
+	result->column_types = return_types;
+	result->column_count = names.size();
+	result->row_count = result->n_obs;
+
+	return std::move(result);
+}
+
+void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
+	auto &bind_data = data.bind_data->Cast<AnndataBindData>();
+	auto &state = data.global_state->Cast<AnndataGlobalState>();
+
+	// Initialize h5_reader if not already done
+	if (!state.h5_reader) {
+		state.h5_reader = make_uniq<H5Reader>(bind_data.file_path);
+	}
+
+	if (state.current_row >= bind_data.row_count) {
+		return;
+	}
+
+	// Read layer data - single row at a time since ReadLayerMatrix handles one row
+	// TODO: Optimize this to read multiple rows at once
+	idx_t row_idx = state.current_row;
+
+	// Create a temporary chunk for single row reading
+	DataChunk temp_chunk;
+	temp_chunk.Initialize(Allocator::DefaultAllocator(), bind_data.column_types, 1);
+
+	state.h5_reader->ReadLayerMatrix(bind_data.layer_name, row_idx, 0, bind_data.n_var, temp_chunk,
+	                                 bind_data.var_names);
+
+	// Copy the single row to output at position 0
+	for (idx_t col = 0; col < bind_data.column_count; col++) {
+		output.data[col].SetValue(0, temp_chunk.data[col].GetValue(0));
+	}
+
+	output.SetCardinality(1);
+	state.current_row += 1;
+}
+
+// Error handling function for layers when layer name is missing
+unique_ptr<FunctionData> LayerBindError(ClientContext &context, TableFunctionBindInput &input,
+                                        vector<LogicalType> &return_types, vector<string> &names) {
+	throw InvalidInputException("anndata_scan_layers requires layer name");
+}
+
 void DummyScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	// Never called, bind function throws error
 }
@@ -500,11 +690,10 @@ void RegisterAnndataTableFunctions(DatabaseInstance &db) {
 	                        AnndataScanner::ObsmBind, AnndataInitGlobal, AnndataInitLocal);
 	obsm_func.name = "anndata_scan_obsm";
 	ExtensionUtil::RegisterFunction(db, obsm_func);
-	
+
 	// Register anndata_scan_obsm function (1 parameter - error message)
-	TableFunction obsm_func_error("anndata_scan_obsm", {LogicalType::VARCHAR},
-	                             DummyScan, ObsmBindError,
-	                             AnndataInitGlobal, AnndataInitLocal);
+	TableFunction obsm_func_error("anndata_scan_obsm", {LogicalType::VARCHAR}, DummyScan, ObsmBindError,
+	                              AnndataInitGlobal, AnndataInitLocal);
 	obsm_func_error.name = "anndata_scan_obsm";
 	ExtensionUtil::RegisterFunction(db, obsm_func_error);
 
@@ -513,13 +702,32 @@ void RegisterAnndataTableFunctions(DatabaseInstance &db) {
 	                        AnndataScanner::VarmBind, AnndataInitGlobal, AnndataInitLocal);
 	varm_func.name = "anndata_scan_varm";
 	ExtensionUtil::RegisterFunction(db, varm_func);
-	
+
 	// Register anndata_scan_varm function (1 parameter - error message)
-	TableFunction varm_func_error("anndata_scan_varm", {LogicalType::VARCHAR},
-	                             DummyScan, VarmBindError,
-	                             AnndataInitGlobal, AnndataInitLocal);
+	TableFunction varm_func_error("anndata_scan_varm", {LogicalType::VARCHAR}, DummyScan, VarmBindError,
+	                              AnndataInitGlobal, AnndataInitLocal);
 	varm_func_error.name = "anndata_scan_varm";
 	ExtensionUtil::RegisterFunction(db, varm_func_error);
+
+	// Register anndata_scan_layers function (2 parameters)
+	TableFunction layers_func("anndata_scan_layers", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                          AnndataScanner::LayerScan, AnndataScanner::LayerBind, AnndataInitGlobal,
+	                          AnndataInitLocal);
+	layers_func.name = "anndata_scan_layers";
+	ExtensionUtil::RegisterFunction(db, layers_func);
+
+	// Register anndata_scan_layers function (3 parameters - with custom var column)
+	TableFunction layers_func_custom(
+	    "anndata_scan_layers", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+	    AnndataScanner::LayerScan, AnndataScanner::LayerBind, AnndataInitGlobal, AnndataInitLocal);
+	layers_func_custom.name = "anndata_scan_layers";
+	ExtensionUtil::RegisterFunction(db, layers_func_custom);
+
+	// Register anndata_scan_layers function (1 parameter - error message)
+	TableFunction layers_func_error("anndata_scan_layers", {LogicalType::VARCHAR}, DummyScan, LayerBindError,
+	                                AnndataInitGlobal, AnndataInitLocal);
+	layers_func_error.name = "anndata_scan_layers";
+	ExtensionUtil::RegisterFunction(db, layers_func_error);
 
 	// Register anndata_info function (scalar function)
 	auto info_func = ScalarFunction(

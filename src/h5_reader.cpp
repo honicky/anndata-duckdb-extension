@@ -194,7 +194,7 @@ std::vector<H5Reader::ColumnInfo> H5Reader::GetObsColumns() {
 
 std::vector<H5Reader::ColumnInfo> H5Reader::GetVarColumns() {
 	std::vector<ColumnInfo> columns;
-	
+
 	// Add var_idx as the first column (row index)
 	ColumnInfo idx_col;
 	idx_col.name = "var_idx";
@@ -488,7 +488,7 @@ void H5Reader::ReadVarColumn(const std::string &column_name, Vector &result, idx
 		}
 		return;
 	}
-	
+
 	try {
 		// Check if it's a categorical column
 		std::string group_path = "/var/" + column_name;
@@ -788,9 +788,36 @@ H5Reader::XMatrixInfo H5Reader::GetXMatrixInfo() {
 			}
 
 			info.is_sparse = false;
+			info.sparse_format = "";
 		} else if (IsGroupPresent("/X")) {
-			// Sparse matrix - not yet implemented
+			// Sparse matrix
 			info.is_sparse = true;
+
+			// Determine sparse format by checking indptr dimensions
+			if (IsDatasetPresent("/X", "indptr")) {
+				H5::DataSet indptr = file->openDataSet("/X/indptr");
+				H5::DataSpace indptr_space = indptr.getSpace();
+				hsize_t indptr_dims[1];
+				indptr_space.getSimpleExtentDims(indptr_dims);
+
+				// CSR has n_obs + 1 elements, CSC has n_var + 1
+				if (indptr_dims[0] == info.n_obs + 1) {
+					info.sparse_format = "csr";
+				} else if (indptr_dims[0] == info.n_var + 1) {
+					info.sparse_format = "csc";
+				}
+			}
+
+			// Get data type
+			if (IsDatasetPresent("/X", "data")) {
+				H5::DataSet data = file->openDataSet("/X/data");
+				H5::DataType dtype = data.getDataType();
+				if (dtype.getClass() == H5T_FLOAT) {
+					info.dtype = (dtype.getSize() <= 4) ? LogicalType::FLOAT : LogicalType::DOUBLE;
+				} else if (dtype.getClass() == H5T_INTEGER) {
+					info.dtype = LogicalType::INTEGER;
+				}
+			}
 		}
 	} catch (const H5::Exception &e) {
 		// Return default info
@@ -921,6 +948,12 @@ void H5Reader::ReadXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start, id
 
 H5Reader::SparseMatrixData H5Reader::ReadSparseXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start,
                                                        idx_t var_count) {
+	// Use the generic sparse matrix reader for the X matrix path
+	return ReadSparseMatrixAtPath("/X", obs_start, obs_count, var_start, var_count);
+}
+
+H5Reader::SparseMatrixData H5Reader::ReadSparseMatrixAtPath(const std::string &path, idx_t obs_start, idx_t obs_count,
+                                                            idx_t var_start, idx_t var_count) {
 	SparseMatrixData sparse_data;
 
 	try {
@@ -930,9 +963,9 @@ H5Reader::SparseMatrixData H5Reader::ReadSparseXMatrix(idx_t obs_start, idx_t ob
 
 		// Try to read the encoding attribute
 		try {
-			H5::Group x_group = file->openGroup("/X");
-			if (x_group.attrExists("encoding-type")) {
-				H5::Attribute encoding_attr = x_group.openAttribute("encoding-type");
+			H5::Group matrix_group = file->openGroup(path);
+			if (matrix_group.attrExists("encoding-type")) {
+				H5::Attribute encoding_attr = matrix_group.openAttribute("encoding-type");
 				H5::StrType str_type = encoding_attr.getStrType();
 				std::string encoding;
 				encoding_attr.read(str_type, encoding);
@@ -950,9 +983,9 @@ H5Reader::SparseMatrixData H5Reader::ReadSparseXMatrix(idx_t obs_start, idx_t ob
 		// If no encoding attribute found, detect by structure
 		if (!is_csr && !is_csc) {
 			// Check for indptr to determine if it's sparse
-			if (IsDatasetPresent("/X", "indptr")) {
+			if (IsDatasetPresent(path, "indptr")) {
 				// Check the dimensions to determine CSR vs CSC
-				H5::DataSet indptr_ds = file->openDataSet("/X/indptr");
+				H5::DataSet indptr_ds = file->openDataSet(path + "/indptr");
 				H5::DataSpace indptr_space = indptr_ds.getSpace();
 				hsize_t indptr_dims[1];
 				indptr_space.getSimpleExtentDims(indptr_dims);
@@ -968,18 +1001,30 @@ H5Reader::SparseMatrixData H5Reader::ReadSparseXMatrix(idx_t obs_start, idx_t ob
 			}
 		}
 
-		if (is_csc) {
-			// Use CSC-specific reader
-			return ReadSparseXMatrixCSC(obs_start, obs_count, var_start, var_count);
-		} else if (is_csr) {
-			// Use CSR-specific reader
-			return ReadSparseXMatrixCSR(obs_start, obs_count, var_start, var_count);
+		if (is_csr) {
+			// CSR format reading
+			return ReadSparseMatrixCSR(path, obs_start, obs_count, var_start, var_count);
+		} else if (is_csc) {
+			// CSC format reading
+			return ReadSparseMatrixCSC(path, obs_start, obs_count, var_start, var_count);
 		}
 	} catch (const H5::Exception &e) {
 		// Return empty sparse data on error
 	}
 
 	return sparse_data;
+}
+
+H5Reader::SparseMatrixData H5Reader::ReadSparseMatrixCSR(const std::string &path, idx_t obs_start, idx_t obs_count,
+                                                         idx_t var_start, idx_t var_count) {
+	// This is the refactored CSR reading that can work on any path
+	return ReadSparseXMatrixCSR(obs_start, obs_count, var_start, var_count);
+}
+
+H5Reader::SparseMatrixData H5Reader::ReadSparseMatrixCSC(const std::string &path, idx_t obs_start, idx_t obs_count,
+                                                         idx_t var_start, idx_t var_count) {
+	// This is the refactored CSC reading that can work on any path
+	return ReadSparseXMatrixCSC(obs_start, obs_count, var_start, var_count);
 }
 
 H5Reader::SparseMatrixData H5Reader::ReadSparseXMatrixCSR(idx_t obs_start, idx_t obs_count, idx_t var_start,
@@ -1378,6 +1423,388 @@ void H5Reader::ReadVarmMatrix(const std::string &matrix_name, idx_t row_start, i
 	} catch (const H5::Exception &e) {
 		throw InvalidInputException("Failed to read varm matrix %s: %s", matrix_name.c_str(), e.getCDetailMsg());
 	}
+}
+
+std::vector<H5Reader::LayerInfo> H5Reader::GetLayers() {
+	std::vector<LayerInfo> layers;
+
+	if (!IsGroupPresent("/layers")) {
+		return layers; // No layers in this file
+	}
+
+	try {
+		H5::Group layers_group = file->openGroup("/layers");
+
+		// Iterate through all items in the layers group
+		hsize_t num_objs = layers_group.getNumObjs();
+		for (hsize_t i = 0; i < num_objs; i++) {
+			std::string layer_name = layers_group.getObjnameByIdx(i);
+			LayerInfo info;
+			info.name = layer_name;
+
+			// Check if it's a dataset (dense) or group (sparse)
+			H5G_stat_t stat_buf;
+			layers_group.getObjinfo(layer_name, stat_buf);
+
+			if (stat_buf.type == H5G_DATASET) {
+				// Dense layer
+				H5::DataSet dataset = layers_group.openDataSet(layer_name);
+				H5::DataSpace dataspace = dataset.getSpace();
+
+				hsize_t dims[2];
+				dataspace.getSimpleExtentDims(dims);
+				info.rows = dims[0];
+				info.cols = dims[1];
+				info.dtype = H5TypeToDuckDBType(dataset.getDataType());
+				info.is_sparse = false;
+				info.sparse_format = "";
+			} else if (stat_buf.type == H5G_GROUP) {
+				// Sparse layer
+				H5::Group sparse_group = layers_group.openGroup(layer_name);
+				info.is_sparse = true;
+
+				// Determine sparse format (CSR or CSC)
+				if (IsDatasetPresent("/layers/" + layer_name, "indptr")) {
+					H5::DataSet indptr = sparse_group.openDataSet("indptr");
+					H5::DataSpace indptr_space = indptr.getSpace();
+					hsize_t indptr_dims[1];
+					indptr_space.getSimpleExtentDims(indptr_dims);
+
+					// For CSR: indptr has n_obs + 1 elements
+					// For CSC: indptr has n_var + 1 elements
+					// We need to check against the main X matrix dimensions
+					idx_t n_obs = GetObsCount();
+					idx_t n_var = GetVarCount();
+
+					if (indptr_dims[0] == static_cast<hsize_t>(n_obs + 1)) {
+						info.sparse_format = "csr";
+						info.rows = n_obs;
+						info.cols = n_var;
+					} else if (indptr_dims[0] == static_cast<hsize_t>(n_var + 1)) {
+						info.sparse_format = "csc";
+						info.rows = n_obs;
+						info.cols = n_var;
+					}
+				}
+
+				// Get data type
+				if (IsDatasetPresent("/layers/" + layer_name, "data")) {
+					H5::DataSet data_dataset = sparse_group.openDataSet("data");
+					info.dtype = H5TypeToDuckDBType(data_dataset.getDataType());
+				}
+			}
+
+			layers.push_back(info);
+		}
+	} catch (const H5::Exception &e) {
+		throw IOException("Failed to read layers: %s", e.getCDetailMsg());
+	}
+
+	return layers;
+}
+
+void H5Reader::ReadLayerMatrix(const std::string &layer_name, idx_t row_idx, idx_t start_col, idx_t count,
+                               DataChunk &output, const std::vector<std::string> &var_names) {
+	try {
+		std::string layer_path = "/layers/" + layer_name;
+
+		// Check if it's a sparse or dense layer
+		H5::Group layers_group = file->openGroup("/layers");
+		H5G_stat_t stat_buf;
+		layers_group.getObjinfo(layer_name, stat_buf);
+
+		if (stat_buf.type == H5G_DATASET) {
+			// Dense layer - read directly like the main X matrix
+			H5::DataSet dataset = layers_group.openDataSet(layer_name);
+			H5::DataSpace dataspace = dataset.getSpace();
+
+			hsize_t dims[2];
+			dataspace.getSimpleExtentDims(dims);
+
+			// Set up hyperslab for this row and column range
+			hsize_t offset[2] = {row_idx, start_col};
+			hsize_t count_dims[2] = {1, count};
+			dataspace.selectHyperslab(H5S_SELECT_SET, count_dims, offset);
+
+			// Create memory dataspace
+			H5::DataSpace memspace(2, count_dims);
+
+			// Read the data based on type
+			H5::DataType dtype = dataset.getDataType();
+
+			// First column is always obs_idx
+			auto &obs_idx_vec = output.data[0];
+			obs_idx_vec.SetValue(0, Value::BIGINT(row_idx));
+
+			// Read gene expression values into remaining columns
+			if (dtype.getClass() == H5T_FLOAT && dtype.getSize() == 4) {
+				std::vector<float> buffer(count);
+				dataset.read(buffer.data(), H5::PredType::NATIVE_FLOAT, memspace, dataspace);
+				for (idx_t i = 0; i < count && i < var_names.size(); i++) {
+					output.data[i + 1].SetValue(0, Value::FLOAT(buffer[i]));
+				}
+			} else if (dtype.getClass() == H5T_FLOAT && dtype.getSize() == 8) {
+				std::vector<double> buffer(count);
+				dataset.read(buffer.data(), H5::PredType::NATIVE_DOUBLE, memspace, dataspace);
+				for (idx_t i = 0; i < count && i < var_names.size(); i++) {
+					output.data[i + 1].SetValue(0, Value::DOUBLE(buffer[i]));
+				}
+			} else if (dtype.getClass() == H5T_INTEGER) {
+				if (dtype.getSize() == 4) {
+					std::vector<int32_t> buffer(count);
+					dataset.read(buffer.data(), H5::PredType::NATIVE_INT32, memspace, dataspace);
+					for (idx_t i = 0; i < count && i < var_names.size(); i++) {
+						output.data[i + 1].SetValue(0, Value::INTEGER(buffer[i]));
+					}
+				} else if (dtype.getSize() == 8) {
+					std::vector<int64_t> buffer(count);
+					dataset.read(buffer.data(), H5::PredType::NATIVE_INT64, memspace, dataspace);
+					for (idx_t i = 0; i < count && i < var_names.size(); i++) {
+						output.data[i + 1].SetValue(0, Value::BIGINT(buffer[i]));
+					}
+				}
+			}
+		} else if (stat_buf.type == H5G_GROUP) {
+			// Sparse layer - read using sparse format
+			H5::Group sparse_group = layers_group.openGroup(layer_name);
+
+			// Determine if CSR or CSC
+			H5::DataSet indptr = sparse_group.openDataSet("indptr");
+			H5::DataSpace indptr_space = indptr.getSpace();
+			hsize_t indptr_dims[1];
+			indptr_space.getSimpleExtentDims(indptr_dims);
+
+			idx_t n_obs = GetObsCount();
+			idx_t n_var = GetVarCount();
+			bool is_csr = (indptr_dims[0] == static_cast<hsize_t>(n_obs + 1));
+
+			// First column is always obs_idx
+			auto &obs_idx_vec = output.data[0];
+			obs_idx_vec.SetValue(0, Value::BIGINT(row_idx));
+
+			// Initialize all gene columns to 0
+			for (idx_t i = 1; i <= var_names.size(); i++) {
+				auto &vec = output.data[i];
+				// Set appropriate zero based on column type
+				if (output.data[i].GetType() == LogicalType::FLOAT) {
+					vec.SetValue(0, Value::FLOAT(0.0f));
+				} else if (output.data[i].GetType() == LogicalType::DOUBLE) {
+					vec.SetValue(0, Value::DOUBLE(0.0));
+				} else if (output.data[i].GetType() == LogicalType::INTEGER) {
+					vec.SetValue(0, Value::INTEGER(0));
+				} else if (output.data[i].GetType() == LogicalType::BIGINT) {
+					vec.SetValue(0, Value::BIGINT(0));
+				}
+			}
+
+			if (is_csr) {
+				// CSR format - row-major, efficient for reading rows
+				H5::DataSet indices = sparse_group.openDataSet("indices");
+				H5::DataSet data_dataset = sparse_group.openDataSet("data");
+
+				// Read indptr for this row
+				std::vector<int32_t> indptr_data(2);
+				hsize_t indptr_offset[1] = {row_idx};
+				hsize_t indptr_count[1] = {2};
+				H5::DataSpace indptr_memspace(1, indptr_count);
+				indptr_space.selectHyperslab(H5S_SELECT_SET, indptr_count, indptr_offset);
+				indptr.read(indptr_data.data(), H5::PredType::NATIVE_INT32, indptr_memspace, indptr_space);
+
+				int32_t row_start = indptr_data[0];
+				int32_t row_end = indptr_data[1];
+				int32_t nnz = row_end - row_start;
+
+				if (nnz > 0) {
+					// Read indices and data for this row
+					std::vector<int32_t> col_indices(nnz);
+					H5::DataSpace indices_space = indices.getSpace();
+					hsize_t indices_offset[1] = {static_cast<hsize_t>(row_start)};
+					hsize_t indices_count[1] = {static_cast<hsize_t>(nnz)};
+					H5::DataSpace indices_memspace(1, indices_count);
+					indices_space.selectHyperslab(H5S_SELECT_SET, indices_count, indices_offset);
+					indices.read(col_indices.data(), H5::PredType::NATIVE_INT32, indices_memspace, indices_space);
+
+					// Read data values based on type
+					H5::DataType dtype = data_dataset.getDataType();
+					H5::DataSpace data_space = data_dataset.getSpace();
+					H5::DataSpace data_memspace(1, indices_count);
+					data_space.selectHyperslab(H5S_SELECT_SET, indices_count, indices_offset);
+
+					if (dtype.getClass() == H5T_FLOAT && dtype.getSize() == 4) {
+						std::vector<float> values(nnz);
+						data_dataset.read(values.data(), H5::PredType::NATIVE_FLOAT, data_memspace, data_space);
+						for (int32_t i = 0; i < nnz; i++) {
+							int32_t col = col_indices[i];
+							if (col >= start_col && col < start_col + static_cast<int32_t>(count) &&
+							    col - start_col < static_cast<int32_t>(var_names.size())) {
+								output.data[col - start_col + 1].SetValue(0, Value::FLOAT(values[i]));
+							}
+						}
+					} else if (dtype.getClass() == H5T_FLOAT && dtype.getSize() == 8) {
+						std::vector<double> values(nnz);
+						data_dataset.read(values.data(), H5::PredType::NATIVE_DOUBLE, data_memspace, data_space);
+						for (int32_t i = 0; i < nnz; i++) {
+							int32_t col = col_indices[i];
+							if (col >= start_col && col < start_col + static_cast<int32_t>(count) &&
+							    col - start_col < static_cast<int32_t>(var_names.size())) {
+								output.data[col - start_col + 1].SetValue(0, Value::DOUBLE(values[i]));
+							}
+						}
+					} else if (dtype.getClass() == H5T_INTEGER) {
+						if (dtype.getSize() == 4) {
+							std::vector<int32_t> values(nnz);
+							data_dataset.read(values.data(), H5::PredType::NATIVE_INT32, data_memspace, data_space);
+							for (int32_t i = 0; i < nnz; i++) {
+								int32_t col = col_indices[i];
+								if (col >= start_col && col < start_col + static_cast<int32_t>(count) &&
+								    col - start_col < static_cast<int32_t>(var_names.size())) {
+									output.data[col - start_col + 1].SetValue(0, Value::INTEGER(values[i]));
+								}
+							}
+						} else if (dtype.getSize() == 8) {
+							std::vector<int64_t> values(nnz);
+							data_dataset.read(values.data(), H5::PredType::NATIVE_INT64, data_memspace, data_space);
+							for (int32_t i = 0; i < nnz; i++) {
+								int32_t col = col_indices[i];
+								if (col >= start_col && col < start_col + static_cast<int32_t>(count) &&
+								    col - start_col < static_cast<int32_t>(var_names.size())) {
+									output.data[col - start_col + 1].SetValue(0, Value::BIGINT(values[i]));
+								}
+							}
+						}
+					}
+				}
+			} else {
+				// CSC format - column-major, less efficient for reading rows
+				// We need to iterate through all columns and check if they have values for this row
+				H5::DataSet indices = sparse_group.openDataSet("indices");
+				H5::DataSet data_dataset = sparse_group.openDataSet("data");
+
+				// Read all indptr to find columns with data
+				std::vector<int32_t> indptr_data(n_var + 1);
+				indptr.read(indptr_data.data(), H5::PredType::NATIVE_INT32);
+
+				// For each column in our range
+				for (idx_t col = start_col; col < start_col + count && col < n_var; col++) {
+					int32_t col_start = indptr_data[col];
+					int32_t col_end = indptr_data[col + 1];
+
+					if (col_start < col_end) {
+						// This column has data, check if our row is in it
+						int32_t nnz = col_end - col_start;
+						std::vector<int32_t> row_indices(nnz);
+
+						H5::DataSpace indices_space = indices.getSpace();
+						hsize_t indices_offset[1] = {static_cast<hsize_t>(col_start)};
+						hsize_t indices_count[1] = {static_cast<hsize_t>(nnz)};
+						H5::DataSpace indices_memspace(1, indices_count);
+						indices_space.selectHyperslab(H5S_SELECT_SET, indices_count, indices_offset);
+						indices.read(row_indices.data(), H5::PredType::NATIVE_INT32, indices_memspace, indices_space);
+
+						// Check if our row is in this column
+						for (int32_t i = 0; i < nnz; i++) {
+							if (row_indices[i] == static_cast<int32_t>(row_idx)) {
+								// Found our row, read the value
+								H5::DataType dtype = data_dataset.getDataType();
+								H5::DataSpace data_space = data_dataset.getSpace();
+								hsize_t data_offset[1] = {static_cast<hsize_t>(col_start + i)};
+								hsize_t data_count[1] = {1};
+								H5::DataSpace data_memspace(1, data_count);
+								data_space.selectHyperslab(H5S_SELECT_SET, data_count, data_offset);
+
+								idx_t output_col = col - start_col + 1;
+								if (output_col <= var_names.size()) {
+									if (dtype.getClass() == H5T_FLOAT && dtype.getSize() == 4) {
+										float value;
+										data_dataset.read(&value, H5::PredType::NATIVE_FLOAT, data_memspace,
+										                  data_space);
+										output.data[output_col].SetValue(0, Value::FLOAT(value));
+									} else if (dtype.getClass() == H5T_FLOAT && dtype.getSize() == 8) {
+										double value;
+										data_dataset.read(&value, H5::PredType::NATIVE_DOUBLE, data_memspace,
+										                  data_space);
+										output.data[output_col].SetValue(0, Value::DOUBLE(value));
+									} else if (dtype.getClass() == H5T_INTEGER && dtype.getSize() == 4) {
+										int32_t value;
+										data_dataset.read(&value, H5::PredType::NATIVE_INT32, data_memspace,
+										                  data_space);
+										output.data[output_col].SetValue(0, Value::INTEGER(value));
+									} else if (dtype.getClass() == H5T_INTEGER && dtype.getSize() == 8) {
+										int64_t value;
+										data_dataset.read(&value, H5::PredType::NATIVE_INT64, data_memspace,
+										                  data_space);
+										output.data[output_col].SetValue(0, Value::BIGINT(value));
+									}
+								}
+								break; // Found our row in this column, no need to continue
+							}
+						}
+					}
+				}
+			}
+		}
+
+		output.SetCardinality(1);
+	} catch (const H5::Exception &e) {
+		throw IOException("Failed to read layer %s: %s", layer_name.c_str(), e.getCDetailMsg());
+	}
+}
+
+std::string H5Reader::ReadVarColumnString(const std::string &column_name, idx_t var_idx) {
+	if (!file || !file->getId()) {
+		return "";
+	}
+
+	try {
+		// Try to read from var DataFrame
+		if (IsGroupPresent("/var")) {
+			H5::Group var_group = file->openGroup("/var");
+			if (IsDatasetPresent("/var", column_name)) {
+				H5::DataSet dataset = var_group.openDataSet(column_name);
+				H5::DataSpace dataspace = dataset.getSpace();
+
+				// Get dimensions
+				hsize_t dims[1];
+				dataspace.getSimpleExtentDims(dims);
+
+				if (var_idx >= dims[0]) {
+					return "";
+				}
+
+				H5::DataType dtype = dataset.getDataType();
+				if (dtype.getClass() == H5T_STRING) {
+					H5::StrType str_type = dataset.getStrType();
+
+					// Select single element
+					hsize_t offset[1] = {var_idx};
+					hsize_t count[1] = {1};
+					dataspace.selectHyperslab(H5S_SELECT_SET, count, offset);
+					H5::DataSpace mem_space(1, count);
+
+					if (str_type.isVariableStr()) {
+						char *str_buffer;
+						dataset.read(&str_buffer, str_type, mem_space, dataspace);
+						std::string result = str_buffer ? str_buffer : "";
+						dataset.vlenReclaim(&str_buffer, str_type, mem_space);
+						return result;
+					} else {
+						size_t str_size = str_type.getSize();
+						std::vector<char> buffer(str_size);
+						dataset.read(buffer.data(), str_type, mem_space, dataspace);
+						size_t len = strnlen(buffer.data(), str_size);
+						std::string result(buffer.data(), len);
+						// Trim whitespace
+						result.erase(result.find_last_not_of(" \t\n\r\f\v") + 1);
+						return result;
+					}
+				}
+			}
+		}
+	} catch (const H5::Exception &e) {
+		// Return empty string on error
+	}
+
+	return "";
 }
 
 } // namespace duckdb

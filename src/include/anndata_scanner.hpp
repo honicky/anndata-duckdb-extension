@@ -39,6 +39,11 @@ public:
 	                                         vector<LogicalType> &return_types, vector<string> &names);
 	static void VarmScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
+	// Table function for scanning layer matrices
+	static unique_ptr<FunctionData> LayerBind(ClientContext &context, TableFunctionBindInput &input,
+	                                          vector<LogicalType> &return_types, vector<string> &names);
+	static void LayerScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
+
 	// Utility functions
 	static bool IsAnndataFile(const string &path);
 	static string GetAnndataInfo(const string &path);
@@ -65,6 +70,10 @@ struct AnndataBindData : public TableFunctionData {
 	string matrix_name;
 	idx_t matrix_rows = 0;
 	idx_t matrix_cols = 0;
+
+	// For layer scanning
+	bool is_layer_scan = false;
+	string layer_name;
 
 	AnndataBindData(const string &path) : file_path(path), row_count(0), column_count(0) {
 	}
