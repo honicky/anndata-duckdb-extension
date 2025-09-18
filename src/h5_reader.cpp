@@ -1115,6 +1115,20 @@ H5Reader::SparseMatrixData H5Reader::ReadSparseMatrixCSR(const std::string &path
 				} else {
 					data_ds.read(row_data.data(), H5::PredType::NATIVE_DOUBLE, data_mem_space, data_sel_space);
 				}
+			} else if (data_dtype.getClass() == H5T_INTEGER) {
+				if (data_dtype.getSize() <= 4) {
+					std::vector<int32_t> int_data(nnz);
+					data_ds.read(int_data.data(), H5::PredType::NATIVE_INT32, data_mem_space, data_sel_space);
+					for (size_t i = 0; i < int_data.size(); i++) {
+						row_data[i] = static_cast<double>(int_data[i]);
+					}
+				} else {
+					std::vector<int64_t> int_data(nnz);
+					data_ds.read(int_data.data(), H5::PredType::NATIVE_INT64, data_mem_space, data_sel_space);
+					for (size_t i = 0; i < int_data.size(); i++) {
+						row_data[i] = static_cast<double>(int_data[i]);
+					}
+				}
 			}
 
 			// Add to sparse data structure only values in the requested var range
@@ -1213,6 +1227,20 @@ H5Reader::SparseMatrixData H5Reader::ReadSparseMatrixCSC(const std::string &path
 					}
 				} else {
 					data_ds.read(col_data.data(), H5::PredType::NATIVE_DOUBLE, data_mem_space, data_sel_space);
+				}
+			} else if (data_dtype.getClass() == H5T_INTEGER) {
+				if (data_dtype.getSize() <= 4) {
+					std::vector<int32_t> int_data(nnz);
+					data_ds.read(int_data.data(), H5::PredType::NATIVE_INT32, data_mem_space, data_sel_space);
+					for (size_t i = 0; i < int_data.size(); i++) {
+						col_data[i] = static_cast<double>(int_data[i]);
+					}
+				} else {
+					std::vector<int64_t> int_data(nnz);
+					data_ds.read(int_data.data(), H5::PredType::NATIVE_INT64, data_mem_space, data_sel_space);
+					for (size_t i = 0; i < int_data.size(); i++) {
+						col_data[i] = static_cast<double>(int_data[i]);
+					}
 				}
 			}
 
@@ -1826,6 +1854,141 @@ std::string H5Reader::ReadVarColumnString(const std::string &column_name, idx_t 
 	}
 
 	return "";
+}
+
+void H5Reader::ReadXMatrixBatch(idx_t row_start, idx_t row_count, idx_t col_start, idx_t col_count, DataChunk &output) {
+	ReadMatrixBatch("/X", row_start, row_count, col_start, col_count, output, false);
+}
+
+void H5Reader::ReadLayerMatrixBatch(const std::string &layer_name, idx_t row_start, idx_t row_count, idx_t col_start,
+                                    idx_t col_count, DataChunk &output) {
+	std::string layer_path = "/layers/" + layer_name;
+	ReadMatrixBatch(layer_path, row_start, row_count, col_start, col_count, output, true);
+}
+
+// Helper function to set value in vector based on its type
+void H5Reader::SetTypedValue(Vector &vec, idx_t row, double value) {
+	switch (vec.GetType().id()) {
+	case LogicalTypeId::FLOAT:
+		vec.SetValue(row, Value::FLOAT(static_cast<float>(value)));
+		break;
+	case LogicalTypeId::DOUBLE:
+		vec.SetValue(row, Value::DOUBLE(value));
+		break;
+	case LogicalTypeId::INTEGER:
+		vec.SetValue(row, Value::INTEGER(static_cast<int32_t>(value)));
+		break;
+	case LogicalTypeId::BIGINT:
+		vec.SetValue(row, Value::BIGINT(static_cast<int64_t>(value)));
+		break;
+	default:
+		vec.SetValue(row, Value::DOUBLE(value));
+		break;
+	}
+}
+
+// Helper function to initialize vector with zeros based on its type
+void H5Reader::InitializeZeros(Vector &vec, idx_t count) {
+	switch (vec.GetType().id()) {
+	case LogicalTypeId::FLOAT:
+		for (idx_t i = 0; i < count; i++) {
+			vec.SetValue(i, Value::FLOAT(0.0f));
+		}
+		break;
+	case LogicalTypeId::DOUBLE:
+		for (idx_t i = 0; i < count; i++) {
+			vec.SetValue(i, Value::DOUBLE(0.0));
+		}
+		break;
+	case LogicalTypeId::INTEGER:
+		for (idx_t i = 0; i < count; i++) {
+			vec.SetValue(i, Value::INTEGER(0));
+		}
+		break;
+	case LogicalTypeId::BIGINT:
+		for (idx_t i = 0; i < count; i++) {
+			vec.SetValue(i, Value::BIGINT(0));
+		}
+		break;
+	default:
+		for (idx_t i = 0; i < count; i++) {
+			vec.SetValue(i, Value::DOUBLE(0.0));
+		}
+		break;
+	}
+}
+
+// Unified matrix reading function
+void H5Reader::ReadMatrixBatch(const std::string &path, idx_t row_start, idx_t row_count, idx_t col_start,
+                               idx_t col_count, DataChunk &output, bool is_layer) {
+	try {
+		// First column is always obs_idx
+		auto &obs_idx_vec = output.data[0];
+		for (idx_t i = 0; i < row_count; i++) {
+			obs_idx_vec.SetValue(i, Value::BIGINT(row_start + i));
+		}
+
+		// Initialize all data columns with zeros
+		for (idx_t col = 1; col <= col_count && col < output.data.size(); col++) {
+			InitializeZeros(output.data[col], row_count);
+		}
+
+		// Check if matrix is sparse or dense
+		bool is_sparse = false;
+		bool is_dense = false;
+
+		if (is_layer) {
+			// For layers, check the structure
+			H5G_stat_t stat_buf;
+			file->getObjinfo(path, stat_buf);
+			is_dense = (stat_buf.type == H5G_DATASET);
+			is_sparse = (stat_buf.type == H5G_GROUP);
+		} else {
+			// For X matrix
+			is_dense = IsDatasetPresent("/", "X");
+			is_sparse = !is_dense && IsGroupPresent("/X");
+		}
+
+		if (is_dense) {
+			// Dense matrix reading
+			std::vector<double> values;
+			if (is_layer) {
+				ReadDenseMatrix(path, row_start, row_count, col_start, col_count, values);
+			} else {
+				ReadDenseMatrix("/X", row_start, row_count, col_start, col_count, values);
+			}
+
+			// Fill columns from dense matrix
+			for (idx_t col = 0; col < col_count && col + 1 < output.data.size(); col++) {
+				auto &vec = output.data[col + 1]; // +1 to skip obs_idx
+
+				for (idx_t row = 0; row < row_count; row++) {
+					idx_t matrix_idx = row * col_count + col;
+					if (matrix_idx < values.size()) {
+						SetTypedValue(vec, row, values[matrix_idx]);
+					}
+				}
+			}
+		} else if (is_sparse) {
+			// Sparse matrix reading
+			auto sparse_data =
+			    ReadSparseMatrixAtPath(is_layer ? path : "/X", row_start, row_count, col_start, col_count);
+
+			// Fill in non-zero values
+			for (size_t i = 0; i < sparse_data.values.size(); i++) {
+				idx_t row = sparse_data.row_indices[i];
+				idx_t col = sparse_data.col_indices[i];
+
+				if (col + 1 < output.data.size() && row < row_count) {
+					SetTypedValue(output.data[col + 1], row, sparse_data.values[i]);
+				}
+			}
+		}
+
+		output.SetCardinality(row_count);
+	} catch (const H5::Exception &e) {
+		throw IOException("Failed to read matrix at %s: %s", path.c_str(), e.getCDetailMsg());
+	}
 }
 
 } // namespace duckdb

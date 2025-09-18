@@ -267,57 +267,10 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 		return;
 	}
 
-	// First column is obs_idx
-	auto &obs_idx_vec = output.data[0];
-	for (idx_t i = 0; i < count; i++) {
-		obs_idx_vec.SetValue(i, Value::BIGINT(gstate.current_row + i));
-	}
-
-	// Initialize all gene columns with zeros (NULL would be better but DOUBLE(0.0) for now)
-	for (idx_t var_idx = 0; var_idx < bind_data.n_var; var_idx++) {
-		auto &gene_vec = output.data[var_idx + 1]; // +1 to skip obs_idx column
-		for (idx_t obs_idx = 0; obs_idx < count; obs_idx++) {
-			gene_vec.SetValue(obs_idx, Value::DOUBLE(0.0));
-		}
-	}
-
-	// Check if matrix is sparse
-	auto x_info = gstate.h5_reader->GetXMatrixInfo();
-	if (x_info.is_sparse) {
-		// Read sparse matrix - only non-zero values
-		auto sparse_data = gstate.h5_reader->ReadSparseXMatrix(gstate.current_row, count, 0, bind_data.n_var);
-
-		// Fill in the non-zero values
-		for (size_t i = 0; i < sparse_data.values.size(); i++) {
-			idx_t obs_idx = sparse_data.row_indices[i];
-			idx_t var_idx = sparse_data.col_indices[i];
-			double value = sparse_data.values[i];
-
-			// Set the value in the appropriate column
-			auto &gene_vec = output.data[var_idx + 1]; // +1 to skip obs_idx column
-			gene_vec.SetValue(obs_idx, Value::DOUBLE(value));
-		}
-	} else {
-		// Read dense matrix
-		std::vector<double> values;
-		gstate.h5_reader->ReadXMatrix(gstate.current_row, count, 0, bind_data.n_var, values);
-
-		// Fill gene expression columns from dense matrix
-		for (idx_t var_idx = 0; var_idx < bind_data.n_var; var_idx++) {
-			auto &gene_vec = output.data[var_idx + 1]; // +1 to skip obs_idx column
-
-			for (idx_t obs_idx = 0; obs_idx < count; obs_idx++) {
-				// Matrix is stored row-major: [obs][var]
-				idx_t matrix_idx = obs_idx * bind_data.n_var + var_idx;
-				if (matrix_idx < values.size()) {
-					gene_vec.SetValue(obs_idx, Value::DOUBLE(values[matrix_idx]));
-				}
-			}
-		}
-	}
+	// Use unified batch reader for X matrix
+	gstate.h5_reader->ReadXMatrixBatch(gstate.current_row, count, 0, bind_data.n_var, output);
 
 	gstate.current_row += count;
-	output.SetCardinality(count);
 }
 
 // Table function implementations for obsm matrices
@@ -625,28 +578,18 @@ void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data,
 		state.h5_reader = make_uniq<H5Reader>(bind_data.file_path);
 	}
 
-	if (state.current_row >= bind_data.row_count) {
+	// Calculate how many rows to read
+	idx_t remaining = bind_data.row_count - state.current_row;
+	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, remaining);
+
+	if (count == 0) {
 		return;
 	}
 
-	// Read layer data - single row at a time since ReadLayerMatrix handles one row
-	// TODO: Optimize this to read multiple rows at once
-	idx_t row_idx = state.current_row;
+	// Use batch reading for better performance
+	state.h5_reader->ReadLayerMatrixBatch(bind_data.layer_name, state.current_row, count, 0, bind_data.n_var, output);
 
-	// Create a temporary chunk for single row reading
-	DataChunk temp_chunk;
-	temp_chunk.Initialize(Allocator::DefaultAllocator(), bind_data.column_types, 1);
-
-	state.h5_reader->ReadLayerMatrix(bind_data.layer_name, row_idx, 0, bind_data.n_var, temp_chunk,
-	                                 bind_data.var_names);
-
-	// Copy the single row to output at position 0
-	for (idx_t col = 0; col < bind_data.column_count; col++) {
-		output.data[col].SetValue(0, temp_chunk.data[col].GetValue(0));
-	}
-
-	output.SetCardinality(1);
-	state.current_row += 1;
+	state.current_row += count;
 }
 
 // Error handling function for layers when layer name is missing

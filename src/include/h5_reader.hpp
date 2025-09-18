@@ -57,8 +57,11 @@ public:
 	// Read gene names from var
 	std::vector<std::string> GetVarNames(const std::string &column_name = "_index");
 
-	// Read X matrix values for a row range and column range
+	// Read X matrix values for a row range and column range (legacy - returns vector)
 	void ReadXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count, std::vector<double> &values);
+
+	// Read X matrix directly into DataChunk for better performance
+	void ReadXMatrixBatch(idx_t row_start, idx_t row_count, idx_t col_start, idx_t col_count, DataChunk &output);
 
 	// Sparse matrix data structure
 	struct SparseMatrixData {
@@ -111,11 +114,24 @@ public:
 	// Get list of available layers
 	std::vector<LayerInfo> GetLayers();
 
-	// Read layer matrix data (similar to X matrix)
+	// Read layer matrix data (similar to X matrix) - single row version (deprecated)
 	void ReadLayerMatrix(const std::string &layer_name, idx_t row_idx, idx_t start_col, idx_t count, DataChunk &output,
 	                     const std::vector<std::string> &var_names);
 
+	// Read layer matrix data in batches for better performance
+	void ReadLayerMatrixBatch(const std::string &layer_name, idx_t row_start, idx_t row_count, idx_t col_start,
+	                          idx_t col_count, DataChunk &output);
+
+	// Unified matrix reading interface - reads any matrix (X or layer) into a DataChunk
+	void ReadMatrixBatch(const std::string &path, idx_t row_start, idx_t row_count, idx_t col_start, idx_t col_count,
+	                     DataChunk &output, bool is_layer = false);
+
 private:
+	// Helper to set value in vector based on type
+	static void SetTypedValue(Vector &vec, idx_t row, double value);
+
+	// Helper to initialize vector with zeros based on type
+	static void InitializeZeros(Vector &vec, idx_t count);
 	// Helper function to read sparse matrix at any path
 	SparseMatrixData ReadSparseMatrixAtPath(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start,
 	                                        idx_t var_count);
