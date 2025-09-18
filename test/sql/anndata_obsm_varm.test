@@ -1,6 +1,6 @@
 # name: test/sql/anndata_obsm_varm.test
 # description: Test obsm and varm matrix reading functionality
-# group: [anndata]
+# group: [sql]
 
 require anndata
 

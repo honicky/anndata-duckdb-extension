@@ -892,6 +892,56 @@ std::vector<std::string> H5Reader::GetVarNames(const std::string &column_name) {
 	return names;
 }
 
+void H5Reader::ReadDenseMatrix(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start,
+                               idx_t var_count, std::vector<double> &values) {
+	values.clear();
+	values.resize(obs_count * var_count, 0.0);
+
+	try {
+		H5::DataSet dataset = file->openDataSet(path);
+		H5::DataSpace dataspace = dataset.getSpace();
+
+		// Select hyperslab in file
+		hsize_t h_offset[2] = {static_cast<hsize_t>(obs_start), static_cast<hsize_t>(var_start)};
+		hsize_t h_count[2] = {static_cast<hsize_t>(obs_count), static_cast<hsize_t>(var_count)};
+		dataspace.selectHyperslab(H5S_SELECT_SET, h_count, h_offset);
+
+		// Create memory dataspace
+		H5::DataSpace mem_space(2, h_count);
+
+		// Read the data
+		H5::DataType dtype = dataset.getDataType();
+		if (dtype.getClass() == H5T_FLOAT) {
+			if (dtype.getSize() <= 4) {
+				std::vector<float> float_values(obs_count * var_count);
+				dataset.read(float_values.data(), H5::PredType::NATIVE_FLOAT, mem_space, dataspace);
+				for (size_t i = 0; i < float_values.size(); i++) {
+					values[i] = static_cast<double>(float_values[i]);
+				}
+			} else {
+				dataset.read(values.data(), H5::PredType::NATIVE_DOUBLE, mem_space, dataspace);
+			}
+		} else if (dtype.getClass() == H5T_INTEGER) {
+			if (dtype.getSize() <= 4) {
+				std::vector<int32_t> int_values(obs_count * var_count);
+				dataset.read(int_values.data(), H5::PredType::NATIVE_INT32, mem_space, dataspace);
+				for (size_t i = 0; i < int_values.size(); i++) {
+					values[i] = static_cast<double>(int_values[i]);
+				}
+			} else {
+				std::vector<int64_t> int_values(obs_count * var_count);
+				dataset.read(int_values.data(), H5::PredType::NATIVE_INT64, mem_space, dataspace);
+				for (size_t i = 0; i < int_values.size(); i++) {
+					values[i] = static_cast<double>(int_values[i]);
+				}
+			}
+		}
+	} catch (const H5::Exception &e) {
+		// On error, values remain as zeros
+		// Caller can handle this case
+	}
+}
+
 void H5Reader::ReadXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count,
                            std::vector<double> &values) {
 	values.clear();
@@ -899,39 +949,10 @@ void H5Reader::ReadXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start, id
 
 	try {
 		if (IsDatasetPresent("/", "X")) {
-			// Dense matrix
-			H5::DataSet dataset = file->openDataSet("/X");
-			H5::DataSpace dataspace = dataset.getSpace();
-
-			// Select hyperslab in file
-			hsize_t h_offset[2] = {static_cast<hsize_t>(obs_start), static_cast<hsize_t>(var_start)};
-			hsize_t h_count[2] = {static_cast<hsize_t>(obs_count), static_cast<hsize_t>(var_count)};
-			dataspace.selectHyperslab(H5S_SELECT_SET, h_count, h_offset);
-
-			// Create memory dataspace
-			H5::DataSpace mem_space(2, h_count);
-
-			// Read the data
-			H5::DataType dtype = dataset.getDataType();
-			if (dtype.getClass() == H5T_FLOAT) {
-				if (dtype.getSize() <= 4) {
-					std::vector<float> float_values(obs_count * var_count);
-					dataset.read(float_values.data(), H5::PredType::NATIVE_FLOAT, mem_space, dataspace);
-					for (size_t i = 0; i < float_values.size(); i++) {
-						values[i] = static_cast<double>(float_values[i]);
-					}
-				} else {
-					dataset.read(values.data(), H5::PredType::NATIVE_DOUBLE, mem_space, dataspace);
-				}
-			} else if (dtype.getClass() == H5T_INTEGER) {
-				std::vector<int32_t> int_values(obs_count * var_count);
-				dataset.read(int_values.data(), H5::PredType::NATIVE_INT32, mem_space, dataspace);
-				for (size_t i = 0; i < int_values.size(); i++) {
-					values[i] = static_cast<double>(int_values[i]);
-				}
-			}
+			// Dense matrix - use generic reader
+			ReadDenseMatrix("/X", obs_start, obs_count, var_start, var_count, values);
 		} else if (IsGroupPresent("/X")) {
-			// Sparse matrix in CSR format - convert to dense for backward compatibility
+			// Sparse matrix - convert to dense for backward compatibility
 			auto sparse_data = ReadSparseXMatrix(obs_start, obs_count, var_start, var_count);
 
 			// Fill in the dense matrix from sparse data
@@ -1015,27 +1036,21 @@ H5Reader::SparseMatrixData H5Reader::ReadSparseMatrixAtPath(const std::string &p
 	return sparse_data;
 }
 
-H5Reader::SparseMatrixData H5Reader::ReadSparseMatrixCSR(const std::string &path, idx_t obs_start, idx_t obs_count,
-                                                         idx_t var_start, idx_t var_count) {
-	// This is the refactored CSR reading that can work on any path
-	return ReadSparseXMatrixCSR(obs_start, obs_count, var_start, var_count);
-}
-
-H5Reader::SparseMatrixData H5Reader::ReadSparseMatrixCSC(const std::string &path, idx_t obs_start, idx_t obs_count,
-                                                         idx_t var_start, idx_t var_count) {
-	// This is the refactored CSC reading that can work on any path
-	return ReadSparseXMatrixCSC(obs_start, obs_count, var_start, var_count);
-}
-
 H5Reader::SparseMatrixData H5Reader::ReadSparseXMatrixCSR(idx_t obs_start, idx_t obs_count, idx_t var_start,
                                                           idx_t var_count) {
+	// Use the generic CSR reader for X matrix
+	return ReadSparseMatrixCSR("/X", obs_start, obs_count, var_start, var_count);
+}
+
+H5Reader::SparseMatrixData H5Reader::ReadSparseMatrixCSR(const std::string &path, idx_t obs_start, idx_t obs_count,
+                                                         idx_t var_start, idx_t var_count) {
 	SparseMatrixData sparse_data;
 
 	try {
-		// Read CSR components
-		H5::DataSet data_ds = file->openDataSet("/X/data");
-		H5::DataSet indices_ds = file->openDataSet("/X/indices");
-		H5::DataSet indptr_ds = file->openDataSet("/X/indptr");
+		// Read CSR components from the specified path
+		H5::DataSet data_ds = file->openDataSet(path + "/data");
+		H5::DataSet indices_ds = file->openDataSet(path + "/indices");
+		H5::DataSet indptr_ds = file->openDataSet(path + "/indptr");
 
 		// Get total number of observations
 		H5::DataSpace indptr_space = indptr_ds.getSpace();
@@ -1122,13 +1137,19 @@ H5Reader::SparseMatrixData H5Reader::ReadSparseXMatrixCSR(idx_t obs_start, idx_t
 
 H5Reader::SparseMatrixData H5Reader::ReadSparseXMatrixCSC(idx_t obs_start, idx_t obs_count, idx_t var_start,
                                                           idx_t var_count) {
+	// Use the generic CSC reader for X matrix
+	return ReadSparseMatrixCSC("/X", obs_start, obs_count, var_start, var_count);
+}
+
+H5Reader::SparseMatrixData H5Reader::ReadSparseMatrixCSC(const std::string &path, idx_t obs_start, idx_t obs_count,
+                                                         idx_t var_start, idx_t var_count) {
 	SparseMatrixData sparse_data;
 
 	try {
-		// Read CSC components
-		H5::DataSet data_ds = file->openDataSet("/X/data");
-		H5::DataSet indices_ds = file->openDataSet("/X/indices");
-		H5::DataSet indptr_ds = file->openDataSet("/X/indptr");
+		// Read CSC components from the specified path
+		H5::DataSet data_ds = file->openDataSet(path + "/data");
+		H5::DataSet indices_ds = file->openDataSet(path + "/indices");
+		H5::DataSet indptr_ds = file->openDataSet(path + "/indptr");
 
 		// Get total number of variables (columns in CSC)
 		H5::DataSpace indptr_space = indptr_ds.getSpace();

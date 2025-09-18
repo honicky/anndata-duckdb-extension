@@ -123,6 +123,9 @@ private:
 	                                     idx_t var_count);
 	SparseMatrixData ReadSparseMatrixCSC(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start,
 	                                     idx_t var_count);
+	// Helper function to read dense matrix at any path
+	void ReadDenseMatrix(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count,
+	                     std::vector<double> &values);
 	std::unique_ptr<H5::H5File> file;
 	std::string file_path;
 

@@ -87,7 +87,7 @@ anndata_duckdb/
    - The CI/CD uses DuckDB's formatting standards (tabs for indentation, specific spacing rules)
 
 2. **Tidy Check**: 
-   - Run `make tidy-check` to check for clang-tidy issues
+   - Run `uv run make tidy-check` to check for clang-tidy issues
    - Fix any reported issues before committing
    - Common issues include: missing explicit casts, using push_back instead of emplace_back, missing braces
 

@@ -157,6 +157,59 @@ SELECT COUNT(*) FROM anndata_scan_var('path/to/file.h5ad');  -- Returns 33145
 2. Type-based table generation
 3. JSON fallback for complex structures
 
+### Phase 11: ATTACH/DETACH Interface 📋
+**Goal**: Provide standard DuckDB attachment semantics
+**Prerequisites**: All table functions must be complete (Phases 4-10)
+
+**Implementation Approach**:
+After all table functions are working, wrap them in ATTACH/DETACH interface:
+
+```sql
+-- Future syntax (after table functions work)
+ATTACH 'file.h5ad' AS mydata (TYPE ANNDATA);
+SELECT * FROM mydata.obs;
+SELECT * FROM mydata.var;
+SELECT * FROM mydata.main;  -- X matrix
+DETACH mydata;
+```
+
+**Required Components**:
+
+1. **StorageExtension Class**
+   ```cpp
+   class AnndataStorageExtension : public StorageExtension {
+       // Register TYPE ANNDATA
+       // Handle attach/detach requests
+   };
+   ```
+
+2. **Custom Catalog**
+   ```cpp
+   class AnndataCatalog : public Catalog {
+       // Create virtual tables that wrap our table functions:
+       // - obs → wraps anndata_scan_obs()
+       // - var → wraps anndata_scan_var()  
+       // - main → wraps anndata_scan_x()
+       // - obsm_* → wraps anndata_scan_obsm_*()
+       // - etc.
+   };
+   ```
+
+3. **Attach Function**
+   - Parse AttachInfo for options (VAR_NAME_COLUMN, etc.)
+   - Validate H5AD file
+   - Create catalog with all virtual tables
+   - Each virtual table delegates to existing table functions
+
+4. **Benefits**:
+   - Namespace isolation under schema
+   - Multiple simultaneous attachments
+   - Cleaner SQL without file paths
+   - Configuration per attachment
+   - Standard DuckDB pattern
+
+**Note**: This is a wrapper layer - all functionality comes from the underlying table functions, which must be completed first.
+
 ## Technical Architecture
 
 ### Core Components
