@@ -29,3 +29,101 @@ jobs:
       ci_tools_version: main
       extension_name: anndata
       format_checks: 'format;tidy'
+  
+  # Create release if version changed
+  auto-release:
+    name: Create Release
+    needs: duckdb-stable-build
+    runs-on: ubuntu-latest
+    # Only run on main branch after successful build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Check if release needed
+        id: check
+        run: |
+          CURRENT_VERSION=$(cat VERSION)
+          echo "Current version: $CURRENT_VERSION"
+          
+          # Check if tag exists
+          if git rev-parse "v${CURRENT_VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${CURRENT_VERSION} already exists, skipping release"
+            echo "needs_release=false" >> $GITHUB_OUTPUT
+          else
+            echo "Tag v${CURRENT_VERSION} does not exist, will create release"
+            echo "needs_release=true" >> $GITHUB_OUTPUT
+            echo "version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Create tag
+        if: steps.check.outputs.needs_release == 'true'
+        run: |
+          VERSION="${{ steps.check.outputs.version }}"
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git tag -a "v${VERSION}" -m "Release version ${VERSION}"
+          git push origin "v${VERSION}"
+      
+      - name: Download build artifacts
+        if: steps.check.outputs.needs_release == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+      
+      - name: Prepare release assets
+        if: steps.check.outputs.needs_release == 'true'
+        run: |
+          mkdir -p release-assets
+          
+          # Find and copy extension files
+          find ./artifacts -name "*.duckdb_extension*" -type f 2>/dev/null | while read file; do
+            filename=$(basename "$file")
+            echo "Found: $filename"
+            cp "$file" "release-assets/${filename}"
+          done || echo "No extension files found in artifacts"
+          
+          # List what we have
+          echo "Release assets:"
+          ls -la release-assets/ || echo "No assets found"
+      
+      - name: Generate release notes
+        if: steps.check.outputs.needs_release == 'true'
+        run: |
+          VERSION="${{ steps.check.outputs.version }}"
+          
+          # Extract from CHANGELOG
+          if [ -f CHANGELOG.md ]; then
+            awk "/## \[${VERSION}\]/{flag=1; next} /## \[/{flag=0} flag" CHANGELOG.md > notes.md || echo "Release ${VERSION}" > notes.md
+          else
+            echo "Release ${VERSION}" > notes.md
+          fi
+          
+          cat >> notes.md << 'EOF'
+          
+          ## Installation
+          
+          ```sql
+          duckdb -unsigned
+          LOAD 'path/to/anndata.duckdb_extension';
+          SELECT anndata_version();
+          ```
+          
+          See the [README](https://github.com/${{ github.repository }}) for usage.
+          EOF
+      
+      - name: Create GitHub Release
+        if: steps.check.outputs.needs_release == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.check.outputs.version }}
+          name: Release v${{ steps.check.outputs.version }}
+          body_path: notes.md
+          draft: false
+          prerelease: false
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
