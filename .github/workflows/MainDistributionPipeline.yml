@@ -42,6 +42,8 @@ jobs:
       format_checks: 'format;tidy'
 
   # Deploy the extension binaries to S3 or GitHub releases
+  # Note: Without AWS credentials, this will skip S3 deployment
+  # Artifacts are still available as GitHub Actions artifacts
   duckdb-stable-deploy:
     name: Deploy extension binaries
     needs: duckdb-stable-build
@@ -53,3 +55,44 @@ jobs:
       extension_name: anndata
       deploy_latest: ${{ startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/tags/v') }}
+  
+  # Create GitHub Release with the built artifacts
+  create-github-release:
+    name: Create GitHub Release
+    needs: duckdb-stable-build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+      
+      - name: Generate release notes
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          awk "/## \[${VERSION}\]/{flag=1; next} /## \[/{flag=0} flag" CHANGELOG.md > notes.md || echo "Release ${VERSION}" > notes.md
+          
+          cat >> notes.md << 'EOF'
+          
+          ## Installation
+          
+          Extensions are available as GitHub Actions artifacts. 
+          Download from the Actions tab for this release build.
+          
+          ```sql
+          duckdb -unsigned
+          LOAD 'path/to/anndata.duckdb_extension';
+          ```
+          EOF
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          body_path: notes.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
