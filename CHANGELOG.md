@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0] - 2025-09-20
+## [0.3.0] - 2025-09-20
 
 ### Added
 - Support for reading layer matrices (alternative expression matrices like raw counts, normalized data)
@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Integer sparse matrix data not being read correctly
 - Code duplication between X and layer matrix reading (~400 lines reduced)
+
+## [0.2.0] - 2025-09-20 [SKIPPED]
+- Version tag already existed, skipped to 0.3.0
 
 ## [0.1.0] - 2024-01-18
 
