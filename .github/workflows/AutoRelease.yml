@@ -22,7 +22,7 @@ jobs:
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Need full history to check tags
       
@@ -148,7 +148,7 @@ jobs:
       
       - name: Download artifacts
         if: steps.check.outputs.needs_release == 'true'
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ steps.artifacts.outputs.run_id }}
