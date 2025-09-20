@@ -1,6 +1,7 @@
 #define DUCKDB_EXTENSION_MAIN
 
 #include "include/anndata_extension.hpp"
+#include "anndata_version.hpp"
 #include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -13,12 +14,12 @@ namespace duckdb {
 
 // Scalar function that returns the version
 static void AnndataVersionFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	result.SetValue(0, Value("0.2.0"));
+	result.SetValue(0, Value(ANNDATA_EXTENSION_VERSION));
 }
 
 // Scalar function that returns a hello world message
 static void AnndataHelloFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	result.SetValue(0, Value("Hello from AnnData DuckDB Extension v0.2.0!"));
+	result.SetValue(0, Value("Hello from AnnData DuckDB Extension v" ANNDATA_EXTENSION_VERSION "!"));
 }
 
 // Forward declaration
@@ -62,6 +63,6 @@ DUCKDB_EXTENSION_API void anndata_init(duckdb::DatabaseInstance &db) {
 }
 
 DUCKDB_EXTENSION_API const char *anndata_version() {
-	return "0.2.0";
+	return ANNDATA_EXTENSION_VERSION;
 }
 }

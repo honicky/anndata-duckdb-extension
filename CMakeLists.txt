@@ -3,11 +3,25 @@ cmake_minimum_required(VERSION 3.5)
 # Set extension name here
 set(TARGET_NAME anndata)
 
+# Read version from VERSION file
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" ANNDATA_VERSION)
+string(STRIP "${ANNDATA_VERSION}" ANNDATA_VERSION)
+message(STATUS "Building AnnData extension version: ${ANNDATA_VERSION}")
+
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
 set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 
-project(${TARGET_NAME})
+project(${TARGET_NAME} VERSION ${ANNDATA_VERSION})
+
+# Generate version header
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/include/anndata_version.hpp.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/src/include/anndata_version.hpp"
+    @ONLY
+)
+
 include_directories(src/include)
+include_directories(${CMAKE_CURRENT_BINARY_DIR}/src/include)
 
 # Find HDF5 - use h5wasm for WASM builds, native HDF5 for others
 if(EMSCRIPTEN)

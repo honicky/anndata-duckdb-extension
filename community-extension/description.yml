@@ -1,0 +1,71 @@
+extension:
+  name: anndata
+  description: Read AnnData/H5AD files for single-cell genomics data analysis
+  version: 0.1.0
+  language: C++
+  build: cmake
+  license: MIT
+  maintainers:
+    - # Add your GitHub username here
+
+repo:
+  github: # Add your GitHub repo path (e.g., username/anndata-duckdb-extension)
+  ref: # Add specific commit hash or tag for stable release
+
+docs:
+  hello_world: |
+    -- Load and query an H5AD file
+    SELECT * FROM anndata_scan_obs('pbmc3k.h5ad') LIMIT 5;
+    
+    -- Get gene expression for specific cells
+    SELECT * FROM anndata_scan_X('pbmc3k.h5ad') 
+    WHERE var_name = 'CD3D' LIMIT 10;
+    
+    -- Access dimensional reductions
+    SELECT * FROM anndata_scan_obsm_umap('pbmc3k.h5ad');
+    
+  extended_description: |
+    The AnnData extension provides comprehensive SQL access to H5AD files, the standard 
+    format for single-cell genomics data used by scanpy, Seurat, and other analysis tools.
+    
+    ## Features
+    
+    - **Read observations (cells)**: Access cell metadata with `anndata_scan_obs()`
+    - **Read variables (genes)**: Access gene information with `anndata_scan_var()`
+    - **Read expression matrices**: Query dense and sparse matrices with `anndata_scan_X()`
+    - **Read embeddings**: Access PCA, UMAP, etc. with `anndata_scan_obsm_*()` functions
+    - **Read layers**: Access alternative expression matrices with `anndata_scan_layers_*()`
+    - **Efficient sparse matrix support**: Automatically handles CSR/CSC formats
+    - **Type-aware conversions**: Proper handling of categorical and numeric data
+    
+    ## Example Usage
+    
+    ```sql
+    -- Get cell types and their counts
+    SELECT cell_type, COUNT(*) as n_cells
+    FROM anndata_scan_obs('data.h5ad')
+    GROUP BY cell_type
+    ORDER BY n_cells DESC;
+    
+    -- Find highly expressed genes
+    SELECT var_name, AVG(value) as mean_expression
+    FROM anndata_scan_X('data.h5ad')
+    GROUP BY var_name
+    HAVING mean_expression > 1.0
+    ORDER BY mean_expression DESC
+    LIMIT 20;
+    ```
+    
+    ## Performance
+    
+    The extension uses:
+    - Batch reading for efficient data access
+    - Native HDF5 libraries for optimal performance  
+    - Lazy loading to minimize memory usage
+    - Optimized sparse matrix handling
+    
+    ## Requirements
+    
+    - DuckDB v1.3.2 or later
+    - HDF5 libraries installed on system
+    - H5AD files (AnnData format)

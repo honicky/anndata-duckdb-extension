@@ -76,6 +76,9 @@ anndata_duckdb/
 - use the documents in the `spec/` folder to guide the development process
 - keep the specs in the `spec/implementation-plan.md` up to date as design decisions change
 - use `uv` for all python package management. Prefer `uv add` over `uv pip install` in order to manage the package list with pyproject.toml
+- use `uv run make` to build
+- use `uv run python3` for all python actions
+
 
 ## Code Quality Checks Before Committing
 
@@ -96,3 +99,4 @@ anndata_duckdb/
    - For WASM builds, test locally if possible: `VCPKG_TOOLCHAIN_PATH="" make wasm_mvp`
 
 Only commit and push after all checks pass locally. The CI/CD pipeline will fail if format or tidy checks don't pass.
+- use uv run for all python actions
