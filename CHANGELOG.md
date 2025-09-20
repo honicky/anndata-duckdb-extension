@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2025-09-20
+
+### Added
+- Automatic release workflow triggered by VERSION file changes
+- Auto-tagging when version is bumped
+
+### Changed
+- Release process now fully automated - just bump version and push
+
+### Fixed
+- No manual tag creation needed anymore
+
 ## [0.3.3] - 2025-09-20
 
 ### Changed
