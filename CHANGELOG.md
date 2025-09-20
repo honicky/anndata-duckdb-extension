@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2025-09-20
+
+### Fixed
+- Deploy job only runs on version tags to avoid duplicate deployments
+- Prevent deploy conflicts when pushing to main before tagging
+
 ## [0.3.1] - 2025-09-20
 
 ### Added

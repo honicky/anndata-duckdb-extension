@@ -43,17 +43,18 @@ jobs:
 
   # Deploy the extension binaries to S3 or GitHub releases
   # Note: Without AWS credentials, this will skip S3 deployment
-  # Artifacts are still available as GitHub Actions artifacts
+  # Only runs on version tags to avoid duplicate deployments
   duckdb-stable-deploy:
     name: Deploy extension binaries
     needs: duckdb-stable-build
+    if: startsWith(github.ref, 'refs/tags/v')
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_deploy.yml@v1.3.2
     secrets: inherit
     with:
       duckdb_version: v1.3.2
       ci_tools_version: v1.3.2
       extension_name: anndata
-      deploy_latest: ${{ startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' }}
+      deploy_latest: ${{ startsWith(github.ref, 'refs/tags/v') }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/tags/v') }}
   
   # Create GitHub Release with the built artifacts
