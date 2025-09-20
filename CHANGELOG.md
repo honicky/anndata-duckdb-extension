@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2025-09-20
+
+### Added
+- GitHub Release creation in CI/CD pipeline
+
+### Changed
+- Deploy workflow now creates GitHub releases for version tags
+- Release notes automatically extracted from CHANGELOG.md
+
+### Fixed
+- Extension deployment works without AWS S3 credentials
+
 ## [0.3.0] - 2025-09-20
 
 ### Added
