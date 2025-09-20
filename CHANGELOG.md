@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2025-09-20
+
+### Changed
+- Optimized release workflow to reuse build artifacts from main branch
+- Separated build and release workflows for efficiency
+
+### Fixed
+- Eliminated redundant builds when creating releases
+
 ## [0.3.2] - 2025-09-20
 
 ### Fixed
