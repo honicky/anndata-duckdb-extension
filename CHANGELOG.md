@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.8] - 2025-09-21
+
+### Added
+- AWS S3 deployment support for direct installation via `INSTALL anndata FROM 's3://bucket'`
+- Automatic deployment on version bumps when AWS credentials are configured
+
+### Changed
+- Simplified CI/CD workflow - deployment now integrated into main build pipeline
+- Removed separate Deploy.yml workflow in favor of automated deployment
+
+### Fixed
+- Deployment artifact mismatch by using same workflow run for build and deploy
+
 ## [0.3.7] - 2025-09-20
 
 ### Changed
