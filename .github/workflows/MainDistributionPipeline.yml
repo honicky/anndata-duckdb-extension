@@ -30,15 +30,15 @@ jobs:
       extension_name: anndata
       format_checks: 'format;tidy'
   
-  # Create release if version changed
-  auto-release:
-    name: Create Release
+  # Auto-tag when version changes
+  auto-tag:
+    name: Create Version Tag
     needs: duckdb-stable-build
     runs-on: ubuntu-latest
     # Only run on main branch after successful build
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
-      contents: write  # Need write permission to create tags and releases
+      contents: write  # Need write permission to create tags
     
     steps:
       - uses: actions/checkout@v4
@@ -46,125 +46,19 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Check if release needed
-        id: check
+      - name: Create tag if version changed
         run: |
           CURRENT_VERSION=$(cat VERSION)
           echo "Current version: $CURRENT_VERSION"
           
           # Check if tag exists
           if git rev-parse "v${CURRENT_VERSION}" >/dev/null 2>&1; then
-            echo "Tag v${CURRENT_VERSION} already exists, skipping release"
-            echo "needs_release=false" >> $GITHUB_OUTPUT
+            echo "Tag v${CURRENT_VERSION} already exists, skipping"
           else
-            echo "Tag v${CURRENT_VERSION} does not exist, will create release"
-            echo "needs_release=true" >> $GITHUB_OUTPUT
-            echo "version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+            echo "Creating tag v${CURRENT_VERSION}"
+            git config user.name "GitHub Actions"
+            git config user.email "actions@github.com"
+            git tag -a "v${CURRENT_VERSION}" -m "Release version ${CURRENT_VERSION}"
+            git push origin "v${CURRENT_VERSION}"
+            echo "Tag created. This will trigger the Deploy workflow if AWS credentials are configured."
           fi
-      
-      - name: Create tag
-        if: steps.check.outputs.needs_release == 'true'
-        run: |
-          VERSION="${{ steps.check.outputs.version }}"
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-          git tag -a "v${VERSION}" -m "Release version ${VERSION}"
-          git push origin "v${VERSION}"
-      
-      - name: Download build artifacts
-        if: steps.check.outputs.needs_release == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          path: ./artifacts
-      
-      - name: Prepare release assets
-        if: steps.check.outputs.needs_release == 'true'
-        run: |
-          VERSION="${{ steps.check.outputs.version }}"
-          # DuckDB version is hardcoded in the workflow
-          DUCKDB_VERSION="v1.3.2"
-          mkdir -p release-assets
-          
-          # Create repository-style directory structure for each platform
-          # This matches DuckDB's expected structure: <base_url>/<duckdb_version>/<platform>/<extension>.duckdb_extension.gz
-          for dir in ./artifacts/anndata-*-extension-*/; do
-            if [ -d "$dir" ]; then
-              # Extract platform from directory name (e.g., osx_arm64 from anndata-v1.3.2-extension-osx_arm64)
-              platform=$(basename "$dir" | sed 's/anndata-.*-extension-//')
-              
-              # Create platform-specific directory matching DuckDB repository structure
-              platform_dir="release-assets/${DUCKDB_VERSION}/${platform}"
-              mkdir -p "${platform_dir}"
-              
-              # Find the extension file in this artifact
-              for file in "$dir"*.duckdb_extension; do
-                if [ -f "$file" ]; then
-                  # Create compressed version with standard name in platform directory
-                  # This enables: INSTALL anndata FROM 'https://github.com/.../releases/download/vX.Y.Z'
-                  gzip -c "$file" > "${platform_dir}/anndata.duckdb_extension.gz"
-                  echo "Created: ${DUCKDB_VERSION}/${platform}/anndata.duckdb_extension.gz"
-                fi
-              done
-            fi
-          done
-          
-          # List what we have
-          echo ""
-          echo "Release assets created:"
-          find release-assets -type f -name "*.gz" | sort
-      
-      - name: Generate release notes
-        if: steps.check.outputs.needs_release == 'true'
-        run: |
-          VERSION="${{ steps.check.outputs.version }}"
-          
-          # Extract from CHANGELOG
-          if [ -f CHANGELOG.md ]; then
-            awk "/## \[${VERSION}\]/{flag=1; next} /## \[/{flag=0} flag" CHANGELOG.md > notes.md || echo "Release ${VERSION}" > notes.md
-          else
-            echo "Release ${VERSION}" > notes.md
-          fi
-          
-          cat >> notes.md << EOF
-          
-          ## Installation
-          
-          Install directly from this GitHub release:
-          
-          \`\`\`sql
-          -- For DuckDB v1.3.2 (all platforms)
-          INSTALL anndata FROM 'https://github.com/${{ github.repository }}/releases/download/v${VERSION}';
-          LOAD anndata;
-          SELECT anndata_version();
-          \`\`\`
-          
-          **Note:** You need to allow unsigned extensions by running DuckDB with \`duckdb -unsigned\` or setting \`allow_unsigned_extensions\`.
-          
-          ## Supported Platforms
-          - Linux x64 (\`linux_amd64\`)
-          - Linux x64 musl (\`linux_amd64_musl\`)
-          - Linux ARM64 (\`linux_arm64\`)
-          - macOS Intel (\`osx_amd64\`)
-          - macOS Apple Silicon (\`osx_arm64\`)
-          - Windows x64 (\`windows_amd64\`)
-          - Windows x64 MinGW (\`windows_amd64_mingw\`)
-          - WebAssembly MVP (\`wasm_mvp\`)
-          - WebAssembly with threads (\`wasm_threads\`)
-          - WebAssembly with exception handling (\`wasm_eh\`)
-          
-          See the [README](https://github.com/${{ github.repository }}) for usage documentation.
-          EOF
-      
-      - name: Create GitHub Release
-        if: steps.check.outputs.needs_release == 'true'
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: v${{ steps.check.outputs.version }}
-          name: Release v${{ steps.check.outputs.version }}
-          body_path: notes.md
-          draft: false
-          prerelease: false
-          files: |
-            release-assets/v1.3.2/*/*.duckdb_extension.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
