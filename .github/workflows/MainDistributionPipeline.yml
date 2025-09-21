@@ -37,11 +37,14 @@ jobs:
     runs-on: ubuntu-latest
     # Only run on main branch after successful build
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: write  # Need write permission to create tags and releases
     
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Check if release needed
         id: check
