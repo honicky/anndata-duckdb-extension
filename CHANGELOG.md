@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7] - 2025-09-20
+
+### Changed
+- Improved release workflow with repository-style distribution structure
+- Simplified installation process for testers with direct URL installation
+- Removed redundant standalone files from releases
+
+### Fixed
+- All 10 platform artifacts now included in releases (including musl, mingw, and wasm variants)
+- Release assets properly structured for DuckDB's INSTALL FROM URL feature
+
 ## [0.3.6] - 2025-09-20
 
 ### Fixed
