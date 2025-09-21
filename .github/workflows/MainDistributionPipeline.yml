@@ -30,7 +30,7 @@ jobs:
       extension_name: anndata
       format_checks: 'format;tidy'
   
-  # Auto-tag when version changes
+  # Auto-tag when version changes and deploy if tagged
   auto-tag:
     name: Create Version Tag
     needs: duckdb-stable-build
@@ -39,6 +39,9 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
       contents: write  # Need write permission to create tags
+    outputs:
+      version_changed: ${{ steps.tag.outputs.version_changed }}
+      version: ${{ steps.tag.outputs.version }}
     
     steps:
       - uses: actions/checkout@v4
@@ -47,6 +50,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Create tag if version changed
+        id: tag
         run: |
           CURRENT_VERSION=$(cat VERSION)
           echo "Current version: $CURRENT_VERSION"
@@ -54,11 +58,28 @@ jobs:
           # Check if tag exists
           if git rev-parse "v${CURRENT_VERSION}" >/dev/null 2>&1; then
             echo "Tag v${CURRENT_VERSION} already exists, skipping"
+            echo "version_changed=false" >> $GITHUB_OUTPUT
           else
             echo "Creating tag v${CURRENT_VERSION}"
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
             git tag -a "v${CURRENT_VERSION}" -m "Release version ${CURRENT_VERSION}"
             git push origin "v${CURRENT_VERSION}"
-            echo "Tag created. This will trigger the Deploy workflow if AWS credentials are configured."
+            echo "version_changed=true" >> $GITHUB_OUTPUT
+            echo "version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+            echo "Tag created. Will deploy to S3 if AWS credentials are configured."
           fi
+  
+  # Deploy to S3 when version changes
+  deploy:
+    name: Deploy to S3
+    needs: [duckdb-stable-build, auto-tag]
+    if: needs.auto-tag.outputs.version_changed == 'true'
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_deploy.yml@v1.3.2
+    secrets: inherit
+    with:
+      extension_name: anndata
+      duckdb_version: v1.3.2
+      ci_tools_version: v1.3.2
+      deploy_latest: true
+      deploy_versioned: true

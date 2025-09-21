@@ -59,9 +59,11 @@ Optional for signed extensions:
 
 ## Step 4: Deploy
 
-The extension will automatically deploy to S3 when:
-- You create a new version tag (e.g., `v0.3.8`)
-- You manually trigger the Deploy workflow
+The extension automatically deploys to S3 when:
+- You bump the version (in VERSION file) and push to main
+- The build workflow will create a tag and deploy if AWS credentials are configured
+
+No manual deployment is needed - deployments only happen on version bumps to ensure consistency.
 
 ## Step 5: Usage
 
