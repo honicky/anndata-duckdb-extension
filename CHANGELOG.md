@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.9] - 2025-09-21
+
+### Fixed
+- Corrected AWS secret names in documentation to match CI tool requirements (S3_DUCKDB_ORG_ prefix)
+
 ## [0.3.8] - 2025-09-21
 
 ### Added

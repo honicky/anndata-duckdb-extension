@@ -49,13 +49,13 @@ Create an IAM user with permissions to upload to the bucket:
 
 Add the following secrets to your GitHub repository (Settings → Secrets and variables → Actions):
 
-- `S3_DEPLOY_ID`: Your AWS Access Key ID
-- `S3_DEPLOY_KEY`: Your AWS Secret Access Key
-- `S3_REGION`: AWS region (e.g., `us-east-1`)
-- `S3_BUCKET`: Your bucket name (e.g., `your-extension-bucket`)
+- `S3_DUCKDB_ORG_DEPLOY_ID`: Your AWS Access Key ID
+- `S3_DUCKDB_ORG_DEPLOY_KEY`: Your AWS Secret Access Key
+- `S3_DUCKDB_ORG_REGION`: AWS region (e.g., `us-east-1`)
+- `S3_DUCKDB_ORG_BUCKET`: Your bucket name (e.g., `your-extension-bucket`)
 
 Optional for signed extensions:
-- `EXTENSION_SIGNING_PK`: Private key for signing extensions (leave empty for unsigned)
+- `S3_DUCKDB_ORG_EXTENSION_SIGNING_PK`: Private key for signing extensions (leave empty for unsigned)
 
 ## Step 4: Deploy
 
