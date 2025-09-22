@@ -14,11 +14,16 @@ This guide explains how to set up AWS S3 deployment for the AnnData DuckDB exten
 aws s3 mb s3://your-extension-bucket --region us-east-1
 ```
 
-Enable public read access for the bucket (extensions need to be publicly downloadable):
+Configure the bucket for public read access (extensions need to be publicly downloadable):
 
-```bash
-aws s3api put-bucket-acl --bucket your-extension-bucket --acl public-read
-```
+1. **Disable "Block all public access"** in S3 bucket settings
+2. **Apply the bucket policy** from `docs/s3-bucket-policy.json`:
+   ```bash
+   aws s3api put-bucket-policy --bucket your-extension-bucket --policy file://docs/s3-bucket-policy.json
+   ```
+   (Remember to replace `YOUR-BUCKET-NAME` with your actual bucket name in the policy)
+
+Note: Modern S3 buckets don't support ACLs by default. The bucket policy provides the necessary public access.
 
 ## Step 2: Create IAM User and Policy
 

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.11] - 2025-09-22
+
+### Fixed
+- Remove ACL flags from S3 deployment to support modern S3 buckets
+- Add custom deploy script that works without ACL requirements
+- Update S3 setup documentation with bucket policy approach
+
 ## [0.3.10] - 2025-09-22
 
 ### Fixed

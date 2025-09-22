@@ -114,4 +114,4 @@ jobs:
           git fetch --tags
           export EXT_VERSION=`git tag --points-at HEAD`
           export EXT_VERSION=${EXT_VERSION:=`git log -1 --format=%h`}
-          ./duckdb/scripts/extension-upload-single.sh anndata $EXT_VERSION $DUCKDB_VERSION ${{ matrix.duckdb_arch }} $BUCKET_NAME true true
+          ./scripts/deploy-extension.sh anndata $EXT_VERSION $DUCKDB_VERSION ${{ matrix.duckdb_arch }} $BUCKET_NAME true true
