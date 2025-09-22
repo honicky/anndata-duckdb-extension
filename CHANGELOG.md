@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.10] - 2025-09-22
+
+### Fixed
+- Implement custom deploy job to handle S3 deployment from repositories outside duckdb org
+- Deployment now properly accesses repository secrets
+
 ## [0.3.9] - 2025-09-21
 
 ### Fixed
