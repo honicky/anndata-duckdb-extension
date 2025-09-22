@@ -72,14 +72,46 @@ jobs:
   
   # Deploy to S3 when version changes
   deploy:
-    name: Deploy to S3
+    name: Deploy to S3  
     needs: [duckdb-stable-build, auto-tag]
     if: needs.auto-tag.outputs.version_changed == 'true'
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_deploy.yml@v1.3.2
-    secrets: inherit
-    with:
-      extension_name: anndata
-      duckdb_version: v1.3.2
-      ci_tools_version: v1.3.2
-      deploy_latest: true
-      deploy_versioned: true
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        duckdb_arch: [linux_amd64, linux_amd64_musl, linux_arm64, osx_amd64, osx_arm64, windows_amd64, windows_amd64_mingw, wasm_mvp, wasm_threads, wasm_eh]
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'recursive'
+          
+      - name: Checkout DuckDB to version
+        run: |
+          cd duckdb
+          git checkout v1.3.2
+          
+      - uses: actions/download-artifact@v4
+        with:
+          name: anndata-v1.3.2-extension-${{matrix.duckdb_arch}}
+          path: /tmp/extension
+          
+      - name: Deploy
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_DUCKDB_ORG_DEPLOY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_DUCKDB_ORG_DEPLOY_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.S3_DUCKDB_ORG_REGION }}
+          BUCKET_NAME: ${{ secrets.S3_DUCKDB_ORG_BUCKET }}
+          DUCKDB_DEPLOY_SCRIPT_MODE: for_real
+        run: |
+          python3 -m pip install awscli
+          git config --global --add safe.directory '*'
+          cd duckdb
+          git fetch --tags
+          export DUCKDB_VERSION=`git tag --points-at HEAD`
+          export DUCKDB_VERSION=${DUCKDB_VERSION:=`git log -1 --format=%h`}
+          cd ..
+          git fetch --tags
+          export EXT_VERSION=`git tag --points-at HEAD`
+          export EXT_VERSION=${EXT_VERSION:=`git log -1 --format=%h`}
+          ./duckdb/scripts/extension-upload-single.sh anndata $EXT_VERSION $DUCKDB_VERSION ${{ matrix.duckdb_arch }} $BUCKET_NAME true true
