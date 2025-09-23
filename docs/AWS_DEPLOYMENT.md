@@ -50,17 +50,19 @@ Create an IAM user with permissions to upload to the bucket:
 }
 ```
 
-## Step 3: Configure GitHub Secrets
+## Step 3: Configure GitHub Secrets and Variables
 
-Add the following secrets to your GitHub repository (Settings → Secrets and variables → Actions):
-
+### Secrets (Settings → Secrets and variables → Actions → Secrets)
+Add these as repository secrets (keep private):
 - `S3_DUCKDB_ORG_DEPLOY_ID`: Your AWS Access Key ID
 - `S3_DUCKDB_ORG_DEPLOY_KEY`: Your AWS Secret Access Key
-- `S3_DUCKDB_ORG_REGION`: AWS region (e.g., `us-east-1`)
-- `S3_DUCKDB_ORG_BUCKET`: Your bucket name (e.g., `your-extension-bucket`)
 
-Optional for signed extensions:
-- `S3_DUCKDB_ORG_EXTENSION_SIGNING_PK`: Private key for signing extensions (leave empty for unsigned)
+### Variables (Settings → Secrets and variables → Actions → Variables)
+Add these as repository variables (can be public):
+- `S3_DEPLOY_REGION`: AWS region (e.g., `us-east-1`)
+- `S3_DEPLOY_BUCKET`: Your bucket name (e.g., `your-extension-bucket`)
+
+Using variables for bucket and region makes deployment logs more transparent by showing the target location.
 
 ## Step 4: Deploy
 
