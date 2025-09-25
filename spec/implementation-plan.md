@@ -14,6 +14,7 @@ This document outlines the implementation plan for the AnnData DuckDB extension 
 - **Phase 4**: Read obs Table - Implementing actual HDF5 data reading
 
 ### 📋 Pending
+- **Fix**: anndata_info is documented as a table funciton but implemented as "select anndata_info('filename.h5ad')
 - **Phase 3**: ATTACH/DETACH - Deferred in favor of table functions
 - **Phase 5-10**: var tables, X matrix, sparse support, obsm/varm, layers, uns
 

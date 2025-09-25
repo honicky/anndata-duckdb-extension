@@ -1,0 +1,52 @@
+# name: test/sql/uns.test
+# description: Test anndata_scan_uns table function
+# group: [sql]
+
+# Ensure the extension is loaded
+require anndata
+
+# Test with file that has uns data
+query IIIII
+SELECT * FROM anndata_scan_uns('test/data/test_uns.h5ad') ORDER BY key;
+----
+batch_colors	array	string	(2)	NULL
+batch_effects	array	float64	(10)	NULL
+cell_type_colors	array	string	(3)	NULL
+dataset_name	scalar	string	()	Test Dataset
+is_normalized	scalar	string	()	true
+leiden	group	string	NULL	NULL
+n_cells	scalar	int64	()	100
+normalization_method	scalar	string	()	log1p
+pca	group	string	NULL	NULL
+processing_date	scalar	string	()	2024-01-01
+quality_metrics	array	float64	(5)	NULL
+rank_genes_groups	dataframe	string	NULL	NULL
+umap	group	string	NULL	NULL
+version	scalar	string	()	1.0.0
+
+# Test that scalar values are correctly displayed
+query I
+SELECT value FROM anndata_scan_uns('test/data/test_uns.h5ad') WHERE key = 'dataset_name';
+----
+Test Dataset
+
+# Test that array shapes are correctly displayed
+query I
+SELECT shape FROM anndata_scan_uns('test/data/test_uns.h5ad') WHERE key = 'batch_effects';
+----
+(10)
+
+# Test type breakdown
+query II
+SELECT type, COUNT(*) as count FROM anndata_scan_uns('test/data/test_uns.h5ad') GROUP BY type ORDER BY type;
+----
+array	4
+dataframe	1
+group	3
+scalar	6
+
+# Test with non-existent file (should error)
+statement error
+SELECT * FROM anndata_scan_uns('nonexistent.h5ad');
+----
+not a valid AnnData file

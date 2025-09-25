@@ -44,6 +44,11 @@ public:
 	                                          vector<LogicalType> &return_types, vector<string> &names);
 	static void LayerScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
+	// Table function for scanning uns (unstructured) data
+	static unique_ptr<FunctionData> UnsBind(ClientContext &context, TableFunctionBindInput &input,
+	                                        vector<LogicalType> &return_types, vector<string> &names);
+	static void UnsScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
+
 	// Utility functions
 	static bool IsAnndataFile(const string &path);
 	static string GetAnndataInfo(const string &path);
@@ -54,7 +59,8 @@ struct AnndataBindData : public TableFunctionData {
 	string file_path;
 	idx_t row_count;
 	idx_t column_count;
-	vector<string> column_names;
+	vector<string> column_names;       // Display names (may be mangled)
+	vector<string> original_names;     // Original HDF5 dataset names
 	vector<LogicalType> column_types;
 
 	// For X matrix scanning
@@ -74,6 +80,10 @@ struct AnndataBindData : public TableFunctionData {
 	// For layer scanning
 	bool is_layer_scan = false;
 	string layer_name;
+
+	// For uns scanning
+	bool is_uns_scan = false;
+	vector<H5Reader::UnsInfo> uns_keys;
 
 	AnndataBindData(const string &path) : file_path(path), row_count(0), column_count(0) {
 	}

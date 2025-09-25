@@ -2,6 +2,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include <cstring> // For strnlen
+#include <unordered_set>
 
 namespace duckdb {
 
@@ -95,24 +96,40 @@ size_t H5Reader::GetVarCount() {
 
 std::vector<H5Reader::ColumnInfo> H5Reader::GetObsColumns() {
 	std::vector<ColumnInfo> columns;
+	std::unordered_set<std::string> seen_names;
 
 	// Add obs_idx as the first column (row index)
 	ColumnInfo idx_col;
 	idx_col.name = "obs_idx";
+	idx_col.original_name = "obs_idx";
 	idx_col.type = LogicalType::BIGINT;
 	idx_col.is_categorical = false;
 	columns.push_back(idx_col);
+	seen_names.insert("obs_idx");
 
 	try {
 		auto members = GetGroupMembers("/obs");
 
 		for (const auto &member : members) {
-			if (member == "__categories" || member == "index" || member == "_index") {
-				continue; // Skip metadata and index columns (we're using obs_idx instead)
+			if (member == "__categories") {
+				continue; // Skip metadata
 			}
+			
+			// Note: We now include _index and index columns as they contain important identifiers
+			// obs_idx provides the numeric index for joins, while _index/index contain the actual cell IDs
 
 			ColumnInfo col;
+			col.original_name = member;  // Store the original HDF5 dataset name
 			col.name = member;
+			
+			// Handle duplicate column names (case-insensitive) by mangling
+			std::string lower_name = StringUtil::Lower(col.name);
+			while (seen_names.count(lower_name) > 0) {
+				// Add underscore until unique
+				col.name += "_";
+				lower_name = StringUtil::Lower(col.name);
+			}
+			seen_names.insert(lower_name);
 
 			// Check if it's categorical (has codes and categories)
 			if (IsGroupPresent("/obs/" + member)) {
@@ -166,24 +183,28 @@ std::vector<H5Reader::ColumnInfo> H5Reader::GetObsColumns() {
 	if (columns.empty()) {
 		ColumnInfo col1;
 		col1.name = "cell_id";
+		col1.original_name = "cell_id";
 		col1.type = LogicalType::VARCHAR;
 		col1.is_categorical = false;
 		columns.push_back(col1);
 
 		ColumnInfo col2;
 		col2.name = "cell_type";
+		col2.original_name = "cell_type";
 		col2.type = LogicalType::VARCHAR;
 		col2.is_categorical = false;
 		columns.push_back(col2);
 
 		ColumnInfo col3;
 		col3.name = "n_genes";
+		col3.original_name = "n_genes";
 		col3.type = LogicalType::INTEGER;
 		col3.is_categorical = false;
 		columns.push_back(col3);
 
 		ColumnInfo col4;
 		col4.name = "n_counts";
+		col4.original_name = "n_counts";
 		col4.type = LogicalType::DOUBLE;
 		col4.is_categorical = false;
 		columns.push_back(col4);
@@ -194,24 +215,40 @@ std::vector<H5Reader::ColumnInfo> H5Reader::GetObsColumns() {
 
 std::vector<H5Reader::ColumnInfo> H5Reader::GetVarColumns() {
 	std::vector<ColumnInfo> columns;
+	std::unordered_set<std::string> seen_names;
 
 	// Add var_idx as the first column (row index)
 	ColumnInfo idx_col;
 	idx_col.name = "var_idx";
+	idx_col.original_name = "var_idx";
 	idx_col.type = LogicalType::BIGINT;
 	idx_col.is_categorical = false;
 	columns.push_back(idx_col);
+	seen_names.insert("var_idx");
 
 	try {
 		auto members = GetGroupMembers("/var");
 
 		for (const auto &member : members) {
-			if (member == "__categories" || member == "_index") {
+			if (member == "__categories") {
 				continue; // Skip metadata
 			}
+			
+			// Note: We now include _index column as it contains important gene identifiers
+			// var_idx provides the numeric index for joins, while _index contains the actual gene IDs
 
 			ColumnInfo col;
+			col.original_name = member;  // Store the original HDF5 dataset name
 			col.name = member;
+			
+			// Handle duplicate column names (case-insensitive) by mangling
+			std::string lower_name = StringUtil::Lower(col.name);
+			while (seen_names.count(lower_name) > 0) {
+				// Add underscore until unique
+				col.name += "_";
+				lower_name = StringUtil::Lower(col.name);
+			}
+			seen_names.insert(lower_name);
 
 			// Check if it's categorical
 			if (IsGroupPresent("/var/" + member)) {
@@ -243,24 +280,28 @@ std::vector<H5Reader::ColumnInfo> H5Reader::GetVarColumns() {
 	if (columns.empty()) {
 		ColumnInfo col1;
 		col1.name = "gene_id";
+		col1.original_name = "gene_id";
 		col1.type = LogicalType::VARCHAR;
 		col1.is_categorical = false;
 		columns.push_back(col1);
 
 		ColumnInfo col2;
 		col2.name = "gene_name";
+		col2.original_name = "gene_name";
 		col2.type = LogicalType::VARCHAR;
 		col2.is_categorical = false;
 		columns.push_back(col2);
 
 		ColumnInfo col3;
 		col3.name = "highly_variable";
+		col3.original_name = "highly_variable";
 		col3.type = LogicalType::BOOLEAN;
 		col3.is_categorical = false;
 		columns.push_back(col3);
 
 		ColumnInfo col4;
 		col4.name = "mean_counts";
+		col4.original_name = "mean_counts";
 		col4.type = LogicalType::DOUBLE;
 		col4.is_categorical = false;
 		columns.push_back(col4);
@@ -1988,6 +2029,226 @@ void H5Reader::ReadMatrixBatch(const std::string &path, idx_t row_start, idx_t r
 		output.SetCardinality(row_count);
 	} catch (const H5::Exception &e) {
 		throw IOException("Failed to read matrix at %s: %s", path.c_str(), e.getCDetailMsg());
+	}
+}
+
+std::vector<H5Reader::UnsInfo> H5Reader::GetUnsKeys() {
+	std::vector<UnsInfo> uns_keys;
+
+	// Check if uns group exists
+	if (!IsGroupPresent("/uns")) {
+		return uns_keys;
+	}
+
+	try {
+		H5::Group uns_group = file->openGroup("/uns");
+		hsize_t num_objs = uns_group.getNumObjs();
+
+		for (hsize_t i = 0; i < num_objs; i++) {
+			std::string key_name = uns_group.getObjnameByIdx(i);
+			H5G_stat_t stat_buf;
+			uns_group.getObjinfo(key_name, stat_buf);
+
+			UnsInfo info;
+			info.key = key_name;
+
+			if (stat_buf.type == H5G_DATASET) {
+				// It's a dataset (scalar or array)
+				H5::DataSet dataset = uns_group.openDataSet(key_name);
+				H5::DataSpace dataspace = dataset.getSpace();
+				H5::DataType datatype = dataset.getDataType();
+
+				int rank = dataspace.getSimpleExtentNdims();
+
+				if (rank == 0) {
+					// Scalar value
+					info.type = "scalar";
+					info.dtype = H5TypeToDuckDBType(datatype);
+
+					// Read scalar value if it's a string
+					if (datatype.getClass() == H5T_STRING) {
+						if (datatype.isVariableStr()) {
+							char *str_val;
+							dataset.read(&str_val, datatype);
+							info.value_str = std::string(str_val);
+							free(str_val);
+						} else {
+							size_t str_size = datatype.getSize();
+							std::vector<char> buffer(str_size + 1, 0);
+							dataset.read(buffer.data(), datatype);
+							info.value_str = std::string(buffer.data());
+						}
+					}
+				} else {
+					// Array
+					info.type = "array";
+					info.dtype = H5TypeToDuckDBType(datatype);
+
+					std::vector<hsize_t> dims(rank);
+					dataspace.getSimpleExtentDims(dims.data());
+					info.shape = dims;
+				}
+			} else if (stat_buf.type == H5G_GROUP) {
+				// It's a group (nested dict or DataFrame)
+				H5::Group subgroup = uns_group.openGroup(key_name);
+
+				// Check if it looks like a DataFrame (has _index)
+				bool has_index = false;
+				try {
+					subgroup.openDataSet("_index");
+					has_index = true;
+				} catch (...) {
+				}
+
+				if (has_index) {
+					info.type = "dataframe";
+				} else {
+					info.type = "group";
+				}
+				info.dtype = LogicalType::VARCHAR; // Groups are returned as JSON strings
+			}
+
+			uns_keys.push_back(info);
+		}
+	} catch (const H5::Exception &e) {
+		// Ignore errors and return what we have
+	}
+
+	return uns_keys;
+}
+
+Value H5Reader::ReadUnsScalar(const std::string &key) {
+	if (!IsDatasetPresent("/uns", key)) {
+		return Value(LogicalType::VARCHAR); // Return NULL
+	}
+
+	try {
+		H5::DataSet dataset = file->openDataSet("/uns/" + key);
+		H5::DataType datatype = dataset.getDataType();
+
+		if (datatype.getClass() == H5T_STRING) {
+			// String scalar
+			if (datatype.isVariableStr()) {
+				char *str_val;
+				dataset.read(&str_val, datatype);
+				std::string result(str_val);
+				free(str_val);
+				return Value(result);
+			} else {
+				size_t str_size = datatype.getSize();
+				std::vector<char> buffer(str_size + 1, 0);
+				dataset.read(buffer.data(), datatype);
+				return Value(std::string(buffer.data()));
+			}
+		} else if (datatype.getClass() == H5T_INTEGER) {
+			// Integer scalar
+			if (datatype.getSize() == 8) {
+				int64_t val;
+				dataset.read(&val, H5::PredType::NATIVE_INT64);
+				return Value::BIGINT(val);
+			} else {
+				int32_t val;
+				dataset.read(&val, H5::PredType::NATIVE_INT32);
+				return Value::INTEGER(val);
+			}
+		} else if (datatype.getClass() == H5T_FLOAT) {
+			// Float scalar
+			double val;
+			dataset.read(&val, H5::PredType::NATIVE_DOUBLE);
+			return Value::DOUBLE(val);
+		} else if (datatype.getSize() == 1) {
+			// Boolean scalar (stored as 1-byte)
+			uint8_t val;
+			dataset.read(&val, H5::PredType::NATIVE_UINT8);
+			return Value::BOOLEAN(val != 0);
+		}
+
+		return Value(LogicalType::VARCHAR); // Unknown type
+	} catch (const H5::Exception &e) {
+		return Value(LogicalType::VARCHAR); // Return NULL on error
+	}
+}
+
+void H5Reader::ReadUnsArray(const std::string &key, Vector &result, idx_t offset, idx_t count) {
+	if (!IsDatasetPresent("/uns", key)) {
+		return;
+	}
+
+	try {
+		H5::DataSet dataset = file->openDataSet("/uns/" + key);
+		H5::DataSpace dataspace = dataset.getSpace();
+		H5::DataType datatype = dataset.getDataType();
+
+		// Get array dimensions
+		int rank = dataspace.getSimpleExtentNdims();
+		std::vector<hsize_t> dims(rank);
+		dataspace.getSimpleExtentDims(dims.data());
+
+		// For now, we only support 1D arrays
+		if (rank != 1) {
+			throw InvalidInputException("Multi-dimensional arrays in uns are not yet supported");
+		}
+
+		hsize_t total_size = dims[0];
+		hsize_t actual_count = MinValue<hsize_t>(count, total_size - offset);
+
+		// Read the data based on type
+		if (datatype.getClass() == H5T_FLOAT) {
+			std::vector<double> buffer(actual_count);
+
+			// Create memory and file dataspaces for hyperslab selection
+			hsize_t mem_dims[1] = {actual_count};
+			H5::DataSpace mem_space(1, mem_dims);
+
+			hsize_t file_offset[1] = {offset};
+			hsize_t file_count[1] = {actual_count};
+			dataspace.selectHyperslab(H5S_SELECT_SET, file_count, file_offset);
+
+			dataset.read(buffer.data(), H5::PredType::NATIVE_DOUBLE, mem_space, dataspace);
+
+			for (idx_t i = 0; i < actual_count; i++) {
+				result.SetValue(i, Value::DOUBLE(buffer[i]));
+			}
+		} else if (datatype.getClass() == H5T_INTEGER) {
+			std::vector<int64_t> buffer(actual_count);
+
+			hsize_t mem_dims[1] = {actual_count};
+			H5::DataSpace mem_space(1, mem_dims);
+
+			hsize_t file_offset[1] = {offset};
+			hsize_t file_count[1] = {actual_count};
+			dataspace.selectHyperslab(H5S_SELECT_SET, file_count, file_offset);
+
+			dataset.read(buffer.data(), H5::PredType::NATIVE_INT64, mem_space, dataspace);
+
+			for (idx_t i = 0; i < actual_count; i++) {
+				result.SetValue(i, Value::BIGINT(buffer[i]));
+			}
+		} else if (datatype.getClass() == H5T_STRING) {
+			// String array
+			for (idx_t i = 0; i < actual_count; i++) {
+				hsize_t file_offset[1] = {offset + i};
+				hsize_t file_count[1] = {1};
+				dataspace.selectHyperslab(H5S_SELECT_SET, file_count, file_offset);
+
+				hsize_t mem_dims[1] = {1};
+				H5::DataSpace mem_space(1, mem_dims);
+
+				if (datatype.isVariableStr()) {
+					char *str_val;
+					dataset.read(&str_val, datatype, mem_space, dataspace);
+					result.SetValue(i, Value(std::string(str_val)));
+					free(str_val);
+				} else {
+					size_t str_size = datatype.getSize();
+					std::vector<char> buffer(str_size + 1, 0);
+					dataset.read(buffer.data(), datatype, mem_space, dataspace);
+					result.SetValue(i, Value(std::string(buffer.data())));
+				}
+			}
+		}
+	} catch (const H5::Exception &e) {
+		throw IOException("Failed to read uns array '%s': %s", key.c_str(), e.getCDetailMsg());
 	}
 }
 

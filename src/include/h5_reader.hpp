@@ -25,7 +25,8 @@ public:
 
 	// Get column names and types for obs/var
 	struct ColumnInfo {
-		std::string name;
+		std::string name;          // Display name (may be mangled for duplicates)
+		std::string original_name; // Original HDF5 dataset name
 		LogicalType type;
 		bool is_categorical = false;
 		std::vector<std::string> categories;
@@ -125,6 +126,24 @@ public:
 	// Unified matrix reading interface - reads any matrix (X or layer) into a DataChunk
 	void ReadMatrixBatch(const std::string &path, idx_t row_start, idx_t row_count, idx_t col_start, idx_t col_count,
 	                     DataChunk &output, bool is_layer = false);
+
+	// Uns (unstructured) data information structure
+	struct UnsInfo {
+		std::string key;
+		std::string type; // "scalar", "array", "group", "dataframe"
+		LogicalType dtype;
+		std::vector<hsize_t> shape;
+		std::string value_str; // For scalar string values
+	};
+
+	// Get list of uns keys
+	std::vector<UnsInfo> GetUnsKeys();
+
+	// Read uns scalar value
+	Value ReadUnsScalar(const std::string &key);
+
+	// Read uns array
+	void ReadUnsArray(const std::string &key, Vector &result, idx_t offset, idx_t count);
 
 private:
 	// Helper to set value in vector based on type

@@ -95,8 +95,10 @@ unique_ptr<FunctionData> AnndataScanner::ObsBind(ClientContext &context, TableFu
 	// Get actual columns from HDF5 (already includes obs_idx)
 	auto columns = reader.GetObsColumns();
 
+	vector<string> original_names;
 	for (const auto &col : columns) {
 		names.push_back(col.name);
+		original_names.push_back(col.original_name);
 		return_types.push_back(col.type);
 	}
 
@@ -104,6 +106,7 @@ unique_ptr<FunctionData> AnndataScanner::ObsBind(ClientContext &context, TableFu
 	bind_data->row_count = reader.GetObsCount();
 	bind_data->column_count = names.size();
 	bind_data->column_names = names;
+	bind_data->original_names = original_names;
 	bind_data->column_types = return_types;
 
 	return std::move(bind_data);
@@ -126,7 +129,8 @@ void AnndataScanner::ObsScan(ClientContext &context, TableFunctionInput &data, D
 	// Read actual data from HDF5 (obs_idx handling is in ReadObsColumn)
 	for (idx_t col = 0; col < bind_data.column_count; col++) {
 		auto &vec = output.data[col];
-		gstate.h5_reader->ReadObsColumn(bind_data.column_names[col], vec, gstate.current_row, count);
+		// Use original_name for reading from HDF5 (handles mangled names)
+		gstate.h5_reader->ReadObsColumn(bind_data.original_names[col], vec, gstate.current_row, count);
 	}
 
 	gstate.current_row += count;
@@ -152,8 +156,10 @@ unique_ptr<FunctionData> AnndataScanner::VarBind(ClientContext &context, TableFu
 	// Get actual columns from HDF5 (already includes var_idx)
 	auto columns = reader.GetVarColumns();
 
+	vector<string> original_names;
 	for (const auto &col : columns) {
 		names.push_back(col.name);
+		original_names.push_back(col.original_name);
 		return_types.push_back(col.type);
 	}
 
@@ -161,6 +167,7 @@ unique_ptr<FunctionData> AnndataScanner::VarBind(ClientContext &context, TableFu
 	bind_data->row_count = reader.GetVarCount();
 	bind_data->column_count = names.size();
 	bind_data->column_names = names;
+	bind_data->original_names = original_names;
 	bind_data->column_types = return_types;
 
 	return std::move(bind_data);
@@ -183,7 +190,8 @@ void AnndataScanner::VarScan(ClientContext &context, TableFunctionInput &data, D
 	// Read actual data from HDF5 (var_idx handling is in ReadVarColumn)
 	for (idx_t col = 0; col < bind_data.column_count; col++) {
 		auto &vec = output.data[col];
-		gstate.h5_reader->ReadVarColumn(bind_data.column_names[col], vec, gstate.current_row, count);
+		// Use original_name for reading from HDF5 (handles mangled names)
+		gstate.h5_reader->ReadVarColumn(bind_data.original_names[col], vec, gstate.current_row, count);
 	}
 
 	gstate.current_row += count;
@@ -602,6 +610,158 @@ void DummyScan(ClientContext &context, TableFunctionInput &data, DataChunk &outp
 	// Never called, bind function throws error
 }
 
+// Table function implementations for uns (unstructured) data
+unique_ptr<FunctionData> AnndataScanner::UnsBind(ClientContext &context, TableFunctionBindInput &input,
+                                                 vector<LogicalType> &return_types, vector<string> &names) {
+	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
+	bind_data->is_uns_scan = true;
+
+	if (!IsAnndataFile(bind_data->file_path)) {
+		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
+	}
+
+	// Open the HDF5 file to get uns keys
+	H5Reader reader(bind_data->file_path);
+
+	if (!reader.IsValidAnnData()) {
+		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
+	}
+
+	// Get uns keys
+	bind_data->uns_keys = reader.GetUnsKeys();
+
+	if (bind_data->uns_keys.empty()) {
+		// No uns data - return empty result with just a message column
+		names.push_back("message");
+		return_types.push_back(LogicalType::VARCHAR);
+		bind_data->row_count = 1;
+	} else {
+		// Set up column schema
+		names.push_back("key");
+		return_types.push_back(LogicalType::VARCHAR);
+
+		names.push_back("type");
+		return_types.push_back(LogicalType::VARCHAR);
+
+		names.push_back("dtype");
+		return_types.push_back(LogicalType::VARCHAR);
+
+		names.push_back("shape");
+		return_types.push_back(LogicalType::VARCHAR);
+
+		names.push_back("value");
+		return_types.push_back(LogicalType::VARCHAR);
+
+		bind_data->row_count = bind_data->uns_keys.size();
+	}
+
+	bind_data->column_count = names.size();
+	bind_data->column_names = names;
+	bind_data->column_types = return_types;
+
+	return std::move(bind_data);
+}
+
+void AnndataScanner::UnsScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
+	auto &bind_data = (AnndataBindData &)*data.bind_data;
+	auto &gstate = (AnndataGlobalState &)*data.global_state;
+
+	// Open file on first scan
+	if (!gstate.h5_reader) {
+		gstate.h5_reader = make_uniq<H5Reader>(bind_data.file_path);
+	}
+
+	if (bind_data.uns_keys.empty()) {
+		// No uns data - return single row with message
+		if (gstate.current_row == 0) {
+			output.data[0].SetValue(0, Value("No uns data in file"));
+			output.SetCardinality(1);
+			gstate.current_row = 1;
+		}
+		return;
+	}
+
+	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
+	if (count == 0) {
+		return;
+	}
+
+	// Fill columns with uns metadata
+	for (idx_t i = 0; i < count; i++) {
+		idx_t idx = gstate.current_row + i;
+		const auto &uns_info = bind_data.uns_keys[idx];
+
+		// Key column
+		output.data[0].SetValue(i, Value(uns_info.key));
+
+		// Type column
+		output.data[1].SetValue(i, Value(uns_info.type));
+
+		// Dtype column
+		string dtype_str;
+		switch (uns_info.dtype.id()) {
+		case LogicalTypeId::VARCHAR:
+			dtype_str = "string";
+			break;
+		case LogicalTypeId::BIGINT:
+			dtype_str = "int64";
+			break;
+		case LogicalTypeId::INTEGER:
+			dtype_str = "int32";
+			break;
+		case LogicalTypeId::DOUBLE:
+			dtype_str = "float64";
+			break;
+		case LogicalTypeId::BOOLEAN:
+			dtype_str = "bool";
+			break;
+		default:
+			dtype_str = "unknown";
+			break;
+		}
+		output.data[2].SetValue(i, Value(dtype_str));
+
+		// Shape column
+		if (uns_info.type == "scalar") {
+			output.data[3].SetValue(i, Value("()"));
+		} else if (uns_info.type == "array" && !uns_info.shape.empty()) {
+			string shape_str = "(";
+			for (size_t j = 0; j < uns_info.shape.size(); j++) {
+				if (j > 0)
+					shape_str += ", ";
+				shape_str += to_string(uns_info.shape[j]);
+			}
+			shape_str += ")";
+			output.data[3].SetValue(i, Value(shape_str));
+		} else if (uns_info.type == "group" || uns_info.type == "dataframe") {
+			output.data[3].SetValue(i, Value()); // NULL for groups
+		} else {
+			output.data[3].SetValue(i, Value());
+		}
+
+		// Value column - for scalars, show the actual value
+		if (uns_info.type == "scalar") {
+			if (!uns_info.value_str.empty()) {
+				// String scalar - we already have the value
+				output.data[4].SetValue(i, Value(uns_info.value_str));
+			} else {
+				// Non-string scalar - read it
+				Value scalar_value = gstate.h5_reader->ReadUnsScalar(uns_info.key);
+				if (!scalar_value.IsNull()) {
+					output.data[4].SetValue(i, scalar_value.ToString());
+				} else {
+					output.data[4].SetValue(i, Value());
+				}
+			}
+		} else {
+			output.data[4].SetValue(i, Value()); // NULL for non-scalars
+		}
+	}
+
+	gstate.current_row += count;
+	output.SetCardinality(count);
+}
+
 // Register the table functions
 void RegisterAnndataTableFunctions(DatabaseInstance &db) {
 	// Register anndata_scan_obs function
@@ -671,6 +831,12 @@ void RegisterAnndataTableFunctions(DatabaseInstance &db) {
 	                                AnndataInitGlobal, AnndataInitLocal);
 	layers_func_error.name = "anndata_scan_layers";
 	ExtensionUtil::RegisterFunction(db, layers_func_error);
+
+	// Register anndata_scan_uns function
+	TableFunction uns_func("anndata_scan_uns", {LogicalType::VARCHAR}, AnndataScanner::UnsScan, AnndataScanner::UnsBind,
+	                       AnndataInitGlobal, AnndataInitLocal);
+	uns_func.name = "anndata_scan_uns";
+	ExtensionUtil::RegisterFunction(db, uns_func);
 
 	// Register anndata_info function (scalar function)
 	auto info_func = ScalarFunction(

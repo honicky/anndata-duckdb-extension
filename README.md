@@ -8,6 +8,7 @@ This extension provides DuckDB with the ability to read AnnData (`.h5ad`) files,
 - Query observation (cell) metadata from `.obs`
 - Query variable (gene) metadata from `.var`
 - Query expression matrix (`.X`) in wide format with genes as columns
+- Query unstructured metadata from `.uns`
 - Support for categorical data in observation and variable metadata
 - Configurable gene name columns for expression matrix
 - Efficient HDF5 data reading with proper memory management
@@ -84,6 +85,14 @@ FROM anndata_scan_x('data.h5ad') x
 JOIN anndata_scan_obs('data.h5ad') o 
   ON x.obs_idx = o.obs_idx
 GROUP BY o.cell_type;
+
+-- Query unstructured metadata (uns)
+SELECT * FROM anndata_scan_uns('data.h5ad');
+
+-- Filter to view only scalar values with their actual values
+SELECT key, dtype, value 
+FROM anndata_scan_uns('data.h5ad')
+WHERE type = 'scalar';
 ```
 
 ## Development
