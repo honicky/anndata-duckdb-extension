@@ -8,16 +8,23 @@ This document outlines the implementation plan for the AnnData DuckDB extension 
 ### ✅ Completed Phases
 - **Phase 1**: Hello World Extension - Basic extension infrastructure working
 - **Phase 2**: Python Test Infrastructure - Set up with real test data
-- **Phase 4**: Read obs Table (partial) - Schema detection and categorical columns working
+- **Phase 4**: Read obs Table - Full implementation with categorical support
+- **Phase 5**: Read var Table - Full implementation with _index support
+- **Phase 6**: Read X Matrix - Dense matrix support with gene names
+- **Phase 7**: Sparse Matrix Support - CSR/CSC format handling
+- **Phase 8**: obsm/varm Tables - Dimensional reduction matrices
+- **Phase 10**: Layers Support - Alternative expression matrices
+- **Phase 11**: uns (Unstructured) Data - Metadata overview with type detection
 
 ### 🔄 In Progress
-- **Phase 4**: Read obs Table - Implementing actual HDF5 data reading
+- None currently
 
 ### 📋 Pending
-- **Fix**: anndata_info is documented as a table funciton but implemented as "select anndata_info('filename.h5ad')
+- **Fix**: anndata_info is documented as a table function but implemented as scalar function
 - **Phase 3**: ATTACH/DETACH - Deferred in favor of table functions
-- **Phase 5-10**: var tables, X matrix, sparse support, obsm/varm, layers, uns
-
+- **Phase 9**: obsp/varp Pairwise Tables - Cell-cell and gene-gene relationship matrices
+- **Phase 12**: ATTACH/DETACH Interface - Schema-based wrapper over table functions
+W
 ## Implementation Approach Changes
 
 ### Major Decision: Table Functions Instead of ATTACH/DETACH
@@ -82,7 +89,7 @@ SELECT anndata_hello();  -- Returns "Hello from AnnData extension!"
 - Add ATTACH/DETACH as convenience wrapper later
 - Focus on core functionality
 
-### Phase 4: Read obs Table 🔄
+### Phase 4: Read obs Table ✅
 **Goal**: Access cell metadata
 
 **Implementation**:
@@ -90,31 +97,43 @@ SELECT anndata_hello();  -- Returns "Hello from AnnData extension!"
 2. ✅ Created `h5_reader.cpp` for HDF5 operations
 3. ✅ Schema detection from `/obs` group
 4. ✅ Categorical column support with caching
-5. 🔄 Implementing actual data reading
+5. ✅ Full data reading implementation
+
+**Index Handling**:
+- **obs_idx**: Always present - synthetic integer index (0, 1, 2...) for reliable joins
+- **_index** or **index**: Included when present in HDF5 - contains actual cell identifiers (e.g., barcodes)
+- Duplicate column names (case-insensitive) are mangled with underscores (e.g., `cell_ID` and `cell_id` become `cell_ID` and `cell_id_`)
 
 **Current Capabilities**:
 - Detects all columns with correct types
 - Handles categorical data (codes + categories)
+- Includes _index/index columns when present
+- Handles duplicate column names via mangling
 - Caches categorical mappings for performance
 
 **Testing**:
 ```sql
 SELECT * FROM anndata_scan_obs('path/to/file.h5ad') LIMIT 5;
-SELECT COUNT(*) FROM anndata_scan_obs('path/to/file.h5ad');  -- Returns 8417
+SELECT obs_idx, _index, cell_type FROM anndata_scan_obs('path/to/file.h5ad');
 ```
 
-### Phase 5: Read var Table 📋
+### Phase 5: Read var Table ✅
 **Goal**: Access gene metadata
 
-**Implementation Status**:
+**Implementation**:
 - ✅ Table function structure in place
 - ✅ Schema detection working
-- 🔄 Data reading implementation in progress
+- ✅ Full data reading implementation
+
+**Index Handling** (same pattern as obs):
+- **var_idx**: Always present - synthetic integer index (0, 1, 2...) for reliable joins
+- **_index** or **index**: Included when present in HDF5 - contains actual gene identifiers (e.g., Ensembl IDs, gene symbols)
+- Duplicate column names handled via mangling (same as obs)
 
 **Testing**:
 ```sql
 SELECT * FROM anndata_scan_var('path/to/file.h5ad') LIMIT 5;
-SELECT COUNT(*) FROM anndata_scan_var('path/to/file.h5ad');  -- Returns 33145
+SELECT var_idx, _index, highly_variable FROM anndata_scan_var('path/to/file.h5ad');
 ```
 
 ### Phase 6: Dense Matrix X 📋
@@ -142,7 +161,42 @@ SELECT COUNT(*) FROM anndata_scan_var('path/to/file.h5ad');  -- Returns 33145
 2. Create `anndata_scan_obsm_<key>` functions
 3. Dynamic column generation (dim_0, dim_1, ...)
 
-### Phase 9: Layers Support 📋
+### Phase 9: obsp/varp Pairwise Tables 📋
+**Goal**: Access pairwise relationship matrices (e.g., connectivities, distances)
+
+**Planned Implementation**:
+1. Scan `/obsp` and `/varp` groups for sparse matrices
+2. Create table functions:
+   - `anndata_scan_obsp(file, matrix_name)` - Returns (obs_idx_1, obs_idx_2, value)
+   - `anndata_scan_varp(file, matrix_name)` - Returns (var_idx_1, var_idx_2, value)
+   - Optional: Could also have a list function `anndata_list_obsp(file)` to see available matrices
+3. Handle sparse formats (CSR/CSC) efficiently
+4. Only return non-zero values to avoid massive result sets
+
+**Index Handling**:
+- **obs_idx_1, obs_idx_2** (for obsp): Synthetic integer indices corresponding to row/column positions in the matrix
+- **var_idx_1, var_idx_2** (for varp): Synthetic integer indices for gene pairs
+- These indices match the `obs_idx` and `var_idx` values from their respective tables for joins
+- Note: obsp/varp matrices typically don't have their own `_index` columns - they use the indices from obs/var
+
+**Example Usage**:
+```sql
+-- Get connectivity matrix (nearest neighbor graph)
+SELECT * FROM anndata_scan_obsp('file.h5ad', 'connectivities') 
+WHERE obs_idx_1 = 0;
+
+-- Get distance matrix
+SELECT * FROM anndata_scan_obsp('file.h5ad', 'distances')
+WHERE value < 0.5;
+```
+
+**Technical Notes**:
+- These are typically very large sparse matrices (n×n where n = number of cells/genes)
+- Store pairwise relationships like cell-cell distances or connectivity graphs
+- Must handle efficiently as returning full matrix would be impractical
+- Common matrices: 'connectivities' (kNN graph), 'distances' (pairwise distances)
+
+### Phase 10: Layers Support 📋
 **Goal**: Access alternative expression matrices
 
 **Planned Implementation**:
@@ -150,15 +204,18 @@ SELECT COUNT(*) FROM anndata_scan_var('path/to/file.h5ad');  -- Returns 33145
 2. Create `anndata_scan_layer_<key>` functions
 3. Support both dense and sparse
 
-### Phase 10: uns (Unstructured) Data 📋
+### Phase 11: uns (Unstructured) Data ✅
 **Goal**: Handle arbitrary metadata
 
-**Planned Implementation**:
-1. Scan `/uns` group recursively
-2. Type-based table generation
-3. JSON fallback for complex structures
+**Status**: Completed in v0.4.0
 
-### Phase 11: ATTACH/DETACH Interface 📋
+**Implementation**:
+1. ✅ Scan `/uns` group recursively
+2. ✅ Type detection (scalar, array, group, dataframe)
+3. ✅ `anndata_scan_uns()` function returns metadata overview
+4. JSON fallback for complex structures (future enhancement)
+
+### Phase 12: ATTACH/DETACH Interface 📋
 **Goal**: Provide standard DuckDB attachment semantics
 **Prerequisites**: All table functions must be complete (Phases 4-10)
 
