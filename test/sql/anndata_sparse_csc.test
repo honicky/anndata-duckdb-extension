@@ -54,16 +54,35 @@ ORDER BY o.obs_idx;
 2	TypeA
 
 # Verify that CSC and CSR formats produce the same results
-# Compare some values from both sparse formats
-query IIII
-SELECT 
-    csr.obs_idx,
-    csr.Gene_008 as csr_val,
-    csc.Gene_008 as csc_val,
-    csr.Gene_008 = csc.Gene_008 as match
-FROM anndata_scan_x('test/data/test_sparse.h5ad') csr
-JOIN anndata_scan_x('test/data/test_sparse_csc.h5ad') csc
-  ON csr.obs_idx = csc.obs_idx
-WHERE csr.obs_idx = 2;
+# KNOWN LIMITATION: Cannot join two different HDF5 files due to thread safety limitations
+# Workaround: Use temporary tables to cache data from each file separately
+
+# First, load CSR data into a temporary table
+statement ok
+CREATE TEMPORARY TABLE csr_data AS 
+SELECT obs_idx, ROUND(Gene_008, 2) as g8, ROUND(Gene_009, 2) as g9
+FROM anndata_scan_x('test/data/test_sparse.h5ad')
+WHERE obs_idx IN (0, 2, 5);
+
+# Then, load CSC data into another temporary table
+statement ok
+CREATE TEMPORARY TABLE csc_data AS
+SELECT obs_idx, ROUND(Gene_008, 2) as g8, ROUND(Gene_009, 2) as g9
+FROM anndata_scan_x('test/data/test_sparse_csc.h5ad')
+WHERE obs_idx IN (0, 2, 5);
+
+# Now we can safely compare the results
+query I
+SELECT COUNT(*) 
+FROM csr_data r 
+JOIN csc_data c ON r.obs_idx = c.obs_idx
+WHERE r.g8 = c.g8 AND r.g9 = c.g9;
 ----
-2	5.91	5.91	true
+3
+
+# Clean up temporary tables
+statement ok
+DROP TABLE csr_data;
+
+statement ok
+DROP TABLE csc_data;

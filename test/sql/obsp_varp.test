@@ -1,6 +1,6 @@
-# name: test/sql/obsp_varp.test  
+# name: test/sql/obsp_varp.test
 # description: Test obsp and varp pairwise matrix scanning
-# group: [anndata]
+# group: [sql]
 
 require anndata
 

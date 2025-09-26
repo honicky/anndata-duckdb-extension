@@ -32,7 +32,7 @@ connectivities = sparse.csr_matrix((values, (row_idx, col_idx)), shape=(n_obs, n
 adata.obsp['connectivities'] = connectivities
 
 # 2. Distances matrix (sparse, also symmetric)
-n_distances = 300  
+n_distances = 300
 row_idx = np.random.randint(0, n_obs, n_distances)
 col_idx = np.random.randint(0, n_obs, n_distances)
 values = np.random.rand(n_distances) * 10  # Distances in range [0, 10]
@@ -50,7 +50,7 @@ values = np.random.rand(n_correlations) * 2 - 1  # Correlations in range [-1, 1]
 correlations = sparse.csr_matrix((values, (row_idx, col_idx)), shape=(n_var, n_var))
 adata.varp['correlations'] = correlations
 
-# 2. Gene coexpression matrix  
+# 2. Gene coexpression matrix
 n_coexp = 150
 row_idx = np.random.randint(0, n_var, n_coexp)
 col_idx = np.random.randint(0, n_var, n_coexp)

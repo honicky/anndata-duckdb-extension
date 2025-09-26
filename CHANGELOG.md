@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2025-09-25
+
+### Added
+- Concurrent file access protection to prevent crashes when multiple HDF5 files are accessed simultaneously
+- Global tracking of active H5Reader instances to detect and prevent unsafe concurrent access
+- Clear error messages explaining HDF5 C++ API thread-safety limitations
+
+### Changed
+- Test queries that access multiple H5 files now use temporary tables as a workaround for HDF5 limitations
+- Updated test documentation to explain the HDF5 C++ API thread-safety constraints
+
+### Fixed
+- Resource leak in IsGroupPresent() that was causing "Group::~Group - H5Gclose failed" errors
+- Crashes when attempting to open multiple HDF5 files concurrently (now fails gracefully with informative error)
+
 ## [0.5.0] - 2025-09-25
 
 ### Added

@@ -68,13 +68,13 @@ public:
 	static string GetAnndataInfo(const string &path);
 };
 
-// Bind data for table functions  
+// Bind data for table functions
 struct AnndataBindData : public TableFunctionData {
 	string file_path;
 	idx_t row_count;
 	idx_t column_count;
-	vector<string> column_names;       // Display names (may be mangled)
-	vector<string> original_names;     // Original HDF5 dataset names
+	vector<string> column_names;   // Display names (may be mangled)
+	vector<string> original_names; // Original HDF5 dataset names
 	vector<LogicalType> column_types;
 
 	// For X matrix scanning
@@ -103,7 +103,7 @@ struct AnndataBindData : public TableFunctionData {
 	bool is_obsp_scan = false;
 	bool is_varp_scan = false;
 	string pairwise_matrix_name;
-	idx_t nnz = 0;  // number of non-zero elements
+	idx_t nnz = 0; // number of non-zero elements
 
 	// For info scanning
 	bool is_info_scan = false;

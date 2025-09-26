@@ -769,7 +769,7 @@ unique_ptr<FunctionData> AnndataScanner::ObspBind(ClientContext &context, TableF
 	if (input.inputs.size() != 2) {
 		throw InvalidInputException("anndata_scan_obsp requires 2 parameters: file_path and matrix_name");
 	}
-	
+
 	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
 	bind_data->is_obsp_scan = true;
 	bind_data->pairwise_matrix_name = input.inputs[1].GetValue<string>();
@@ -789,20 +789,20 @@ unique_ptr<FunctionData> AnndataScanner::ObspBind(ClientContext &context, TableF
 	try {
 		H5Reader::SparseMatrixInfo info = reader.GetObspMatrixInfo(bind_data->pairwise_matrix_name);
 		bind_data->nnz = info.nnz;
-		bind_data->row_count = info.nnz;  // We return one row per non-zero element
+		bind_data->row_count = info.nnz; // We return one row per non-zero element
 	} catch (const InvalidInputException &e) {
 		// Matrix not found
 		bind_data->row_count = 0;
 		bind_data->nnz = 0;
 	}
-	
+
 	// Set up column schema
 	names.push_back("obs_idx_1");
 	return_types.push_back(LogicalType::BIGINT);
-	
+
 	names.push_back("obs_idx_2");
 	return_types.push_back(LogicalType::BIGINT);
-	
+
 	names.push_back("value");
 	return_types.push_back(LogicalType::FLOAT);
 
@@ -836,8 +836,9 @@ void AnndataScanner::ObspScan(ClientContext &context, TableFunctionInput &data, 
 	auto &row_vec = output.data[0];
 	auto &col_vec = output.data[1];
 	auto &val_vec = output.data[2];
-	
-	gstate.h5_reader->ReadObspMatrix(bind_data.pairwise_matrix_name, row_vec, col_vec, val_vec, gstate.current_row, count);
+
+	gstate.h5_reader->ReadObspMatrix(bind_data.pairwise_matrix_name, row_vec, col_vec, val_vec, gstate.current_row,
+	                                 count);
 
 	gstate.current_row += count;
 	output.SetCardinality(count);
@@ -850,7 +851,7 @@ unique_ptr<FunctionData> AnndataScanner::VarpBind(ClientContext &context, TableF
 	if (input.inputs.size() != 2) {
 		throw InvalidInputException("anndata_scan_varp requires 2 parameters: file_path and matrix_name");
 	}
-	
+
 	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
 	bind_data->is_varp_scan = true;
 	bind_data->pairwise_matrix_name = input.inputs[1].GetValue<string>();
@@ -870,20 +871,20 @@ unique_ptr<FunctionData> AnndataScanner::VarpBind(ClientContext &context, TableF
 	try {
 		H5Reader::SparseMatrixInfo info = reader.GetVarpMatrixInfo(bind_data->pairwise_matrix_name);
 		bind_data->nnz = info.nnz;
-		bind_data->row_count = info.nnz;  // We return one row per non-zero element
+		bind_data->row_count = info.nnz; // We return one row per non-zero element
 	} catch (const InvalidInputException &e) {
 		// Matrix not found
 		bind_data->row_count = 0;
 		bind_data->nnz = 0;
 	}
-	
+
 	// Set up column schema
 	names.push_back("var_idx_1");
 	return_types.push_back(LogicalType::BIGINT);
-	
+
 	names.push_back("var_idx_2");
 	return_types.push_back(LogicalType::BIGINT);
-	
+
 	names.push_back("value");
 	return_types.push_back(LogicalType::FLOAT);
 
@@ -917,8 +918,9 @@ void AnndataScanner::VarpScan(ClientContext &context, TableFunctionInput &data, 
 	auto &row_vec = output.data[0];
 	auto &col_vec = output.data[1];
 	auto &val_vec = output.data[2];
-	
-	gstate.h5_reader->ReadVarpMatrix(bind_data.pairwise_matrix_name, row_vec, col_vec, val_vec, gstate.current_row, count);
+
+	gstate.h5_reader->ReadVarpMatrix(bind_data.pairwise_matrix_name, row_vec, col_vec, val_vec, gstate.current_row,
+	                                 count);
 
 	gstate.current_row += count;
 	output.SetCardinality(count);
@@ -980,7 +982,7 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 	// Collect all info in one scan
 	if (gstate.current_row == 0) {
 		vector<pair<string, string>> info_rows;
-		
+
 		// Basic file info
 		info_rows.emplace_back("file_path", bind_data.file_path);
 		info_rows.emplace_back("n_obs", to_string(gstate.h5_reader->GetObsCount()));
@@ -999,7 +1001,8 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 		if (!obsm_matrices.empty()) {
 			string obsm_list;
 			for (size_t i = 0; i < obsm_matrices.size(); ++i) {
-				if (i > 0) obsm_list += ", ";
+				if (i > 0)
+					obsm_list += ", ";
 				obsm_list += obsm_matrices[i].name;
 			}
 			info_rows.emplace_back("obsm_keys", obsm_list);
@@ -1010,7 +1013,8 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 		if (!varm_matrices.empty()) {
 			string varm_list;
 			for (size_t i = 0; i < varm_matrices.size(); ++i) {
-				if (i > 0) varm_list += ", ";
+				if (i > 0)
+					varm_list += ", ";
 				varm_list += varm_matrices[i].name;
 			}
 			info_rows.emplace_back("varm_keys", varm_list);
@@ -1021,7 +1025,8 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 		if (!layers.empty()) {
 			string layer_list;
 			for (size_t i = 0; i < layers.size(); ++i) {
-				if (i > 0) layer_list += ", ";
+				if (i > 0)
+					layer_list += ", ";
 				layer_list += layers[i].name;
 			}
 			info_rows.emplace_back("layers", layer_list);
@@ -1032,7 +1037,8 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 		if (!obsp_keys.empty()) {
 			string obsp_list;
 			for (size_t i = 0; i < obsp_keys.size(); ++i) {
-				if (i > 0) obsp_list += ", ";
+				if (i > 0)
+					obsp_list += ", ";
 				obsp_list += obsp_keys[i];
 			}
 			info_rows.emplace_back("obsp_keys", obsp_list);
@@ -1042,7 +1048,8 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 		if (!varp_keys.empty()) {
 			string varp_list;
 			for (size_t i = 0; i < varp_keys.size(); ++i) {
-				if (i > 0) varp_list += ", ";
+				if (i > 0)
+					varp_list += ", ";
 				varp_list += varp_keys[i];
 			}
 			info_rows.emplace_back("varp_keys", varp_list);
@@ -1062,13 +1069,12 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 	}
 
 	output.SetCardinality(result_idx);
-	
+
 	// If we've output all rows, we're done
 	if (result_idx == 0) {
 		output.SetCardinality(0);
 	}
 }
-
 
 // Register the table functions
 void RegisterAnndataTableFunctions(DatabaseInstance &db) {
@@ -1147,23 +1153,20 @@ void RegisterAnndataTableFunctions(DatabaseInstance &db) {
 	ExtensionUtil::RegisterFunction(db, uns_func);
 
 	// Register anndata_scan_obsp function
-	TableFunction obsp_func("anndata_scan_obsp", {LogicalType::VARCHAR, LogicalType::VARCHAR}, 
-	                        AnndataScanner::ObspScan, AnndataScanner::ObspBind,
-	                        AnndataInitGlobal, AnndataInitLocal);
+	TableFunction obsp_func("anndata_scan_obsp", {LogicalType::VARCHAR, LogicalType::VARCHAR}, AnndataScanner::ObspScan,
+	                        AnndataScanner::ObspBind, AnndataInitGlobal, AnndataInitLocal);
 	obsp_func.name = "anndata_scan_obsp";
 	ExtensionUtil::RegisterFunction(db, obsp_func);
 
 	// Register anndata_scan_varp function
-	TableFunction varp_func("anndata_scan_varp", {LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                        AnndataScanner::VarpScan, AnndataScanner::VarpBind,
-	                        AnndataInitGlobal, AnndataInitLocal);
+	TableFunction varp_func("anndata_scan_varp", {LogicalType::VARCHAR, LogicalType::VARCHAR}, AnndataScanner::VarpScan,
+	                        AnndataScanner::VarpBind, AnndataInitGlobal, AnndataInitLocal);
 	varp_func.name = "anndata_scan_varp";
 	ExtensionUtil::RegisterFunction(db, varp_func);
 
 	// Register anndata_info function (table function)
-	TableFunction info_func("anndata_info", {LogicalType::VARCHAR}, 
-	                       AnndataScanner::InfoScan, AnndataScanner::InfoBind,
-	                       AnndataInitGlobal, AnndataInitLocal);
+	TableFunction info_func("anndata_info", {LogicalType::VARCHAR}, AnndataScanner::InfoScan, AnndataScanner::InfoBind,
+	                        AnndataInitGlobal, AnndataInitLocal);
 	info_func.name = "anndata_info";
 	ExtensionUtil::RegisterFunction(db, info_func);
 }

@@ -1,6 +1,6 @@
 # name: test/sql/anndata_info.test
 # description: Test anndata_info table function
-# group: [anndata]
+# group: [sql]
 
 require anndata
 
@@ -100,21 +100,14 @@ WHERE property = 'x_sparse';
 false
 
 # Test aggregation over multiple files (simulated with UNION)
-# FIXME: This UNION query causes resource management issues with H5Reader
-# The issue appears to be that multiple H5Reader instances conflict
-# when created for parallel/sequential UNION operations
-# query II
-# SELECT 'test_small.h5ad' as file, COUNT(*) as properties
-# FROM anndata_info('test/data/test_small.h5ad')
-# UNION ALL
-# SELECT 'test_obsp_varp.h5ad' as file, COUNT(*) as properties
-# FROM anndata_info('test/data/test_obsp_varp.h5ad')
-# ORDER BY file;
-# ----
-# test_obsp_varp.h5ad	7
-# test_small.h5ad	7
+# KNOWN LIMITATION: UNION queries with multiple HDF5 files may fail due to HDF5 C++ API limitations
+# The HDF5 C++ API is not thread-safe, and the vcpkg build we use has the C++ feature enabled
+# which is incompatible with the threadsafe feature. According to HDF5 documentation:
+# "Thread-safe capability is not compatible with the high-level library, Fortran, or C++ wrappers"
+# Source: https://github.com/microsoft/vcpkg/pull/17371
+# Workaround: Process files sequentially or use separate DuckDB connections per file
 
-# Instead test the files separately to ensure they work
+# Test the files separately to ensure they work
 query I
 SELECT COUNT(*) FROM anndata_info('test/data/test_small.h5ad');
 ----

@@ -151,10 +151,10 @@ public:
 
 	// Sparse matrix info structure
 	struct SparseMatrixInfo {
-		std::string format;  // "csr" or "csc"
+		std::string format; // "csr" or "csc"
 		idx_t nrows;
 		idx_t ncols;
-		idx_t nnz;  // number of non-zero elements
+		idx_t nnz; // number of non-zero elements
 	};
 
 	// Get info about a sparse matrix
