@@ -58,6 +58,11 @@ public:
 	                                         vector<LogicalType> &return_types, vector<string> &names);
 	static void VarpScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
+	// Table function for file info
+	static unique_ptr<FunctionData> InfoBind(ClientContext &context, TableFunctionBindInput &input,
+	                                         vector<LogicalType> &return_types, vector<string> &names);
+	static void InfoScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
+
 	// Utility functions
 	static bool IsAnndataFile(const string &path);
 	static string GetAnndataInfo(const string &path);
@@ -99,6 +104,9 @@ struct AnndataBindData : public TableFunctionData {
 	bool is_varp_scan = false;
 	string pairwise_matrix_name;
 	idx_t nnz = 0;  // number of non-zero elements
+
+	// For info scanning
+	bool is_info_scan = false;
 
 	AnndataBindData(const string &path) : file_path(path), row_count(0), column_count(0) {
 	}

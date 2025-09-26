@@ -7,11 +7,11 @@ require anndata
 statement ok
 LOAD 'build/release/extension/anndata/anndata.duckdb_extension';
 
-# Test getting anndata info
+# Test getting layer info from anndata_info table function
 query I
-SELECT anndata_info('test/data/test_layers.h5ad') LIKE '%layers:%binary%log_norm%raw_counts%scaled%';
+SELECT value FROM anndata_info('test/data/test_layers.h5ad') WHERE property = 'layers';
 ----
-true
+binary, log_norm, raw_counts, scaled
 
 # Test reading from raw_counts layer (sparse CSR, int32)
 query IIII

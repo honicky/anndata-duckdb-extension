@@ -924,6 +924,152 @@ void AnndataScanner::VarpScan(ClientContext &context, TableFunctionInput &data, 
 	output.SetCardinality(count);
 }
 
+// Table function for info
+unique_ptr<FunctionData> AnndataScanner::InfoBind(ClientContext &context, TableFunctionBindInput &input,
+                                                  vector<LogicalType> &return_types, vector<string> &names) {
+	if (input.inputs.empty()) {
+		throw InvalidInputException("anndata_info requires at least 1 parameter: file_path");
+	}
+
+	auto file_path = input.inputs[0].GetValue<string>();
+	auto bind_data = make_uniq<AnndataBindData>(file_path);
+
+	// Basic file extension check
+	if (!IsAnndataFile(bind_data->file_path)) {
+		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
+	}
+
+	// We'll validate the file content when we actually open it in InfoScan
+	// to avoid opening the file twice
+	bind_data->is_info_scan = true;
+
+	// Define output schema for info table
+	names.emplace_back("property");
+	return_types.emplace_back(LogicalType::VARCHAR);
+	names.emplace_back("value");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	// We'll create multiple rows with different properties
+	bind_data->row_count = 10; // Approximate number of info rows
+
+	return std::move(bind_data);
+}
+
+void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
+	auto &bind_data = (AnndataBindData &)*data.bind_data;
+	auto &gstate = (AnndataGlobalState &)*data.global_state;
+
+	// Initialize H5Reader if not already done
+	if (!gstate.h5_reader) {
+		try {
+			gstate.h5_reader = make_uniq<H5Reader>(bind_data.file_path);
+		} catch (const std::exception &e) {
+			throw InvalidInputException("Failed to open AnnData file '%s': %s", bind_data.file_path.c_str(), e.what());
+		} catch (...) {
+			throw InvalidInputException("Failed to open AnnData file '%s'", bind_data.file_path.c_str());
+		}
+	}
+
+	output.SetCardinality(0);
+	idx_t result_idx = 0;
+
+	// Prepare output vectors
+	auto &property_vec = output.data[0];
+	auto &value_vec = output.data[1];
+
+	// Collect all info in one scan
+	if (gstate.current_row == 0) {
+		vector<pair<string, string>> info_rows;
+		
+		// Basic file info
+		info_rows.emplace_back("file_path", bind_data.file_path);
+		info_rows.emplace_back("n_obs", to_string(gstate.h5_reader->GetObsCount()));
+		info_rows.emplace_back("n_vars", to_string(gstate.h5_reader->GetVarCount()));
+
+		// X matrix info
+		auto x_info = gstate.h5_reader->GetXMatrixInfo();
+		info_rows.emplace_back("x_shape", to_string(x_info.n_obs) + " x " + to_string(x_info.n_var));
+		info_rows.emplace_back("x_sparse", x_info.is_sparse ? "true" : "false");
+		if (x_info.is_sparse) {
+			info_rows.emplace_back("x_format", x_info.sparse_format);
+		}
+
+		// Count obsm matrices
+		auto obsm_matrices = gstate.h5_reader->GetObsmMatrices();
+		if (!obsm_matrices.empty()) {
+			string obsm_list;
+			for (size_t i = 0; i < obsm_matrices.size(); ++i) {
+				if (i > 0) obsm_list += ", ";
+				obsm_list += obsm_matrices[i].name;
+			}
+			info_rows.emplace_back("obsm_keys", obsm_list);
+		}
+
+		// Count varm matrices
+		auto varm_matrices = gstate.h5_reader->GetVarmMatrices();
+		if (!varm_matrices.empty()) {
+			string varm_list;
+			for (size_t i = 0; i < varm_matrices.size(); ++i) {
+				if (i > 0) varm_list += ", ";
+				varm_list += varm_matrices[i].name;
+			}
+			info_rows.emplace_back("varm_keys", varm_list);
+		}
+
+		// Count layers
+		auto layers = gstate.h5_reader->GetLayers();
+		if (!layers.empty()) {
+			string layer_list;
+			for (size_t i = 0; i < layers.size(); ++i) {
+				if (i > 0) layer_list += ", ";
+				layer_list += layers[i].name;
+			}
+			info_rows.emplace_back("layers", layer_list);
+		}
+
+		// Count obsp/varp
+		auto obsp_keys = gstate.h5_reader->GetObspKeys();
+		if (!obsp_keys.empty()) {
+			string obsp_list;
+			for (size_t i = 0; i < obsp_keys.size(); ++i) {
+				if (i > 0) obsp_list += ", ";
+				obsp_list += obsp_keys[i];
+			}
+			info_rows.emplace_back("obsp_keys", obsp_list);
+		}
+
+		auto varp_keys = gstate.h5_reader->GetVarpKeys();
+		if (!varp_keys.empty()) {
+			string varp_list;
+			for (size_t i = 0; i < varp_keys.size(); ++i) {
+				if (i > 0) varp_list += ", ";
+				varp_list += varp_keys[i];
+			}
+			info_rows.emplace_back("varp_keys", varp_list);
+		}
+
+		// Output rows
+		for (const auto &row : info_rows) {
+			if (result_idx >= STANDARD_VECTOR_SIZE) {
+				break;
+			}
+			FlatVector::GetData<string_t>(property_vec)[result_idx] = StringVector::AddString(property_vec, row.first);
+			FlatVector::GetData<string_t>(value_vec)[result_idx] = StringVector::AddString(value_vec, row.second);
+			result_idx++;
+		}
+
+		gstate.current_row = info_rows.size();
+	}
+
+	output.SetCardinality(result_idx);
+	
+	// If we've output all rows, we're done
+	if (result_idx == 0) {
+		output.SetCardinality(0);
+	}
+}
+
+
 // Register the table functions
 void RegisterAnndataTableFunctions(DatabaseInstance &db) {
 	// Register anndata_scan_obs function
@@ -1014,15 +1160,11 @@ void RegisterAnndataTableFunctions(DatabaseInstance &db) {
 	varp_func.name = "anndata_scan_varp";
 	ExtensionUtil::RegisterFunction(db, varp_func);
 
-	// Register anndata_info function (scalar function)
-	auto info_func = ScalarFunction(
-	    "anndata_info", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
-	    [](DataChunk &args, ExpressionState &state, Vector &result) {
-		    auto &path_vec = args.data[0];
-		    UnaryExecutor::Execute<string_t, string_t>(path_vec, result, args.size(), [&](string_t path) {
-			    return StringVector::AddString(result, AnndataScanner::GetAnndataInfo(path.GetString()));
-		    });
-	    });
+	// Register anndata_info function (table function)
+	TableFunction info_func("anndata_info", {LogicalType::VARCHAR}, 
+	                       AnndataScanner::InfoScan, AnndataScanner::InfoBind,
+	                       AnndataInitGlobal, AnndataInitLocal);
+	info_func.name = "anndata_info";
 	ExtensionUtil::RegisterFunction(db, info_func);
 }
 

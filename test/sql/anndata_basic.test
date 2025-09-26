@@ -99,3 +99,44 @@ FROM anndata_scan_x('test/data/test_small.h5ad')
 WHERE obs_idx = 0;
 ----
 0	true
+
+# Test anndata_info function returns table with property/value columns
+query II
+SELECT COUNT(*) as num_properties, COUNT(DISTINCT property) as unique_properties
+FROM anndata_info('test/data/test_small.h5ad');
+----
+7	7
+
+# Test basic properties are present in info
+query II
+SELECT property, value
+FROM anndata_info('test/data/test_small.h5ad')
+WHERE property IN ('n_obs', 'n_vars')
+ORDER BY property;
+----
+n_obs	100
+n_vars	50
+
+# Test file_path property
+query I
+SELECT value
+FROM anndata_info('test/data/test_small.h5ad')
+WHERE property = 'file_path';
+----
+test/data/test_small.h5ad
+
+# Test x_shape property
+query I
+SELECT value
+FROM anndata_info('test/data/test_small.h5ad')
+WHERE property = 'x_shape';
+----
+100 x 50
+
+# Test x_sparse property
+query I
+SELECT value
+FROM anndata_info('test/data/test_small.h5ad')
+WHERE property = 'x_sparse';
+----
+false
