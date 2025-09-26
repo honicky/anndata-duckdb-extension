@@ -2252,4 +2252,316 @@ void H5Reader::ReadUnsArray(const std::string &key, Vector &result, idx_t offset
 	}
 }
 
+std::vector<std::string> H5Reader::GetObspKeys() {
+	std::vector<std::string> keys;
+	
+	// Check if obsp group exists
+	if (!IsGroupPresent("/obsp")) {
+		return keys;
+	}
+	
+	try {
+		H5::Group obsp_group = file->openGroup("/obsp");
+		hsize_t num_objs = obsp_group.getNumObjs();
+		
+		for (hsize_t i = 0; i < num_objs; i++) {
+			std::string key_name = obsp_group.getObjnameByIdx(i);
+			H5G_stat_t stat_buf;
+			obsp_group.getObjinfo(key_name, stat_buf);
+			
+			// Only include groups (sparse matrices are stored as groups)
+			if (stat_buf.type == H5G_GROUP) {
+				keys.push_back(key_name);
+			}
+		}
+	} catch (const H5::Exception &e) {
+		// Return what we have
+	}
+	
+	return keys;
+}
+
+std::vector<std::string> H5Reader::GetVarpKeys() {
+	std::vector<std::string> keys;
+	
+	// Check if varp group exists
+	if (!IsGroupPresent("/varp")) {
+		return keys;
+	}
+	
+	try {
+		H5::Group varp_group = file->openGroup("/varp");
+		hsize_t num_objs = varp_group.getNumObjs();
+		
+		for (hsize_t i = 0; i < num_objs; i++) {
+			std::string key_name = varp_group.getObjnameByIdx(i);
+			H5G_stat_t stat_buf;
+			varp_group.getObjinfo(key_name, stat_buf);
+			
+			// Only include groups (sparse matrices are stored as groups)
+			if (stat_buf.type == H5G_GROUP) {
+				keys.push_back(key_name);
+			}
+		}
+	} catch (const H5::Exception &e) {
+		// Return what we have
+	}
+	
+	return keys;
+}
+
+H5Reader::SparseMatrixInfo H5Reader::GetObspMatrixInfo(const std::string &key) {
+	SparseMatrixInfo info;
+	info.nrows = GetObsCount();
+	info.ncols = GetObsCount();  // obsp is obs x obs
+	info.nnz = 0;
+	info.format = "csr";  // default
+	
+	std::string matrix_path = "/obsp/" + key;
+	
+	if (!IsGroupPresent(matrix_path)) {
+		throw InvalidInputException("obsp matrix '%s' not found", key.c_str());
+	}
+	
+	try {
+		H5::Group matrix_group = file->openGroup(matrix_path);
+		
+		// Check for encoding attribute to determine format
+		if (matrix_group.attrExists("encoding-type")) {
+			H5::Attribute encoding_attr = matrix_group.openAttribute("encoding-type");
+			H5::StrType str_type = encoding_attr.getStrType();
+			std::string encoding;
+			encoding_attr.read(str_type, encoding);
+			
+			if (encoding == "csr_matrix") {
+				info.format = "csr";
+			} else if (encoding == "csc_matrix") {
+				info.format = "csc";
+			}
+		}
+		
+		// Read shape if available
+		if (matrix_group.attrExists("shape")) {
+			H5::Attribute shape_attr = matrix_group.openAttribute("shape");
+			hsize_t shape[2];
+			shape_attr.read(H5::PredType::NATIVE_HSIZE, shape);
+			info.nrows = shape[0];
+			info.ncols = shape[1];
+		}
+		
+		// Get number of non-zero elements from data array
+		if (IsDatasetPresent(matrix_path, "data")) {
+			H5::DataSet data_dataset = matrix_group.openDataSet("data");
+			H5::DataSpace data_space = data_dataset.getSpace();
+			hsize_t dims[1];
+			data_space.getSimpleExtentDims(dims);
+			info.nnz = dims[0];
+		}
+		
+	} catch (const H5::Exception &e) {
+		throw IOException("Failed to get obsp matrix info for '%s': %s", key.c_str(), e.getCDetailMsg());
+	}
+	
+	return info;
+}
+
+H5Reader::SparseMatrixInfo H5Reader::GetVarpMatrixInfo(const std::string &key) {
+	SparseMatrixInfo info;
+	info.nrows = GetVarCount();
+	info.ncols = GetVarCount();  // varp is var x var
+	info.nnz = 0;
+	info.format = "csr";  // default
+	
+	std::string matrix_path = "/varp/" + key;
+	
+	if (!IsGroupPresent(matrix_path)) {
+		throw InvalidInputException("varp matrix '%s' not found", key.c_str());
+	}
+	
+	try {
+		H5::Group matrix_group = file->openGroup(matrix_path);
+		
+		// Check for encoding attribute to determine format
+		if (matrix_group.attrExists("encoding-type")) {
+			H5::Attribute encoding_attr = matrix_group.openAttribute("encoding-type");
+			H5::StrType str_type = encoding_attr.getStrType();
+			std::string encoding;
+			encoding_attr.read(str_type, encoding);
+			
+			if (encoding == "csr_matrix") {
+				info.format = "csr";
+			} else if (encoding == "csc_matrix") {
+				info.format = "csc";
+			}
+		}
+		
+		// Read shape if available
+		if (matrix_group.attrExists("shape")) {
+			H5::Attribute shape_attr = matrix_group.openAttribute("shape");
+			hsize_t shape[2];
+			shape_attr.read(H5::PredType::NATIVE_HSIZE, shape);
+			info.nrows = shape[0];
+			info.ncols = shape[1];
+		}
+		
+		// Get number of non-zero elements from data array
+		if (IsDatasetPresent(matrix_path, "data")) {
+			H5::DataSet data_dataset = matrix_group.openDataSet("data");
+			H5::DataSpace data_space = data_dataset.getSpace();
+			hsize_t dims[1];
+			data_space.getSimpleExtentDims(dims);
+			info.nnz = dims[0];
+		}
+		
+	} catch (const H5::Exception &e) {
+		throw IOException("Failed to get varp matrix info for '%s': %s", key.c_str(), e.getCDetailMsg());
+	}
+	
+	return info;
+}
+
+void H5Reader::ReadObspMatrix(const std::string &key, Vector &row_result, Vector &col_result, Vector &value_result,
+                              idx_t offset, idx_t count) {
+	std::string matrix_path = "/obsp/" + key;
+	
+	if (!IsGroupPresent(matrix_path)) {
+		throw InvalidInputException("obsp matrix '%s' not found", key.c_str());
+	}
+	
+	try {
+		H5::Group matrix_group = file->openGroup(matrix_path);
+		SparseMatrixInfo info = GetObspMatrixInfo(key);
+		
+		// Read the sparse matrix components
+		// CSR format: data (values), indices (column indices), indptr (row pointers)
+		// CSC format: data (values), indices (row indices), indptr (column pointers)
+		
+		H5::DataSet data_dataset = matrix_group.openDataSet("data");
+		H5::DataSet indices_dataset = matrix_group.openDataSet("indices");
+		H5::DataSet indptr_dataset = matrix_group.openDataSet("indptr");
+		
+		if (info.format == "csr") {
+			// Read all indptr to find which rows contain our offset range
+			H5::DataSpace indptr_space = indptr_dataset.getSpace();
+			hsize_t indptr_dims[1];
+			indptr_space.getSimpleExtentDims(indptr_dims);
+			std::vector<int32_t> indptr(indptr_dims[0]);
+			indptr_dataset.read(indptr.data(), H5::PredType::NATIVE_INT32);
+			
+			// Find which non-zero elements to read
+			idx_t current_nnz = 0;
+			idx_t result_idx = 0;
+			for (idx_t row = 0; row < info.nrows && result_idx < count; row++) {
+				idx_t row_start = indptr[row];
+				idx_t row_end = indptr[row + 1];
+				
+				for (idx_t j = row_start; j < row_end && result_idx < count; j++) {
+					if (current_nnz >= offset) {
+						// Read column index
+						int32_t col_idx;
+						hsize_t indices_offset[1] = {j};
+						hsize_t indices_count[1] = {1};
+						H5::DataSpace indices_mem_space(1, indices_count);
+						H5::DataSpace indices_file_space = indices_dataset.getSpace();
+						indices_file_space.selectHyperslab(H5S_SELECT_SET, indices_count, indices_offset);
+						indices_dataset.read(&col_idx, H5::PredType::NATIVE_INT32, indices_mem_space, indices_file_space);
+						
+						// Read value
+						float val;
+						hsize_t data_offset[1] = {j};
+						hsize_t data_count[1] = {1};
+						H5::DataSpace data_mem_space(1, data_count);
+						H5::DataSpace data_file_space = data_dataset.getSpace();
+						data_file_space.selectHyperslab(H5S_SELECT_SET, data_count, data_offset);
+						data_dataset.read(&val, H5::PredType::NATIVE_FLOAT, data_mem_space, data_file_space);
+						
+						// Set results
+						row_result.SetValue(result_idx, Value::BIGINT(row));
+						col_result.SetValue(result_idx, Value::BIGINT(col_idx));
+						value_result.SetValue(result_idx, Value::FLOAT(val));
+						result_idx++;
+					}
+					current_nnz++;
+				}
+			}
+		} else {
+			throw NotImplementedException("CSC format for obsp not yet implemented");
+		}
+		
+	} catch (const H5::Exception &e) {
+		throw IOException("Failed to read obsp matrix '%s': %s", key.c_str(), e.getCDetailMsg());
+	}
+}
+
+void H5Reader::ReadVarpMatrix(const std::string &key, Vector &row_result, Vector &col_result, Vector &value_result,
+                              idx_t offset, idx_t count) {
+	std::string matrix_path = "/varp/" + key;
+	
+	if (!IsGroupPresent(matrix_path)) {
+		throw InvalidInputException("varp matrix '%s' not found", key.c_str());
+	}
+	
+	// Similar implementation to ReadObspMatrix but for varp
+	// Reuse most of the logic
+	try {
+		H5::Group matrix_group = file->openGroup(matrix_path);
+		SparseMatrixInfo info = GetVarpMatrixInfo(key);
+		
+		H5::DataSet data_dataset = matrix_group.openDataSet("data");
+		H5::DataSet indices_dataset = matrix_group.openDataSet("indices");
+		H5::DataSet indptr_dataset = matrix_group.openDataSet("indptr");
+		
+		if (info.format == "csr") {
+			// Read all indptr to find which rows contain our offset range
+			H5::DataSpace indptr_space = indptr_dataset.getSpace();
+			hsize_t indptr_dims[1];
+			indptr_space.getSimpleExtentDims(indptr_dims);
+			std::vector<int32_t> indptr(indptr_dims[0]);
+			indptr_dataset.read(indptr.data(), H5::PredType::NATIVE_INT32);
+			
+			// Find which non-zero elements to read
+			idx_t current_nnz = 0;
+			idx_t result_idx = 0;
+			for (idx_t row = 0; row < info.nrows && result_idx < count; row++) {
+				idx_t row_start = indptr[row];
+				idx_t row_end = indptr[row + 1];
+				
+				for (idx_t j = row_start; j < row_end && result_idx < count; j++) {
+					if (current_nnz >= offset) {
+						// Read column index
+						int32_t col_idx;
+						hsize_t indices_offset[1] = {j};
+						hsize_t indices_count[1] = {1};
+						H5::DataSpace indices_mem_space(1, indices_count);
+						H5::DataSpace indices_file_space = indices_dataset.getSpace();
+						indices_file_space.selectHyperslab(H5S_SELECT_SET, indices_count, indices_offset);
+						indices_dataset.read(&col_idx, H5::PredType::NATIVE_INT32, indices_mem_space, indices_file_space);
+						
+						// Read value
+						float val;
+						hsize_t data_offset[1] = {j};
+						hsize_t data_count[1] = {1};
+						H5::DataSpace data_mem_space(1, data_count);
+						H5::DataSpace data_file_space = data_dataset.getSpace();
+						data_file_space.selectHyperslab(H5S_SELECT_SET, data_count, data_offset);
+						data_dataset.read(&val, H5::PredType::NATIVE_FLOAT, data_mem_space, data_file_space);
+						
+						// Set results
+						row_result.SetValue(result_idx, Value::BIGINT(row));
+						col_result.SetValue(result_idx, Value::BIGINT(col_idx));
+						value_result.SetValue(result_idx, Value::FLOAT(val));
+						result_idx++;
+					}
+					current_nnz++;
+				}
+			}
+		} else {
+			throw NotImplementedException("CSC format for varp not yet implemented");
+		}
+		
+	} catch (const H5::Exception &e) {
+		throw IOException("Failed to read varp matrix '%s': %s", key.c_str(), e.getCDetailMsg());
+	}
+}
+
 } // namespace duckdb

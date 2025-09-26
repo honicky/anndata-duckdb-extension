@@ -145,6 +145,28 @@ public:
 	// Read uns array
 	void ReadUnsArray(const std::string &key, Vector &result, idx_t offset, idx_t count);
 
+	// Get list of obsp/varp matrix names
+	std::vector<std::string> GetObspKeys();
+	std::vector<std::string> GetVarpKeys();
+
+	// Sparse matrix info structure
+	struct SparseMatrixInfo {
+		std::string format;  // "csr" or "csc"
+		idx_t nrows;
+		idx_t ncols;
+		idx_t nnz;  // number of non-zero elements
+	};
+
+	// Get info about a sparse matrix
+	SparseMatrixInfo GetObspMatrixInfo(const std::string &key);
+	SparseMatrixInfo GetVarpMatrixInfo(const std::string &key);
+
+	// Read sparse matrix triplets (row, col, value)
+	void ReadObspMatrix(const std::string &key, Vector &row_result, Vector &col_result, Vector &value_result,
+	                    idx_t offset, idx_t count);
+	void ReadVarpMatrix(const std::string &key, Vector &row_result, Vector &col_result, Vector &value_result,
+	                    idx_t offset, idx_t count);
+
 private:
 	// Helper to set value in vector based on type
 	static void SetTypedValue(Vector &vec, idx_t row, double value);

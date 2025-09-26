@@ -106,6 +106,8 @@ SELECT * FROM anndata_info('path');
 | `obsm_keys` | LIST(VARCHAR) | Available obsm matrices |
 | `varm_keys` | LIST(VARCHAR) | Available varm matrices |
 | `uns_keys` | LIST(VARCHAR) | Available uns keys |
+| `obsp_keys` | LIST(VARCHAR) | Available obsp keys |
+| `varp_keys` | LIST(VARCHAR) | Available varp keys |
 
 #### Example
 ```sql

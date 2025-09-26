@@ -1,0 +1,54 @@
+# name: test/sql/obsp_varp.test  
+# description: Test obsp and varp pairwise matrix scanning
+# group: [anndata]
+
+require anndata
+
+# Note: Requires test/data/test_obsp_varp.h5ad to exist
+# This file should be created with test/python/create_test_obsp.py
+
+# Test obsp connectivities scanning
+query I
+SELECT COUNT(*) FROM anndata_scan_obsp('test/data/test_obsp_varp.h5ad', 'connectivities');
+----
+485
+
+# Test obsp matrix columns
+query III
+SELECT MIN(obs_idx_1) as min_idx1, MAX(obs_idx_1) as max_idx1, COUNT(*) as cnt
+FROM anndata_scan_obsp('test/data/test_obsp_varp.h5ad', 'connectivities');
+----
+0	99	485
+
+# Test obsp distances scanning  
+query I
+SELECT COUNT(*) FROM anndata_scan_obsp('test/data/test_obsp_varp.h5ad', 'distances');
+----
+299
+
+# Test obsp aggregations
+query II
+SELECT COUNT(*) as cnt, CAST(AVG(value) AS INTEGER) AS avg_dist
+FROM anndata_scan_obsp('test/data/test_obsp_varp.h5ad', 'distances');
+----
+299	5
+
+# Test varp correlations scanning
+query I
+SELECT COUNT(*) FROM anndata_scan_varp('test/data/test_obsp_varp.h5ad', 'correlations');
+----
+198
+
+# Test varp aggregations - check that we have negative correlations
+query I
+SELECT COUNT(*) > 0 AS has_negatives
+FROM anndata_scan_varp('test/data/test_obsp_varp.h5ad', 'correlations')
+WHERE value < 0;
+----
+1
+
+# Test varp coexpression scanning
+query I
+SELECT COUNT(*) FROM anndata_scan_varp('test/data/test_obsp_varp.h5ad', 'coexpression');
+----
+145

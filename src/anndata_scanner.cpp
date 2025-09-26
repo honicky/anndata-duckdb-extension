@@ -290,7 +290,7 @@ unique_ptr<FunctionData> AnndataScanner::ObsmBind(ClientContext &context, TableF
 	}
 
 	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
-	bind_data->matrix_name = input.inputs[1].GetValue<string>();
+	bind_data->obsm_varm_matrix_name = input.inputs[1].GetValue<string>();
 	bind_data->is_obsm_scan = true;
 
 	if (!IsAnndataFile(bind_data->file_path)) {
@@ -309,7 +309,7 @@ unique_ptr<FunctionData> AnndataScanner::ObsmBind(ClientContext &context, TableF
 	bool found = false;
 
 	for (const auto &matrix : matrices) {
-		if (matrix.name == bind_data->matrix_name) {
+		if (matrix.name == bind_data->obsm_varm_matrix_name) {
 			bind_data->matrix_rows = matrix.rows;
 			bind_data->matrix_cols = matrix.cols;
 			bind_data->row_count = matrix.rows;
@@ -320,7 +320,7 @@ unique_ptr<FunctionData> AnndataScanner::ObsmBind(ClientContext &context, TableF
 
 			// Add columns for each dimension
 			for (idx_t i = 0; i < matrix.cols; i++) {
-				names.push_back(bind_data->matrix_name + "_" + to_string(i));
+				names.push_back(bind_data->obsm_varm_matrix_name + "_" + to_string(i));
 				return_types.push_back(matrix.dtype);
 			}
 
@@ -334,7 +334,7 @@ unique_ptr<FunctionData> AnndataScanner::ObsmBind(ClientContext &context, TableF
 	}
 
 	if (!found) {
-		throw InvalidInputException("obsm matrix '%s' not found in file", bind_data->matrix_name.c_str());
+		throw InvalidInputException("obsm matrix '%s' not found in file", bind_data->obsm_varm_matrix_name.c_str());
 	}
 
 	return std::move(bind_data);
@@ -363,7 +363,7 @@ void AnndataScanner::ObsmScan(ClientContext &context, TableFunctionInput &data, 
 	// Read each column of the matrix
 	for (idx_t col = 0; col < bind_data.matrix_cols; col++) {
 		auto &vec = output.data[col + 1]; // +1 to skip obs_idx
-		gstate.h5_reader->ReadObsmMatrix(bind_data.matrix_name, gstate.current_row, count, col, vec);
+		gstate.h5_reader->ReadObsmMatrix(bind_data.obsm_varm_matrix_name, gstate.current_row, count, col, vec);
 	}
 
 	gstate.current_row += count;
@@ -379,7 +379,7 @@ unique_ptr<FunctionData> AnndataScanner::VarmBind(ClientContext &context, TableF
 	}
 
 	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
-	bind_data->matrix_name = input.inputs[1].GetValue<string>();
+	bind_data->obsm_varm_matrix_name = input.inputs[1].GetValue<string>();
 	bind_data->is_varm_scan = true;
 
 	if (!IsAnndataFile(bind_data->file_path)) {
@@ -398,7 +398,7 @@ unique_ptr<FunctionData> AnndataScanner::VarmBind(ClientContext &context, TableF
 	bool found = false;
 
 	for (const auto &matrix : matrices) {
-		if (matrix.name == bind_data->matrix_name) {
+		if (matrix.name == bind_data->obsm_varm_matrix_name) {
 			bind_data->matrix_rows = matrix.rows;
 			bind_data->matrix_cols = matrix.cols;
 			bind_data->row_count = matrix.rows;
@@ -409,7 +409,7 @@ unique_ptr<FunctionData> AnndataScanner::VarmBind(ClientContext &context, TableF
 
 			// Add columns for each dimension
 			for (idx_t i = 0; i < matrix.cols; i++) {
-				names.push_back(bind_data->matrix_name + "_" + to_string(i));
+				names.push_back(bind_data->obsm_varm_matrix_name + "_" + to_string(i));
 				return_types.push_back(matrix.dtype);
 			}
 
@@ -423,7 +423,7 @@ unique_ptr<FunctionData> AnndataScanner::VarmBind(ClientContext &context, TableF
 	}
 
 	if (!found) {
-		throw InvalidInputException("varm matrix '%s' not found in file", bind_data->matrix_name.c_str());
+		throw InvalidInputException("varm matrix '%s' not found in file", bind_data->obsm_varm_matrix_name.c_str());
 	}
 
 	return std::move(bind_data);
@@ -452,7 +452,7 @@ void AnndataScanner::VarmScan(ClientContext &context, TableFunctionInput &data, 
 	// Read each column of the matrix
 	for (idx_t col = 0; col < bind_data.matrix_cols; col++) {
 		auto &vec = output.data[col + 1]; // +1 to skip var_idx
-		gstate.h5_reader->ReadVarmMatrix(bind_data.matrix_name, gstate.current_row, count, col, vec);
+		gstate.h5_reader->ReadVarmMatrix(bind_data.obsm_varm_matrix_name, gstate.current_row, count, col, vec);
 	}
 
 	gstate.current_row += count;
@@ -762,6 +762,168 @@ void AnndataScanner::UnsScan(ClientContext &context, TableFunctionInput &data, D
 	output.SetCardinality(count);
 }
 
+// Table function implementations for obsp (observation pairwise matrices)
+unique_ptr<FunctionData> AnndataScanner::ObspBind(ClientContext &context, TableFunctionBindInput &input,
+                                                  vector<LogicalType> &return_types, vector<string> &names) {
+	// Validate input parameters
+	if (input.inputs.size() != 2) {
+		throw InvalidInputException("anndata_scan_obsp requires 2 parameters: file_path and matrix_name");
+	}
+	
+	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
+	bind_data->is_obsp_scan = true;
+	bind_data->pairwise_matrix_name = input.inputs[1].GetValue<string>();
+
+	if (!IsAnndataFile(bind_data->file_path)) {
+		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
+	}
+
+	// Open the HDF5 file to get matrix info
+	H5Reader reader(bind_data->file_path);
+
+	if (!reader.IsValidAnnData()) {
+		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
+	}
+
+	// Get sparse matrix info
+	try {
+		H5Reader::SparseMatrixInfo info = reader.GetObspMatrixInfo(bind_data->pairwise_matrix_name);
+		bind_data->nnz = info.nnz;
+		bind_data->row_count = info.nnz;  // We return one row per non-zero element
+	} catch (const InvalidInputException &e) {
+		// Matrix not found
+		bind_data->row_count = 0;
+		bind_data->nnz = 0;
+	}
+	
+	// Set up column schema
+	names.push_back("obs_idx_1");
+	return_types.push_back(LogicalType::BIGINT);
+	
+	names.push_back("obs_idx_2");
+	return_types.push_back(LogicalType::BIGINT);
+	
+	names.push_back("value");
+	return_types.push_back(LogicalType::FLOAT);
+
+	bind_data->column_count = names.size();
+	bind_data->column_names = names;
+	bind_data->column_types = return_types;
+
+	return std::move(bind_data);
+}
+
+void AnndataScanner::ObspScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
+	auto &bind_data = (AnndataBindData &)*data.bind_data;
+	auto &gstate = (AnndataGlobalState &)*data.global_state;
+
+	// Open file on first scan
+	if (!gstate.h5_reader) {
+		gstate.h5_reader = make_uniq<H5Reader>(bind_data.file_path);
+	}
+
+	if (bind_data.nnz == 0) {
+		// No data to return
+		return;
+	}
+
+	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
+	if (count == 0) {
+		return;
+	}
+
+	// Read sparse matrix triplets
+	auto &row_vec = output.data[0];
+	auto &col_vec = output.data[1];
+	auto &val_vec = output.data[2];
+	
+	gstate.h5_reader->ReadObspMatrix(bind_data.pairwise_matrix_name, row_vec, col_vec, val_vec, gstate.current_row, count);
+
+	gstate.current_row += count;
+	output.SetCardinality(count);
+}
+
+// Table function implementations for varp (variable pairwise matrices)
+unique_ptr<FunctionData> AnndataScanner::VarpBind(ClientContext &context, TableFunctionBindInput &input,
+                                                  vector<LogicalType> &return_types, vector<string> &names) {
+	// Validate input parameters
+	if (input.inputs.size() != 2) {
+		throw InvalidInputException("anndata_scan_varp requires 2 parameters: file_path and matrix_name");
+	}
+	
+	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
+	bind_data->is_varp_scan = true;
+	bind_data->pairwise_matrix_name = input.inputs[1].GetValue<string>();
+
+	if (!IsAnndataFile(bind_data->file_path)) {
+		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
+	}
+
+	// Open the HDF5 file to get matrix info
+	H5Reader reader(bind_data->file_path);
+
+	if (!reader.IsValidAnnData()) {
+		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
+	}
+
+	// Get sparse matrix info
+	try {
+		H5Reader::SparseMatrixInfo info = reader.GetVarpMatrixInfo(bind_data->pairwise_matrix_name);
+		bind_data->nnz = info.nnz;
+		bind_data->row_count = info.nnz;  // We return one row per non-zero element
+	} catch (const InvalidInputException &e) {
+		// Matrix not found
+		bind_data->row_count = 0;
+		bind_data->nnz = 0;
+	}
+	
+	// Set up column schema
+	names.push_back("var_idx_1");
+	return_types.push_back(LogicalType::BIGINT);
+	
+	names.push_back("var_idx_2");
+	return_types.push_back(LogicalType::BIGINT);
+	
+	names.push_back("value");
+	return_types.push_back(LogicalType::FLOAT);
+
+	bind_data->column_count = names.size();
+	bind_data->column_names = names;
+	bind_data->column_types = return_types;
+
+	return std::move(bind_data);
+}
+
+void AnndataScanner::VarpScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
+	auto &bind_data = (AnndataBindData &)*data.bind_data;
+	auto &gstate = (AnndataGlobalState &)*data.global_state;
+
+	// Open file on first scan
+	if (!gstate.h5_reader) {
+		gstate.h5_reader = make_uniq<H5Reader>(bind_data.file_path);
+	}
+
+	if (bind_data.nnz == 0) {
+		// No data to return
+		return;
+	}
+
+	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
+	if (count == 0) {
+		return;
+	}
+
+	// Read sparse matrix triplets
+	auto &row_vec = output.data[0];
+	auto &col_vec = output.data[1];
+	auto &val_vec = output.data[2];
+	
+	gstate.h5_reader->ReadVarpMatrix(bind_data.pairwise_matrix_name, row_vec, col_vec, val_vec, gstate.current_row, count);
+
+	gstate.current_row += count;
+	output.SetCardinality(count);
+}
+
 // Register the table functions
 void RegisterAnndataTableFunctions(DatabaseInstance &db) {
 	// Register anndata_scan_obs function
@@ -837,6 +999,20 @@ void RegisterAnndataTableFunctions(DatabaseInstance &db) {
 	                       AnndataInitGlobal, AnndataInitLocal);
 	uns_func.name = "anndata_scan_uns";
 	ExtensionUtil::RegisterFunction(db, uns_func);
+
+	// Register anndata_scan_obsp function
+	TableFunction obsp_func("anndata_scan_obsp", {LogicalType::VARCHAR, LogicalType::VARCHAR}, 
+	                        AnndataScanner::ObspScan, AnndataScanner::ObspBind,
+	                        AnndataInitGlobal, AnndataInitLocal);
+	obsp_func.name = "anndata_scan_obsp";
+	ExtensionUtil::RegisterFunction(db, obsp_func);
+
+	// Register anndata_scan_varp function
+	TableFunction varp_func("anndata_scan_varp", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                        AnndataScanner::VarpScan, AnndataScanner::VarpBind,
+	                        AnndataInitGlobal, AnndataInitLocal);
+	varp_func.name = "anndata_scan_varp";
+	ExtensionUtil::RegisterFunction(db, varp_func);
 
 	// Register anndata_info function (scalar function)
 	auto info_func = ScalarFunction(

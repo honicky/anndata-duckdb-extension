@@ -49,12 +49,21 @@ public:
 	                                        vector<LogicalType> &return_types, vector<string> &names);
 	static void UnsScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
+	// Table functions for scanning obsp/varp (pairwise matrices)
+	static unique_ptr<FunctionData> ObspBind(ClientContext &context, TableFunctionBindInput &input,
+	                                         vector<LogicalType> &return_types, vector<string> &names);
+	static void ObspScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
+
+	static unique_ptr<FunctionData> VarpBind(ClientContext &context, TableFunctionBindInput &input,
+	                                         vector<LogicalType> &return_types, vector<string> &names);
+	static void VarpScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
+
 	// Utility functions
 	static bool IsAnndataFile(const string &path);
 	static string GetAnndataInfo(const string &path);
 };
 
-// Bind data for table functions
+// Bind data for table functions  
 struct AnndataBindData : public TableFunctionData {
 	string file_path;
 	idx_t row_count;
@@ -73,7 +82,7 @@ struct AnndataBindData : public TableFunctionData {
 	// For obsm/varm matrix scanning
 	bool is_obsm_scan = false;
 	bool is_varm_scan = false;
-	string matrix_name;
+	string obsm_varm_matrix_name;
 	idx_t matrix_rows = 0;
 	idx_t matrix_cols = 0;
 
@@ -84,6 +93,12 @@ struct AnndataBindData : public TableFunctionData {
 	// For uns scanning
 	bool is_uns_scan = false;
 	vector<H5Reader::UnsInfo> uns_keys;
+
+	// For obsp/varp scanning
+	bool is_obsp_scan = false;
+	bool is_varp_scan = false;
+	string pairwise_matrix_name;
+	idx_t nnz = 0;  // number of non-zero elements
 
 	AnndataBindData(const string &path) : file_path(path), row_count(0), column_count(0) {
 	}

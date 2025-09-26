@@ -99,4 +99,27 @@ anndata_duckdb/
    - For WASM builds, test locally if possible: `VCPKG_TOOLCHAIN_PATH="" make wasm_mvp`
 
 Only commit and push after all checks pass locally. The CI/CD pipeline will fail if format or tidy checks don't pass.
+
+## Version Management
+
+**IMPORTANT**: Use the `scripts/bump_version.py` script to update the version number:
+
+```bash
+# Bump patch version (e.g., 0.1.0 -> 0.1.1)
+uv run python scripts/bump_version.py patch
+
+# Bump minor version (e.g., 0.1.0 -> 0.2.0)
+uv run python scripts/bump_version.py minor
+
+# Bump major version (e.g., 0.1.0 -> 1.0.0)
+uv run python scripts/bump_version.py major
+
+# Set a specific version
+uv run python scripts/bump_version.py set 0.3.0
+```
+
+The script will automatically update the VERSION file. Remember to also:
+1. Update the CHANGELOG.md with the new version and list of changes
+2. Commit both VERSION and CHANGELOG.md together with your feature changes
+
 - use uv run for all python actions

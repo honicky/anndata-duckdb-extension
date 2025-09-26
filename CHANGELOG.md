@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2025-09-25
+
+### Added
+- Support for obsp (observation pairwise) matrices via `anndata_scan_obsp` table function
+- Support for varp (variable pairwise) matrices via `anndata_scan_varp` table function
+- H5Reader methods for reading sparse CSR matrices from obsp/varp data
+- Test coverage for obsp/varp functionality
+
+### Changed
+- Extended AnnDataScanner to handle pairwise matrix data structures
+
+### Fixed
+- Struct inheritance issues in ObspScanFunction and VarpScanFunction classes
+
 ## [0.3.11] - 2025-09-22
 
 ### Fixed
