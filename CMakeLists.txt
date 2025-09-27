@@ -23,6 +23,9 @@ configure_file(
 include_directories(src/include)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/src/include)
 
+# Option to use HDF5 C API instead of C++ API
+option(USE_HDF5_C_API "Use HDF5 C API instead of C++ API (enables thread-safe mode)" OFF)
+
 # Find HDF5 - use h5wasm for WASM builds, native HDF5 for others
 if(EMSCRIPTEN)
     # For WASM builds, use prebuilt h5wasm libraries
