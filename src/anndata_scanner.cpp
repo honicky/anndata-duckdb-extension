@@ -27,7 +27,7 @@ string AnndataScanner::GetAnndataInfo(const string &path) {
 		throw InvalidInputException("File is not a valid AnnData file: " + path);
 	}
 
-	H5Reader reader(path);
+	H5ReaderNew reader(path);
 	std::stringstream info;
 
 	info << "AnnData file: " << path << "\n";
@@ -86,7 +86,7 @@ unique_ptr<FunctionData> AnndataScanner::ObsBind(ClientContext &context, TableFu
 	}
 
 	// Open the HDF5 file to get schema
-	H5Reader reader(bind_data->file_path);
+	H5ReaderNew reader(bind_data->file_path);
 
 	if (!reader.IsValidAnnData()) {
 		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
@@ -118,7 +118,7 @@ void AnndataScanner::ObsScan(ClientContext &context, TableFunctionInput &data, D
 
 	// Open file on first scan
 	if (!gstate.h5_reader) {
-		gstate.h5_reader = make_uniq<H5Reader>(bind_data.file_path);
+		gstate.h5_reader = make_uniq<H5ReaderNew>(bind_data.file_path);
 	}
 
 	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
@@ -147,7 +147,7 @@ unique_ptr<FunctionData> AnndataScanner::VarBind(ClientContext &context, TableFu
 	}
 
 	// Open the HDF5 file to get schema
-	H5Reader reader(bind_data->file_path);
+	H5ReaderNew reader(bind_data->file_path);
 
 	if (!reader.IsValidAnnData()) {
 		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
@@ -179,7 +179,7 @@ void AnndataScanner::VarScan(ClientContext &context, TableFunctionInput &data, D
 
 	// Open file on first scan
 	if (!gstate.h5_reader) {
-		gstate.h5_reader = make_uniq<H5Reader>(bind_data.file_path);
+		gstate.h5_reader = make_uniq<H5ReaderNew>(bind_data.file_path);
 	}
 
 	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
@@ -224,7 +224,7 @@ unique_ptr<FunctionData> AnndataScanner::XBind(ClientContext &context, TableFunc
 	}
 
 	// Open the HDF5 file to get schema
-	H5Reader reader(bind_data->file_path);
+	H5ReaderNew reader(bind_data->file_path);
 
 	if (!reader.IsValidAnnData()) {
 		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
@@ -264,7 +264,7 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 
 	// Open file on first scan
 	if (!gstate.h5_reader) {
-		gstate.h5_reader = make_uniq<H5Reader>(bind_data.file_path);
+		gstate.h5_reader = make_uniq<H5ReaderNew>(bind_data.file_path);
 	}
 
 	// Calculate how many observations to read
@@ -298,7 +298,7 @@ unique_ptr<FunctionData> AnndataScanner::ObsmBind(ClientContext &context, TableF
 	}
 
 	// Open the HDF5 file to get schema
-	H5Reader reader(bind_data->file_path);
+	H5ReaderNew reader(bind_data->file_path);
 
 	if (!reader.IsValidAnnData()) {
 		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
@@ -346,7 +346,7 @@ void AnndataScanner::ObsmScan(ClientContext &context, TableFunctionInput &data, 
 
 	// Open file on first scan
 	if (!gstate.h5_reader) {
-		gstate.h5_reader = make_uniq<H5Reader>(bind_data.file_path);
+		gstate.h5_reader = make_uniq<H5ReaderNew>(bind_data.file_path);
 	}
 
 	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
@@ -387,7 +387,7 @@ unique_ptr<FunctionData> AnndataScanner::VarmBind(ClientContext &context, TableF
 	}
 
 	// Open the HDF5 file to get schema
-	H5Reader reader(bind_data->file_path);
+	H5ReaderNew reader(bind_data->file_path);
 
 	if (!reader.IsValidAnnData()) {
 		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
@@ -435,7 +435,7 @@ void AnndataScanner::VarmScan(ClientContext &context, TableFunctionInput &data, 
 
 	// Open file on first scan
 	if (!gstate.h5_reader) {
-		gstate.h5_reader = make_uniq<H5Reader>(bind_data.file_path);
+		gstate.h5_reader = make_uniq<H5ReaderNew>(bind_data.file_path);
 	}
 
 	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
@@ -478,12 +478,12 @@ unique_ptr<FunctionData> AnndataScanner::LayerBind(ClientContext &context, Table
 	result->layer_name = input.inputs[1].GetValue<string>();
 
 	// Open file to get layer information
-	H5Reader reader(result->file_path);
+	H5ReaderNew reader(result->file_path);
 	auto layers = reader.GetLayers();
 
 	// Find the requested layer
 	bool found = false;
-	H5Reader::LayerInfo layer_info;
+	H5ReaderNew::LayerInfo layer_info;
 	for (const auto &layer : layers) {
 		if (layer.name == result->layer_name) {
 			layer_info = layer;
@@ -583,7 +583,7 @@ void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data,
 
 	// Initialize h5_reader if not already done
 	if (!state.h5_reader) {
-		state.h5_reader = make_uniq<H5Reader>(bind_data.file_path);
+		state.h5_reader = make_uniq<H5ReaderNew>(bind_data.file_path);
 	}
 
 	// Calculate how many rows to read
@@ -621,7 +621,7 @@ unique_ptr<FunctionData> AnndataScanner::UnsBind(ClientContext &context, TableFu
 	}
 
 	// Open the HDF5 file to get uns keys
-	H5Reader reader(bind_data->file_path);
+	H5ReaderNew reader(bind_data->file_path);
 
 	if (!reader.IsValidAnnData()) {
 		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
@@ -668,7 +668,7 @@ void AnndataScanner::UnsScan(ClientContext &context, TableFunctionInput &data, D
 
 	// Open file on first scan
 	if (!gstate.h5_reader) {
-		gstate.h5_reader = make_uniq<H5Reader>(bind_data.file_path);
+		gstate.h5_reader = make_uniq<H5ReaderNew>(bind_data.file_path);
 	}
 
 	if (bind_data.uns_keys.empty()) {
@@ -779,7 +779,7 @@ unique_ptr<FunctionData> AnndataScanner::ObspBind(ClientContext &context, TableF
 	}
 
 	// Open the HDF5 file to get matrix info
-	H5Reader reader(bind_data->file_path);
+	H5ReaderNew reader(bind_data->file_path);
 
 	if (!reader.IsValidAnnData()) {
 		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
@@ -787,7 +787,7 @@ unique_ptr<FunctionData> AnndataScanner::ObspBind(ClientContext &context, TableF
 
 	// Get sparse matrix info
 	try {
-		H5Reader::SparseMatrixInfo info = reader.GetObspMatrixInfo(bind_data->pairwise_matrix_name);
+		H5ReaderNew::SparseMatrixInfo info = reader.GetObspMatrixInfo(bind_data->pairwise_matrix_name);
 		bind_data->nnz = info.nnz;
 		bind_data->row_count = info.nnz; // We return one row per non-zero element
 	} catch (const InvalidInputException &e) {
@@ -819,7 +819,7 @@ void AnndataScanner::ObspScan(ClientContext &context, TableFunctionInput &data, 
 
 	// Open file on first scan
 	if (!gstate.h5_reader) {
-		gstate.h5_reader = make_uniq<H5Reader>(bind_data.file_path);
+		gstate.h5_reader = make_uniq<H5ReaderNew>(bind_data.file_path);
 	}
 
 	if (bind_data.nnz == 0) {
@@ -861,7 +861,7 @@ unique_ptr<FunctionData> AnndataScanner::VarpBind(ClientContext &context, TableF
 	}
 
 	// Open the HDF5 file to get matrix info
-	H5Reader reader(bind_data->file_path);
+	H5ReaderNew reader(bind_data->file_path);
 
 	if (!reader.IsValidAnnData()) {
 		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
@@ -869,7 +869,7 @@ unique_ptr<FunctionData> AnndataScanner::VarpBind(ClientContext &context, TableF
 
 	// Get sparse matrix info
 	try {
-		H5Reader::SparseMatrixInfo info = reader.GetVarpMatrixInfo(bind_data->pairwise_matrix_name);
+		H5ReaderNew::SparseMatrixInfo info = reader.GetVarpMatrixInfo(bind_data->pairwise_matrix_name);
 		bind_data->nnz = info.nnz;
 		bind_data->row_count = info.nnz; // We return one row per non-zero element
 	} catch (const InvalidInputException &e) {
@@ -901,7 +901,7 @@ void AnndataScanner::VarpScan(ClientContext &context, TableFunctionInput &data, 
 
 	// Open file on first scan
 	if (!gstate.h5_reader) {
-		gstate.h5_reader = make_uniq<H5Reader>(bind_data.file_path);
+		gstate.h5_reader = make_uniq<H5ReaderNew>(bind_data.file_path);
 	}
 
 	if (bind_data.nnz == 0) {
@@ -964,7 +964,7 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 	// Initialize H5Reader if not already done
 	if (!gstate.h5_reader) {
 		try {
-			gstate.h5_reader = make_uniq<H5Reader>(bind_data.file_path);
+			gstate.h5_reader = make_uniq<H5ReaderNew>(bind_data.file_path);
 		} catch (const std::exception &e) {
 			throw InvalidInputException("Failed to open AnnData file '%s': %s", bind_data.file_path.c_str(), e.what());
 		} catch (...) {

@@ -342,6 +342,74 @@ public:
 	bool is_valid() const { return id >= 0; }
 };
 
+// Alias for backward compatibility - H5TypeHandle is used in h5_reader_new.cpp  
+class H5TypeHandle {
+private:
+	hid_t id;
+	bool should_close;
+	
+public:
+	enum class TypeClass {
+		DATASET,
+		ATTRIBUTE
+	};
+	
+	// Default constructor
+	H5TypeHandle() : id(-1), should_close(true) {}
+	
+	// Constructor that gets datatype from dataset or attribute
+	H5TypeHandle(hid_t obj_id, TypeClass type_class) : id(-1), should_close(true) {
+		if (type_class == TypeClass::DATASET) {
+			// Get type from dataset
+			id = H5Dget_type(obj_id);
+			if (id < 0) {
+				throw std::runtime_error("Failed to get HDF5 datatype from dataset");
+			}
+		} else if (type_class == TypeClass::ATTRIBUTE) {
+			// Get type from attribute
+			id = H5Aget_type(obj_id);
+			if (id < 0) {
+				throw std::runtime_error("Failed to get HDF5 datatype from attribute");
+			}
+		}
+	}
+	
+	~H5TypeHandle() {
+		if (id >= 0 && should_close) {
+			H5Tclose(id);
+		}
+	}
+	
+	// Move constructor
+	H5TypeHandle(H5TypeHandle &&other) noexcept 
+		: id(other.id), should_close(other.should_close) {
+		other.id = -1;
+		other.should_close = false;
+	}
+	
+	// Move assignment
+	H5TypeHandle& operator=(H5TypeHandle &&other) noexcept {
+		if (this != &other) {
+			if (id >= 0 && should_close) {
+				H5Tclose(id);
+			}
+			id = other.id;
+			should_close = other.should_close;
+			other.id = -1;
+			other.should_close = false;
+		}
+		return *this;
+	}
+	
+	// Delete copy constructor and assignment
+	H5TypeHandle(const H5TypeHandle&) = delete;
+	H5TypeHandle& operator=(const H5TypeHandle&) = delete;
+	
+	operator hid_t() const { return id; }
+	hid_t get() const { return id; }
+	bool is_valid() const { return id >= 0; }
+};
+
 // RAII wrapper for HDF5 attribute handle
 class H5AttributeHandle {
 private:

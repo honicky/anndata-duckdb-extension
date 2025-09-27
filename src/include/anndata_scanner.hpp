@@ -3,14 +3,14 @@
 #include "duckdb.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/common/file_system.hpp"
-#include "h5_reader.hpp"
+#include "h5_reader_new.hpp"
 #include <string>
 #include <memory>
 
 namespace duckdb {
 
 // Forward declaration
-class H5Reader;
+class H5ReaderNew;
 
 class AnndataScanner {
 public:
@@ -97,7 +97,7 @@ struct AnndataBindData : public TableFunctionData {
 
 	// For uns scanning
 	bool is_uns_scan = false;
-	vector<H5Reader::UnsInfo> uns_keys;
+	vector<H5ReaderNew::UnsInfo> uns_keys;
 
 	// For obsp/varp scanning
 	bool is_obsp_scan = false;
@@ -115,7 +115,7 @@ struct AnndataBindData : public TableFunctionData {
 // Global scan state
 struct AnndataGlobalState : public GlobalTableFunctionState {
 	idx_t current_row;
-	unique_ptr<H5Reader> h5_reader;
+	unique_ptr<H5ReaderNew> h5_reader;
 
 	AnndataGlobalState() : current_row(0) {
 	}
