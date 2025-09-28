@@ -82,7 +82,7 @@ set(EXTENSION_SOURCES
     src/anndata_extension.cpp
     src/anndata_scanner.cpp
     src/h5_reader.cpp
-    src/h5_reader_new.cpp
+    src/h5_reader_multithreaded.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})

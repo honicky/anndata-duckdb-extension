@@ -1,4 +1,4 @@
-#include "include/h5_reader_new.hpp"
+#include "include/h5_reader_multithreaded.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include <cstring>
@@ -11,7 +11,7 @@ namespace duckdb {
 // Phase 2: Core Infrastructure - Constructor/Destructor and Helper Methods
 // ============================================================================
 
-H5ReaderNew::H5ReaderNew(const std::string &file_path) : file_path(file_path), file() {
+H5ReaderMultithreaded::H5ReaderMultithreaded(const std::string &file_path) : file_path(file_path), file() {
 	// Turn off HDF5 error printing (only needs to be done once per process)
 	static bool error_printing_disabled = false;
 	if (!error_printing_disabled) {
@@ -28,12 +28,12 @@ H5ReaderNew::H5ReaderNew(const std::string &file_path) : file_path(file_path), f
 	}
 }
 
-H5ReaderNew::~H5ReaderNew() {
+H5ReaderMultithreaded::~H5ReaderMultithreaded() {
 	// Destructor automatically handled by H5FileHandle RAII
 }
 
 // Helper method to check if a group exists
-bool H5ReaderNew::IsGroupPresent(const std::string &group_name) {
+bool H5ReaderMultithreaded::IsGroupPresent(const std::string &group_name) {
 	if (!H5LinkExists(file.get(), group_name)) {
 		return false;
 	}
@@ -43,7 +43,7 @@ bool H5ReaderNew::IsGroupPresent(const std::string &group_name) {
 }
 
 // Helper method to check if a dataset exists within a group
-bool H5ReaderNew::IsDatasetPresent(const std::string &group_name, const std::string &dataset_name) {
+bool H5ReaderMultithreaded::IsDatasetPresent(const std::string &group_name, const std::string &dataset_name) {
 	// First check if the group exists
 	if (!IsGroupPresent(group_name)) {
 		return false;
@@ -75,7 +75,7 @@ static herr_t group_iterate_callback(hid_t group_id, const char *name, const H5L
 }
 
 // Helper method to get all members of a group
-std::vector<std::string> H5ReaderNew::GetGroupMembers(const std::string &group_name) {
+std::vector<std::string> H5ReaderMultithreaded::GetGroupMembers(const std::string &group_name) {
 	std::vector<std::string> members;
 	
 	try {
@@ -94,7 +94,7 @@ std::vector<std::string> H5ReaderNew::GetGroupMembers(const std::string &group_n
 }
 
 // Helper method to convert HDF5 type to DuckDB type
-LogicalType H5ReaderNew::H5TypeToDuckDBType(hid_t h5_type) {
+LogicalType H5ReaderMultithreaded::H5TypeToDuckDBType(hid_t h5_type) {
 	H5T_class_t type_class = H5Tget_class(h5_type);
 	
 	switch (type_class) {
@@ -132,14 +132,14 @@ LogicalType H5ReaderNew::H5TypeToDuckDBType(hid_t h5_type) {
 }
 
 // Check if file is valid AnnData format
-bool H5ReaderNew::IsValidAnnData() {
+bool H5ReaderMultithreaded::IsValidAnnData() {
 	// Check for required groups: /obs, /var, and either /X group or dataset
 	return IsGroupPresent("/obs") && IsGroupPresent("/var") && 
 	       (IsGroupPresent("/X") || H5LinkExists(file.get(), "/X"));
 }
 
 // Get number of observations (cells)
-size_t H5ReaderNew::GetObsCount() {
+size_t H5ReaderMultithreaded::GetObsCount() {
 	try {
 		// Try to get shape from obs/_index first (standard location)
 		if (IsDatasetPresent("/obs", "_index")) {
@@ -201,7 +201,7 @@ size_t H5ReaderNew::GetObsCount() {
 }
 
 // Get number of variables (genes)
-size_t H5ReaderNew::GetVarCount() {
+size_t H5ReaderMultithreaded::GetVarCount() {
 	try {
 		// Try to get shape from var/_index first (standard location)
 		if (IsDatasetPresent("/var", "_index")) {
@@ -268,7 +268,7 @@ size_t H5ReaderNew::GetVarCount() {
 // Stub implementations for remaining methods (to be implemented in later phases)
 // ============================================================================
 
-std::vector<H5ReaderNew::ColumnInfo> H5ReaderNew::GetObsColumns() {
+std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetObsColumns() {
 	std::vector<ColumnInfo> columns;
 	std::unordered_set<std::string> seen_names;
 	
@@ -350,7 +350,7 @@ std::vector<H5ReaderNew::ColumnInfo> H5ReaderNew::GetObsColumns() {
 	return columns;
 }
 
-std::vector<H5ReaderNew::ColumnInfo> H5ReaderNew::GetVarColumns() {
+std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetVarColumns() {
 	std::vector<ColumnInfo> columns;
 	std::unordered_set<std::string> seen_names;
 	
@@ -432,7 +432,7 @@ std::vector<H5ReaderNew::ColumnInfo> H5ReaderNew::GetVarColumns() {
 	return columns;
 }
 
-void H5ReaderNew::ReadObsColumn(const std::string &column_name, Vector &result, idx_t offset, idx_t count) {
+void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector &result, idx_t offset, idx_t count) {
 	try {
 		// Handle obs_idx column (row index)
 		if (column_name == "obs_idx") {
@@ -609,7 +609,7 @@ void H5ReaderNew::ReadObsColumn(const std::string &column_name, Vector &result, 
 	}
 }
 
-void H5ReaderNew::ReadVarColumn(const std::string &column_name, Vector &result, idx_t offset, idx_t count) {
+void H5ReaderMultithreaded::ReadVarColumn(const std::string &column_name, Vector &result, idx_t offset, idx_t count) {
 	try {
 		// Handle var_idx column (row index)
 		if (column_name == "var_idx") {
@@ -785,7 +785,7 @@ void H5ReaderNew::ReadVarColumn(const std::string &column_name, Vector &result, 
 	}
 }
 
-std::string H5ReaderNew::ReadVarColumnString(const std::string &column_name, idx_t index) {
+std::string H5ReaderMultithreaded::ReadVarColumnString(const std::string &column_name, idx_t index) {
 	try {
 		// Special handling for var_idx
 		if (column_name == "var_idx") {
@@ -805,12 +805,12 @@ std::string H5ReaderNew::ReadVarColumnString(const std::string &column_name, idx
 	}
 }
 
-std::string H5ReaderNew::GetCategoricalValue(const std::string &group_path, const std::string &column_name, idx_t index) {
+std::string H5ReaderMultithreaded::GetCategoricalValue(const std::string &group_path, const std::string &column_name, idx_t index) {
 	// TODO: Implement in Phase 6
 	return "";
 }
 
-H5ReaderNew::XMatrixInfo H5ReaderNew::GetXMatrixInfo() {
+H5ReaderMultithreaded::XMatrixInfo H5ReaderMultithreaded::GetXMatrixInfo() {
 	XMatrixInfo info;
 	info.n_obs = GetObsCount();
 	info.n_var = GetVarCount();
@@ -864,7 +864,7 @@ static bool H5AttributeExists(hid_t loc_id, const std::string &obj_name, const s
 	}
 }
 
-std::vector<std::string> H5ReaderNew::GetVarNames(const std::string &column_name) {
+std::vector<std::string> H5ReaderMultithreaded::GetVarNames(const std::string &column_name) {
 	std::vector<std::string> names;
 	try {
 		auto var_count = GetVarCount();
@@ -963,12 +963,12 @@ std::vector<std::string> H5ReaderNew::GetVarNames(const std::string &column_name
 	return names;
 }
 
-void H5ReaderNew::ReadXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count, std::vector<double> &values) {
+void H5ReaderMultithreaded::ReadXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count, std::vector<double> &values) {
 	// TODO: Implement in Phase 4
 	throw NotImplementedException("ReadXMatrix not yet implemented in C API version");
 }
 
-void H5ReaderNew::ReadXMatrixBatch(idx_t row_start, idx_t row_count, idx_t col_start, idx_t col_count, DataChunk &output) {
+void H5ReaderMultithreaded::ReadXMatrixBatch(idx_t row_start, idx_t row_count, idx_t col_start, idx_t col_count, DataChunk &output) {
 	try {
 		auto x_info = GetXMatrixInfo();
 		
@@ -1009,39 +1009,24 @@ void H5ReaderNew::ReadXMatrixBatch(idx_t row_start, idx_t row_count, idx_t col_s
 		std::vector<double> buffer(row_count * col_count);
 		H5Dread(dataset.get(), H5T_NATIVE_DOUBLE, mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
 		
-		// Fill output DataChunk
-		// The output should have columns: obs_id, var_id, var_name, value
-		output.SetCardinality(row_count * col_count);
+		// Fill output DataChunk in WIDE format
+		// The output should have columns: obs_idx + one column per gene
+		// First column is obs_idx, rest are gene values
+		output.SetCardinality(row_count);
 		
-		auto &obs_id_vec = output.data[0];
-		auto &var_id_vec = output.data[1];
-		auto &var_name_vec = output.data[2];
-		auto &value_vec = output.data[3];
-		
-		// Get var names for this batch
-		auto all_var_names = GetVarNames("");
-		
-		idx_t out_idx = 0;
+		// Set obs_idx column (first column)
+		auto &obs_idx_vec = output.data[0];
 		for (idx_t row = 0; row < row_count; row++) {
-			for (idx_t col = 0; col < col_count; col++) {
-				idx_t global_row = row_start + row;
-				idx_t global_col = col_start + col;
-				
-				obs_id_vec.SetValue(out_idx, Value::BIGINT(global_row));
-				var_id_vec.SetValue(out_idx, Value::BIGINT(global_col));
-				
-				// Set var name if available
-				if (global_col < all_var_names.size()) {
-					var_name_vec.SetValue(out_idx, Value(all_var_names[global_col]));
-				} else {
-					var_name_vec.SetValue(out_idx, Value("var_" + std::to_string(global_col)));
-				}
-				
+			obs_idx_vec.SetValue(row, Value::BIGINT(row_start + row));
+		}
+		
+		// Set gene value columns (one column per gene)
+		for (idx_t col = 0; col < col_count; col++) {
+			auto &gene_vec = output.data[col + 1]; // +1 because first column is obs_idx
+			for (idx_t row = 0; row < row_count; row++) {
 				// Set value from buffer (row-major layout)
 				double val = buffer[row * col_count + col];
-				value_vec.SetValue(out_idx, Value::DOUBLE(val));
-				
-				out_idx++;
+				gene_vec.SetValue(row, Value::DOUBLE(val));
 			}
 		}
 	} catch (const std::exception &e) {
@@ -1049,119 +1034,119 @@ void H5ReaderNew::ReadXMatrixBatch(idx_t row_start, idx_t row_count, idx_t col_s
 	}
 }
 
-H5ReaderNew::SparseMatrixData H5ReaderNew::ReadSparseXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
+H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
 	// TODO: Implement in Phase 5
 	SparseMatrixData data;
 	return data;
 }
 
-H5ReaderNew::SparseMatrixData H5ReaderNew::ReadSparseXMatrixCSR(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
+H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseXMatrixCSR(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
 	// TODO: Implement in Phase 5
 	SparseMatrixData data;
 	return data;
 }
 
-H5ReaderNew::SparseMatrixData H5ReaderNew::ReadSparseXMatrixCSC(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
+H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseXMatrixCSC(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
 	// TODO: Implement in Phase 5
 	SparseMatrixData data;
 	return data;
 }
 
-std::vector<H5ReaderNew::MatrixInfo> H5ReaderNew::GetObsmMatrices() {
+std::vector<H5ReaderMultithreaded::MatrixInfo> H5ReaderMultithreaded::GetObsmMatrices() {
 	// TODO: Implement in Phase 6
 	std::vector<MatrixInfo> matrices;
 	return matrices;
 }
 
-std::vector<H5ReaderNew::MatrixInfo> H5ReaderNew::GetVarmMatrices() {
+std::vector<H5ReaderMultithreaded::MatrixInfo> H5ReaderMultithreaded::GetVarmMatrices() {
 	// TODO: Implement in Phase 6
 	std::vector<MatrixInfo> matrices;
 	return matrices;
 }
 
-void H5ReaderNew::ReadObsmMatrix(const std::string &matrix_name, idx_t row_start, idx_t row_count, idx_t col_idx, Vector &result) {
+void H5ReaderMultithreaded::ReadObsmMatrix(const std::string &matrix_name, idx_t row_start, idx_t row_count, idx_t col_idx, Vector &result) {
 	// TODO: Implement in Phase 6
 	throw NotImplementedException("ReadObsmMatrix not yet implemented in C API version");
 }
 
-void H5ReaderNew::ReadVarmMatrix(const std::string &matrix_name, idx_t row_start, idx_t row_count, idx_t col_idx, Vector &result) {
+void H5ReaderMultithreaded::ReadVarmMatrix(const std::string &matrix_name, idx_t row_start, idx_t row_count, idx_t col_idx, Vector &result) {
 	// TODO: Implement in Phase 6
 	throw NotImplementedException("ReadVarmMatrix not yet implemented in C API version");
 }
 
-std::vector<H5ReaderNew::LayerInfo> H5ReaderNew::GetLayers() {
+std::vector<H5ReaderMultithreaded::LayerInfo> H5ReaderMultithreaded::GetLayers() {
 	// TODO: Implement in Phase 6
 	std::vector<LayerInfo> layers;
 	return layers;
 }
 
-void H5ReaderNew::ReadLayerMatrix(const std::string &layer_name, idx_t row_idx, idx_t start_col, idx_t count, DataChunk &output, const std::vector<std::string> &var_names) {
+void H5ReaderMultithreaded::ReadLayerMatrix(const std::string &layer_name, idx_t row_idx, idx_t start_col, idx_t count, DataChunk &output, const std::vector<std::string> &var_names) {
 	// TODO: Implement in Phase 6
 	throw NotImplementedException("ReadLayerMatrix not yet implemented in C API version");
 }
 
-void H5ReaderNew::ReadLayerMatrixBatch(const std::string &layer_name, idx_t row_start, idx_t row_count, idx_t col_start, idx_t col_count, DataChunk &output) {
+void H5ReaderMultithreaded::ReadLayerMatrixBatch(const std::string &layer_name, idx_t row_start, idx_t row_count, idx_t col_start, idx_t col_count, DataChunk &output) {
 	// TODO: Implement in Phase 6
 	throw NotImplementedException("ReadLayerMatrixBatch not yet implemented in C API version");
 }
 
-void H5ReaderNew::ReadMatrixBatch(const std::string &path, idx_t row_start, idx_t row_count, idx_t col_start, idx_t col_count, DataChunk &output, bool is_layer) {
+void H5ReaderMultithreaded::ReadMatrixBatch(const std::string &path, idx_t row_start, idx_t row_count, idx_t col_start, idx_t col_count, DataChunk &output, bool is_layer) {
 	// TODO: Implement in Phase 4
 	throw NotImplementedException("ReadMatrixBatch not yet implemented in C API version");
 }
 
-std::vector<H5ReaderNew::UnsInfo> H5ReaderNew::GetUnsKeys() {
+std::vector<H5ReaderMultithreaded::UnsInfo> H5ReaderMultithreaded::GetUnsKeys() {
 	// TODO: Implement in Phase 6
 	std::vector<UnsInfo> keys;
 	return keys;
 }
 
-Value H5ReaderNew::ReadUnsScalar(const std::string &key) {
+Value H5ReaderMultithreaded::ReadUnsScalar(const std::string &key) {
 	// TODO: Implement in Phase 6
 	return Value();
 }
 
-void H5ReaderNew::ReadUnsArray(const std::string &key, Vector &result, idx_t offset, idx_t count) {
+void H5ReaderMultithreaded::ReadUnsArray(const std::string &key, Vector &result, idx_t offset, idx_t count) {
 	// TODO: Implement in Phase 6
 	throw NotImplementedException("ReadUnsArray not yet implemented in C API version");
 }
 
-std::vector<std::string> H5ReaderNew::GetObspKeys() {
+std::vector<std::string> H5ReaderMultithreaded::GetObspKeys() {
 	// TODO: Implement in Phase 6
 	std::vector<std::string> keys;
 	return keys;
 }
 
-std::vector<std::string> H5ReaderNew::GetVarpKeys() {
+std::vector<std::string> H5ReaderMultithreaded::GetVarpKeys() {
 	// TODO: Implement in Phase 6
 	std::vector<std::string> keys;
 	return keys;
 }
 
-H5ReaderNew::SparseMatrixInfo H5ReaderNew::GetObspMatrixInfo(const std::string &key) {
+H5ReaderMultithreaded::SparseMatrixInfo H5ReaderMultithreaded::GetObspMatrixInfo(const std::string &key) {
 	// TODO: Implement in Phase 6
 	SparseMatrixInfo info;
 	return info;
 }
 
-H5ReaderNew::SparseMatrixInfo H5ReaderNew::GetVarpMatrixInfo(const std::string &key) {
+H5ReaderMultithreaded::SparseMatrixInfo H5ReaderMultithreaded::GetVarpMatrixInfo(const std::string &key) {
 	// TODO: Implement in Phase 6
 	SparseMatrixInfo info;
 	return info;
 }
 
-void H5ReaderNew::ReadObspMatrix(const std::string &key, Vector &row_result, Vector &col_result, Vector &value_result, idx_t offset, idx_t count) {
+void H5ReaderMultithreaded::ReadObspMatrix(const std::string &key, Vector &row_result, Vector &col_result, Vector &value_result, idx_t offset, idx_t count) {
 	// TODO: Implement in Phase 6
 	throw NotImplementedException("ReadObspMatrix not yet implemented in C API version");
 }
 
-void H5ReaderNew::ReadVarpMatrix(const std::string &key, Vector &row_result, Vector &col_result, Vector &value_result, idx_t offset, idx_t count) {
+void H5ReaderMultithreaded::ReadVarpMatrix(const std::string &key, Vector &row_result, Vector &col_result, Vector &value_result, idx_t offset, idx_t count) {
 	// TODO: Implement in Phase 6
 	throw NotImplementedException("ReadVarpMatrix not yet implemented in C API version");
 }
 
 // Static helper methods
-void H5ReaderNew::SetTypedValue(Vector &vec, idx_t row, double value) {
+void H5ReaderMultithreaded::SetTypedValue(Vector &vec, idx_t row, double value) {
 	switch (vec.GetType().id()) {
 	case LogicalTypeId::TINYINT:
 		vec.SetValue(row, Value::TINYINT(static_cast<int8_t>(value)));
@@ -1187,7 +1172,7 @@ void H5ReaderNew::SetTypedValue(Vector &vec, idx_t row, double value) {
 	}
 }
 
-void H5ReaderNew::InitializeZeros(Vector &vec, idx_t count) {
+void H5ReaderMultithreaded::InitializeZeros(Vector &vec, idx_t count) {
 	switch (vec.GetType().id()) {
 	case LogicalTypeId::TINYINT:
 		for (idx_t i = 0; i < count; i++) {
@@ -1227,25 +1212,25 @@ void H5ReaderNew::InitializeZeros(Vector &vec, idx_t count) {
 	}
 }
 
-H5ReaderNew::SparseMatrixData H5ReaderNew::ReadSparseMatrixAtPath(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
+H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseMatrixAtPath(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
 	// TODO: Implement in Phase 5
 	SparseMatrixData data;
 	return data;
 }
 
-H5ReaderNew::SparseMatrixData H5ReaderNew::ReadSparseMatrixCSR(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
+H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseMatrixCSR(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
 	// TODO: Implement in Phase 5
 	SparseMatrixData data;
 	return data;
 }
 
-H5ReaderNew::SparseMatrixData H5ReaderNew::ReadSparseMatrixCSC(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
+H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseMatrixCSC(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
 	// TODO: Implement in Phase 5
 	SparseMatrixData data;
 	return data;
 }
 
-void H5ReaderNew::ReadDenseMatrix(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count, std::vector<double> &values) {
+void H5ReaderMultithreaded::ReadDenseMatrix(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count, std::vector<double> &values) {
 	try {
 		// Open the dataset
 		H5DatasetHandle dataset(file.get(), path);

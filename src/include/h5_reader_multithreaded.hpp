@@ -11,10 +11,10 @@
 namespace duckdb {
 
 // New H5Reader implementation using HDF5 C API with thread-safe support
-class H5ReaderNew {
+class H5ReaderMultithreaded {
 public:
-	H5ReaderNew(const std::string &file_path);
-	~H5ReaderNew();
+	H5ReaderMultithreaded(const std::string &file_path);
+	~H5ReaderMultithreaded();
 
 	// Check if file is valid AnnData format
 	bool IsValidAnnData();
