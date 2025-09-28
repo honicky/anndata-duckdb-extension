@@ -500,6 +500,11 @@ unique_ptr<FunctionData> AnndataScanner::LayerBind(ClientContext &context, Table
 	// Get dimensions
 	result->n_obs = layer_info.rows;
 	result->n_var = layer_info.cols;
+	
+	// Validate dimensions
+	if (result->n_var == 0) {
+		throw InvalidInputException("Layer '%s' has 0 variables/columns", result->layer_name.c_str());
+	}
 
 	// Get variable names - allow custom column selection
 	string var_column;
@@ -548,8 +553,10 @@ unique_ptr<FunctionData> AnndataScanner::LayerBind(ClientContext &context, Table
 	for (idx_t i = 0; i < result->n_var; i++) {
 		string var_name;
 		if (var_column.empty()) {
-			// Generate generic names
-			var_name = "gene_" + std::to_string(i);
+			// Generate generic names with zero-padded indices
+			char buffer[20];
+			snprintf(buffer, sizeof(buffer), "Gene_%03zu", i);
+			var_name = buffer;
 		} else {
 			var_name = reader.ReadVarColumnString(var_column, i);
 			// Sanitize column names
