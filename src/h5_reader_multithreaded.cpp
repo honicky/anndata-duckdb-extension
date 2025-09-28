@@ -973,8 +973,42 @@ void H5ReaderMultithreaded::ReadXMatrixBatch(idx_t row_start, idx_t row_count, i
 		auto x_info = GetXMatrixInfo();
 		
 		if (x_info.is_sparse) {
-			// For now, throw an exception for sparse matrices (Phase 5)
-			throw NotImplementedException("Sparse matrix reading not yet implemented in C API version");
+			// Handle sparse matrix
+			auto sparse_data = ReadSparseXMatrix(row_start, row_count, col_start, col_count);
+			
+			// Convert sparse data to dense format for output
+			output.SetCardinality(row_count);
+			
+			// Set obs_idx column (first column)
+			auto &obs_idx_vec = output.data[0];
+			for (idx_t row = 0; row < row_count; row++) {
+				obs_idx_vec.SetValue(row, Value::BIGINT(row_start + row));
+			}
+			
+			// Initialize all gene columns with zeros
+			for (idx_t col = 0; col < col_count; col++) {
+				auto &gene_vec = output.data[col + 1];
+				for (idx_t row = 0; row < row_count; row++) {
+					gene_vec.SetValue(row, Value::DOUBLE(0.0));
+				}
+			}
+			
+			// Fill in non-zero values from sparse data
+			for (size_t i = 0; i < sparse_data.row_indices.size(); i++) {
+				idx_t row = sparse_data.row_indices[i];
+				idx_t col = sparse_data.col_indices[i];
+				double val = sparse_data.values[i];
+				
+				// Check if this value is within our requested range
+				if (row >= row_start && row < row_start + row_count &&
+				    col >= col_start && col < col_start + col_count) {
+					idx_t local_row = row - row_start;
+					idx_t local_col = col - col_start;
+					auto &gene_vec = output.data[local_col + 1];
+					gene_vec.SetValue(local_row, Value::DOUBLE(val));
+				}
+			}
+			return;
 		}
 		
 		// Read dense matrix
@@ -1035,43 +1069,255 @@ void H5ReaderMultithreaded::ReadXMatrixBatch(idx_t row_start, idx_t row_count, i
 }
 
 H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
-	// TODO: Implement in Phase 5
-	SparseMatrixData data;
-	return data;
+	// Detect the sparse matrix format and dispatch to appropriate reader
+	auto x_info = GetXMatrixInfo();
+	if (!x_info.is_sparse) {
+		throw IOException("X matrix is not sparse");
+	}
+	
+	if (x_info.sparse_format == "csr") {
+		return ReadSparseXMatrixCSR(obs_start, obs_count, var_start, var_count);
+	} else if (x_info.sparse_format == "csc") {
+		return ReadSparseXMatrixCSC(obs_start, obs_count, var_start, var_count);
+	} else {
+		throw NotImplementedException("Unsupported sparse matrix format: " + x_info.sparse_format);
+	}
 }
 
 H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseXMatrixCSR(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
-	// TODO: Implement in Phase 5
-	SparseMatrixData data;
-	return data;
+	return ReadSparseMatrixCSR("/X", obs_start, obs_count, var_start, var_count);
 }
 
 H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseXMatrixCSC(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
-	// TODO: Implement in Phase 5
-	SparseMatrixData data;
-	return data;
+	return ReadSparseMatrixCSC("/X", obs_start, obs_count, var_start, var_count);
 }
 
 std::vector<H5ReaderMultithreaded::MatrixInfo> H5ReaderMultithreaded::GetObsmMatrices() {
-	// TODO: Implement in Phase 6
 	std::vector<MatrixInfo> matrices;
+	
+	try {
+		if (IsGroupPresent("/obsm")) {
+			// Get list of members in the obsm group
+			auto members = GetGroupMembers("/obsm");
+			
+			for (const auto &matrix_name : members) {
+				// Check if it's a dataset
+				std::string path = "/obsm/" + matrix_name;
+				if (H5LinkExists(file.get(), path) && H5GetObjectType(file.get(), path) == H5O_TYPE_DATASET) {
+					// Open dataset and get dimensions
+					H5DatasetHandle dataset(file.get(), path);
+					H5DataspaceHandle dataspace(dataset.get());
+					
+					int ndims = H5Sget_simple_extent_ndims(dataspace.get());
+					if (ndims == 2) {
+						hsize_t dims[2];
+						H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
+						
+						MatrixInfo info;
+						info.name = matrix_name;
+						info.rows = dims[0];
+						info.cols = dims[1];
+						
+						// Get data type
+						H5TypeHandle dtype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
+						H5T_class_t type_class = H5Tget_class(dtype.get());
+						size_t type_size = H5Tget_size(dtype.get());
+						
+						if (type_class == H5T_FLOAT) {
+							info.dtype = (type_size <= 4) ? LogicalType::FLOAT : LogicalType::DOUBLE;
+						} else if (type_class == H5T_INTEGER) {
+							info.dtype = (type_size <= 4) ? LogicalType::INTEGER : LogicalType::BIGINT;
+						} else {
+							info.dtype = LogicalType::DOUBLE; // Default
+						}
+						
+						matrices.push_back(info);
+					}
+				}
+			}
+		}
+	} catch (const std::exception &e) {
+		// Return empty list on error
+	}
+	
 	return matrices;
 }
 
 std::vector<H5ReaderMultithreaded::MatrixInfo> H5ReaderMultithreaded::GetVarmMatrices() {
-	// TODO: Implement in Phase 6
 	std::vector<MatrixInfo> matrices;
+	
+	try {
+		if (IsGroupPresent("/varm")) {
+			// Get list of members in the varm group
+			auto members = GetGroupMembers("/varm");
+			
+			for (const auto &matrix_name : members) {
+				// Check if it's a dataset
+				std::string path = "/varm/" + matrix_name;
+				if (H5LinkExists(file.get(), path) && H5GetObjectType(file.get(), path) == H5O_TYPE_DATASET) {
+					// Open dataset and get dimensions
+					H5DatasetHandle dataset(file.get(), path);
+					H5DataspaceHandle dataspace(dataset.get());
+					
+					int ndims = H5Sget_simple_extent_ndims(dataspace.get());
+					if (ndims == 2) {
+						hsize_t dims[2];
+						H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
+						
+						MatrixInfo info;
+						info.name = matrix_name;
+						info.rows = dims[0];
+						info.cols = dims[1];
+						
+						// Get data type
+						H5TypeHandle dtype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
+						H5T_class_t type_class = H5Tget_class(dtype.get());
+						size_t type_size = H5Tget_size(dtype.get());
+						
+						if (type_class == H5T_FLOAT) {
+							info.dtype = (type_size <= 4) ? LogicalType::FLOAT : LogicalType::DOUBLE;
+						} else if (type_class == H5T_INTEGER) {
+							info.dtype = (type_size <= 4) ? LogicalType::INTEGER : LogicalType::BIGINT;
+						} else {
+							info.dtype = LogicalType::DOUBLE; // Default
+						}
+						
+						matrices.push_back(info);
+					}
+				}
+			}
+		}
+	} catch (const std::exception &e) {
+		// Return empty list on error
+	}
+	
 	return matrices;
 }
 
 void H5ReaderMultithreaded::ReadObsmMatrix(const std::string &matrix_name, idx_t row_start, idx_t row_count, idx_t col_idx, Vector &result) {
-	// TODO: Implement in Phase 6
-	throw NotImplementedException("ReadObsmMatrix not yet implemented in C API version");
+	try {
+		std::string dataset_path = "/obsm/" + matrix_name;
+		H5DatasetHandle dataset(file.get(), dataset_path);
+		H5DataspaceHandle dataspace(dataset.get());
+		
+		// Get dimensions
+		hsize_t dims[2];
+		H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
+		
+		// Ensure col_idx is valid
+		if (col_idx >= dims[1]) {
+			throw InvalidInputException("Column index out of bounds for obsm matrix %s", matrix_name.c_str());
+		}
+		
+		// Select hyperslab for the requested column
+		hsize_t offset[2] = {static_cast<hsize_t>(row_start), static_cast<hsize_t>(col_idx)};
+		hsize_t count[2] = {static_cast<hsize_t>(row_count), 1};
+		H5Sselect_hyperslab(dataspace.get(), H5S_SELECT_SET, offset, nullptr, count, nullptr);
+		
+		// Create memory dataspace
+		hsize_t mem_dims[1] = {static_cast<hsize_t>(row_count)};
+		H5DataspaceHandle memspace(1, mem_dims);
+		
+		// Read data based on type
+		H5TypeHandle dtype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
+		H5T_class_t type_class = H5Tget_class(dtype.get());
+		size_t type_size = H5Tget_size(dtype.get());
+		
+		if (type_class == H5T_FLOAT) {
+			if (type_size <= 4) {
+				std::vector<float> values(row_count);
+				H5Dread(dataset.get(), H5T_NATIVE_FLOAT, memspace.get(), dataspace.get(), H5P_DEFAULT, values.data());
+				for (idx_t i = 0; i < row_count; i++) {
+					result.SetValue(i, Value::FLOAT(values[i]));
+				}
+			} else {
+				std::vector<double> values(row_count);
+				H5Dread(dataset.get(), H5T_NATIVE_DOUBLE, memspace.get(), dataspace.get(), H5P_DEFAULT, values.data());
+				for (idx_t i = 0; i < row_count; i++) {
+					result.SetValue(i, Value::DOUBLE(values[i]));
+				}
+			}
+		} else if (type_class == H5T_INTEGER) {
+			if (type_size <= 4) {
+				std::vector<int32_t> values(row_count);
+				H5Dread(dataset.get(), H5T_NATIVE_INT32, memspace.get(), dataspace.get(), H5P_DEFAULT, values.data());
+				for (idx_t i = 0; i < row_count; i++) {
+					result.SetValue(i, Value::INTEGER(values[i]));
+				}
+			} else {
+				std::vector<int64_t> values(row_count);
+				H5Dread(dataset.get(), H5T_NATIVE_INT64, memspace.get(), dataspace.get(), H5P_DEFAULT, values.data());
+				for (idx_t i = 0; i < row_count; i++) {
+					result.SetValue(i, Value::BIGINT(values[i]));
+				}
+			}
+		}
+	} catch (const std::exception &e) {
+		throw InvalidInputException("Failed to read obsm matrix %s: %s", matrix_name.c_str(), e.what());
+	}
 }
 
 void H5ReaderMultithreaded::ReadVarmMatrix(const std::string &matrix_name, idx_t row_start, idx_t row_count, idx_t col_idx, Vector &result) {
-	// TODO: Implement in Phase 6
-	throw NotImplementedException("ReadVarmMatrix not yet implemented in C API version");
+	try {
+		std::string dataset_path = "/varm/" + matrix_name;
+		H5DatasetHandle dataset(file.get(), dataset_path);
+		H5DataspaceHandle dataspace(dataset.get());
+		
+		// Get dimensions
+		hsize_t dims[2];
+		H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
+		
+		// Ensure col_idx is valid
+		if (col_idx >= dims[1]) {
+			throw InvalidInputException("Column index out of bounds for varm matrix %s", matrix_name.c_str());
+		}
+		
+		// Select hyperslab for the requested column
+		hsize_t offset[2] = {static_cast<hsize_t>(row_start), static_cast<hsize_t>(col_idx)};
+		hsize_t count[2] = {static_cast<hsize_t>(row_count), 1};
+		H5Sselect_hyperslab(dataspace.get(), H5S_SELECT_SET, offset, nullptr, count, nullptr);
+		
+		// Create memory dataspace
+		hsize_t mem_dims[1] = {static_cast<hsize_t>(row_count)};
+		H5DataspaceHandle memspace(1, mem_dims);
+		
+		// Read data based on type
+		H5TypeHandle dtype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
+		H5T_class_t type_class = H5Tget_class(dtype.get());
+		size_t type_size = H5Tget_size(dtype.get());
+		
+		if (type_class == H5T_FLOAT) {
+			if (type_size <= 4) {
+				std::vector<float> values(row_count);
+				H5Dread(dataset.get(), H5T_NATIVE_FLOAT, memspace.get(), dataspace.get(), H5P_DEFAULT, values.data());
+				for (idx_t i = 0; i < row_count; i++) {
+					result.SetValue(i, Value::FLOAT(values[i]));
+				}
+			} else {
+				std::vector<double> values(row_count);
+				H5Dread(dataset.get(), H5T_NATIVE_DOUBLE, memspace.get(), dataspace.get(), H5P_DEFAULT, values.data());
+				for (idx_t i = 0; i < row_count; i++) {
+					result.SetValue(i, Value::DOUBLE(values[i]));
+				}
+			}
+		} else if (type_class == H5T_INTEGER) {
+			if (type_size <= 4) {
+				std::vector<int32_t> values(row_count);
+				H5Dread(dataset.get(), H5T_NATIVE_INT32, memspace.get(), dataspace.get(), H5P_DEFAULT, values.data());
+				for (idx_t i = 0; i < row_count; i++) {
+					result.SetValue(i, Value::INTEGER(values[i]));
+				}
+			} else {
+				std::vector<int64_t> values(row_count);
+				H5Dread(dataset.get(), H5T_NATIVE_INT64, memspace.get(), dataspace.get(), H5P_DEFAULT, values.data());
+				for (idx_t i = 0; i < row_count; i++) {
+					result.SetValue(i, Value::BIGINT(values[i]));
+				}
+			}
+		}
+	} catch (const std::exception &e) {
+		throw InvalidInputException("Failed to read varm matrix %s: %s", matrix_name.c_str(), e.what());
+	}
 }
 
 std::vector<H5ReaderMultithreaded::LayerInfo> H5ReaderMultithreaded::GetLayers() {
@@ -1112,37 +1358,508 @@ void H5ReaderMultithreaded::ReadUnsArray(const std::string &key, Vector &result,
 }
 
 std::vector<std::string> H5ReaderMultithreaded::GetObspKeys() {
-	// TODO: Implement in Phase 6
 	std::vector<std::string> keys;
+	
+	// Check if obsp group exists
+	if (!IsGroupPresent("/obsp")) {
+		return keys;
+	}
+	
+	try {
+		// Get list of members in the obsp group
+		auto members = GetGroupMembers("/obsp");
+		
+		for (const auto &key_name : members) {
+			// obsp matrices are stored as groups (sparse format)
+			std::string path = "/obsp/" + key_name;
+			if (H5LinkExists(file.get(), path) && H5GetObjectType(file.get(), path) == H5O_TYPE_GROUP) {
+				keys.push_back(key_name);
+			}
+		}
+	} catch (const std::exception &e) {
+		// Return what we have
+	}
+	
 	return keys;
 }
 
 std::vector<std::string> H5ReaderMultithreaded::GetVarpKeys() {
-	// TODO: Implement in Phase 6
 	std::vector<std::string> keys;
+	
+	// Check if varp group exists
+	if (!IsGroupPresent("/varp")) {
+		return keys;
+	}
+	
+	try {
+		// Get list of members in the varp group
+		auto members = GetGroupMembers("/varp");
+		
+		for (const auto &key_name : members) {
+			// varp matrices are stored as groups (sparse format)
+			std::string path = "/varp/" + key_name;
+			if (H5LinkExists(file.get(), path) && H5GetObjectType(file.get(), path) == H5O_TYPE_GROUP) {
+				keys.push_back(key_name);
+			}
+		}
+	} catch (const std::exception &e) {
+		// Return what we have
+	}
+	
 	return keys;
 }
 
 H5ReaderMultithreaded::SparseMatrixInfo H5ReaderMultithreaded::GetObspMatrixInfo(const std::string &key) {
-	// TODO: Implement in Phase 6
 	SparseMatrixInfo info;
+	std::string matrix_path = "/obsp/" + key;
+	
+	if (!IsGroupPresent(matrix_path)) {
+		throw InvalidInputException("obsp matrix '%s' not found", key.c_str());
+	}
+	
+	try {
+		// Check for indptr to determine format
+		if (IsDatasetPresent(matrix_path, "indptr")) {
+			H5DatasetHandle indptr_ds(file.get(), matrix_path + "/indptr");
+			H5DataspaceHandle indptr_space(indptr_ds.get());
+			hsize_t indptr_dims[1];
+			H5Sget_simple_extent_dims(indptr_space.get(), indptr_dims, nullptr);
+			
+			// Get obs count to determine if CSR or CSC
+			idx_t n_obs = GetObsCount();
+			
+			if (indptr_dims[0] == static_cast<hsize_t>(n_obs + 1)) {
+				// CSR format
+				info.format = "csr";
+				info.nrows = n_obs;
+				info.ncols = n_obs; // obsp is obs x obs
+			} else {
+				// CSC format
+				info.format = "csc";
+				info.nrows = n_obs;
+				info.ncols = n_obs;
+			}
+			
+			// Get number of non-zero elements
+			if (IsDatasetPresent(matrix_path, "data")) {
+				H5DatasetHandle data_ds(file.get(), matrix_path + "/data");
+				H5DataspaceHandle data_space(data_ds.get());
+				hsize_t data_dims[1];
+				H5Sget_simple_extent_dims(data_space.get(), data_dims, nullptr);
+				info.nnz = data_dims[0];
+			}
+		}
+	} catch (const std::exception &e) {
+		throw InvalidInputException("Failed to get obsp matrix info for '%s': %s", key.c_str(), e.what());
+	}
+	
 	return info;
 }
 
 H5ReaderMultithreaded::SparseMatrixInfo H5ReaderMultithreaded::GetVarpMatrixInfo(const std::string &key) {
-	// TODO: Implement in Phase 6
 	SparseMatrixInfo info;
+	std::string matrix_path = "/varp/" + key;
+	
+	if (!IsGroupPresent(matrix_path)) {
+		throw InvalidInputException("varp matrix '%s' not found", key.c_str());
+	}
+	
+	try {
+		// Check for indptr to determine format
+		if (IsDatasetPresent(matrix_path, "indptr")) {
+			H5DatasetHandle indptr_ds(file.get(), matrix_path + "/indptr");
+			H5DataspaceHandle indptr_space(indptr_ds.get());
+			hsize_t indptr_dims[1];
+			H5Sget_simple_extent_dims(indptr_space.get(), indptr_dims, nullptr);
+			
+			// Get var count to determine if CSR or CSC
+			idx_t n_var = GetVarCount();
+			
+			if (indptr_dims[0] == static_cast<hsize_t>(n_var + 1)) {
+				// CSR format
+				info.format = "csr";
+				info.nrows = n_var;
+				info.ncols = n_var; // varp is var x var
+			} else {
+				// CSC format
+				info.format = "csc";
+				info.nrows = n_var;
+				info.ncols = n_var;
+			}
+			
+			// Get number of non-zero elements
+			if (IsDatasetPresent(matrix_path, "data")) {
+				H5DatasetHandle data_ds(file.get(), matrix_path + "/data");
+				H5DataspaceHandle data_space(data_ds.get());
+				hsize_t data_dims[1];
+				H5Sget_simple_extent_dims(data_space.get(), data_dims, nullptr);
+				info.nnz = data_dims[0];
+			}
+		}
+	} catch (const std::exception &e) {
+		throw InvalidInputException("Failed to get varp matrix info for '%s': %s", key.c_str(), e.what());
+	}
+	
 	return info;
 }
 
 void H5ReaderMultithreaded::ReadObspMatrix(const std::string &key, Vector &row_result, Vector &col_result, Vector &value_result, idx_t offset, idx_t count) {
-	// TODO: Implement in Phase 6
-	throw NotImplementedException("ReadObspMatrix not yet implemented in C API version");
+	std::string matrix_path = "/obsp/" + key;
+	
+	if (!IsGroupPresent(matrix_path)) {
+		throw InvalidInputException("obsp matrix '%s' not found", key.c_str());
+	}
+	
+	try {
+		SparseMatrixInfo info = GetObspMatrixInfo(key);
+		
+		// Read the sparse matrix components
+		H5DatasetHandle data_ds(file.get(), matrix_path + "/data");
+		H5DatasetHandle indices_ds(file.get(), matrix_path + "/indices");
+		H5DatasetHandle indptr_ds(file.get(), matrix_path + "/indptr");
+		
+		if (info.format == "csr") {
+			// Read all indptr to find which rows contain our offset range
+			H5DataspaceHandle indptr_space(indptr_ds.get());
+			hsize_t indptr_dims[1];
+			H5Sget_simple_extent_dims(indptr_space.get(), indptr_dims, nullptr);
+			std::vector<int32_t> indptr(indptr_dims[0]);
+			H5Dread(indptr_ds.get(), H5T_NATIVE_INT32, H5S_ALL, H5S_ALL, H5P_DEFAULT, indptr.data());
+			
+			// Find which non-zero elements to read
+			idx_t current_nnz = 0;
+			idx_t result_idx = 0;
+			
+			for (idx_t row = 0; row < info.nrows && result_idx < count; row++) {
+				idx_t row_start = indptr[row];
+				idx_t row_end = indptr[row + 1];
+				
+				for (idx_t j = row_start; j < row_end && result_idx < count; j++) {
+					if (current_nnz >= offset) {
+						// Read column index
+						int32_t col_idx;
+						hsize_t indices_offset[1] = {j};
+						hsize_t indices_count[1] = {1};
+						H5DataspaceHandle indices_mem_space(1, indices_count);
+						H5DataspaceHandle indices_file_space(indices_ds.get());
+						H5Sselect_hyperslab(indices_file_space.get(), H5S_SELECT_SET, indices_offset, nullptr, indices_count, nullptr);
+						H5Dread(indices_ds.get(), H5T_NATIVE_INT32, indices_mem_space.get(), indices_file_space.get(), H5P_DEFAULT, &col_idx);
+						
+						// Read value
+						float val;
+						hsize_t data_offset[1] = {j};
+						hsize_t data_count[1] = {1};
+						H5DataspaceHandle data_mem_space(1, data_count);
+						H5DataspaceHandle data_file_space(data_ds.get());
+						H5Sselect_hyperslab(data_file_space.get(), H5S_SELECT_SET, data_offset, nullptr, data_count, nullptr);
+						H5Dread(data_ds.get(), H5T_NATIVE_FLOAT, data_mem_space.get(), data_file_space.get(), H5P_DEFAULT, &val);
+						
+						// Set results
+						row_result.SetValue(result_idx, Value::BIGINT(row));
+						col_result.SetValue(result_idx, Value::BIGINT(col_idx));
+						value_result.SetValue(result_idx, Value::FLOAT(val));
+						
+						result_idx++;
+					}
+					current_nnz++;
+				}
+			}
+		} else {
+			// CSC format - similar but iterate by columns
+			throw NotImplementedException("CSC format for obsp not yet implemented");
+		}
+	} catch (const std::exception &e) {
+		throw InvalidInputException("Failed to read obsp matrix '%s': %s", key.c_str(), e.what());
+	}
 }
 
 void H5ReaderMultithreaded::ReadVarpMatrix(const std::string &key, Vector &row_result, Vector &col_result, Vector &value_result, idx_t offset, idx_t count) {
-	// TODO: Implement in Phase 6
-	throw NotImplementedException("ReadVarpMatrix not yet implemented in C API version");
+	std::string matrix_path = "/varp/" + key;
+	
+	if (!IsGroupPresent(matrix_path)) {
+		throw InvalidInputException("varp matrix '%s' not found", key.c_str());
+	}
+	
+	try {
+		SparseMatrixInfo info = GetVarpMatrixInfo(key);
+		
+		// Read the sparse matrix components
+		H5DatasetHandle data_ds(file.get(), matrix_path + "/data");
+		H5DatasetHandle indices_ds(file.get(), matrix_path + "/indices");
+		H5DatasetHandle indptr_ds(file.get(), matrix_path + "/indptr");
+		
+		if (info.format == "csr") {
+			// Read all indptr to find which rows contain our offset range
+			H5DataspaceHandle indptr_space(indptr_ds.get());
+			hsize_t indptr_dims[1];
+			H5Sget_simple_extent_dims(indptr_space.get(), indptr_dims, nullptr);
+			std::vector<int32_t> indptr(indptr_dims[0]);
+			H5Dread(indptr_ds.get(), H5T_NATIVE_INT32, H5S_ALL, H5S_ALL, H5P_DEFAULT, indptr.data());
+			
+			// Find which non-zero elements to read
+			idx_t current_nnz = 0;
+			idx_t result_idx = 0;
+			
+			for (idx_t row = 0; row < info.nrows && result_idx < count; row++) {
+				idx_t row_start = indptr[row];
+				idx_t row_end = indptr[row + 1];
+				
+				for (idx_t j = row_start; j < row_end && result_idx < count; j++) {
+					if (current_nnz >= offset) {
+						// Read column index
+						int32_t col_idx;
+						hsize_t indices_offset[1] = {j};
+						hsize_t indices_count[1] = {1};
+						H5DataspaceHandle indices_mem_space(1, indices_count);
+						H5DataspaceHandle indices_file_space(indices_ds.get());
+						H5Sselect_hyperslab(indices_file_space.get(), H5S_SELECT_SET, indices_offset, nullptr, indices_count, nullptr);
+						H5Dread(indices_ds.get(), H5T_NATIVE_INT32, indices_mem_space.get(), indices_file_space.get(), H5P_DEFAULT, &col_idx);
+						
+						// Read value
+						float val;
+						hsize_t data_offset[1] = {j};
+						hsize_t data_count[1] = {1};
+						H5DataspaceHandle data_mem_space(1, data_count);
+						H5DataspaceHandle data_file_space(data_ds.get());
+						H5Sselect_hyperslab(data_file_space.get(), H5S_SELECT_SET, data_offset, nullptr, data_count, nullptr);
+						H5Dread(data_ds.get(), H5T_NATIVE_FLOAT, data_mem_space.get(), data_file_space.get(), H5P_DEFAULT, &val);
+						
+						// Set results
+						row_result.SetValue(result_idx, Value::BIGINT(row));
+						col_result.SetValue(result_idx, Value::BIGINT(col_idx));
+						value_result.SetValue(result_idx, Value::FLOAT(val));
+						
+						result_idx++;
+					}
+					current_nnz++;
+				}
+			}
+		} else {
+			// CSC format - similar but iterate by columns
+			throw NotImplementedException("CSC format for varp not yet implemented");
+		}
+	} catch (const std::exception &e) {
+		throw InvalidInputException("Failed to read varp matrix '%s': %s", key.c_str(), e.what());
+	}
+}
+
+// Helper methods for sparse matrix reading
+H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseMatrixCSR(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
+	SparseMatrixData sparse_data;
+	
+	try {
+		// Read CSR components from the specified path
+		H5DatasetHandle data_ds(file.get(), path + "/data");
+		H5DatasetHandle indices_ds(file.get(), path + "/indices");
+		H5DatasetHandle indptr_ds(file.get(), path + "/indptr");
+		
+		// Get dataspace for indptr
+		H5DataspaceHandle indptr_space(indptr_ds.get());
+		hsize_t indptr_dims[1];
+		H5Sget_simple_extent_dims(indptr_space.get(), indptr_dims, nullptr);
+		
+		// Read indptr for the requested observation range
+		std::vector<int64_t> indptr(obs_count + 1);
+		hsize_t indptr_offset[1] = {static_cast<hsize_t>(obs_start)};
+		hsize_t indptr_count[1] = {static_cast<hsize_t>(obs_count + 1)};
+		
+		H5Sselect_hyperslab(indptr_space.get(), H5S_SELECT_SET, indptr_offset, nullptr, indptr_count, nullptr);
+		H5DataspaceHandle indptr_mem_space(1, indptr_count);
+		
+		// Check indptr datatype size and read accordingly
+		H5TypeHandle indptr_dtype(indptr_ds.get(), H5TypeHandle::TypeClass::DATASET);
+		size_t dtype_size = H5Tget_size(indptr_dtype.get());
+		
+		if (dtype_size <= 4) {
+			std::vector<int32_t> indptr32(obs_count + 1);
+			H5Dread(indptr_ds.get(), H5T_NATIVE_INT32, indptr_mem_space.get(), indptr_space.get(), H5P_DEFAULT, indptr32.data());
+			for (size_t i = 0; i < indptr32.size(); i++) {
+				indptr[i] = indptr32[i];
+			}
+		} else {
+			H5Dread(indptr_ds.get(), H5T_NATIVE_INT64, indptr_mem_space.get(), indptr_space.get(), H5P_DEFAULT, indptr.data());
+		}
+		
+		// For each observation, read its sparse data
+		for (idx_t obs_idx = 0; obs_idx < obs_count; obs_idx++) {
+			int64_t row_start_idx = indptr[obs_idx];
+			int64_t row_end_idx = indptr[obs_idx + 1];
+			int64_t nnz = row_end_idx - row_start_idx;
+			
+			if (nnz == 0) continue;
+			
+			// Read column indices
+			std::vector<int32_t> col_indices(nnz);
+			hsize_t indices_offset[1] = {static_cast<hsize_t>(row_start_idx)};
+			hsize_t indices_count[1] = {static_cast<hsize_t>(nnz)};
+			
+			H5DataspaceHandle indices_space(indices_ds.get());
+			H5Sselect_hyperslab(indices_space.get(), H5S_SELECT_SET, indices_offset, nullptr, indices_count, nullptr);
+			H5DataspaceHandle indices_mem_space(1, indices_count);
+			H5Dread(indices_ds.get(), H5T_NATIVE_INT32, indices_mem_space.get(), indices_space.get(), H5P_DEFAULT, col_indices.data());
+			
+			// Read data values
+			std::vector<double> row_data(nnz);
+			H5DataspaceHandle data_space(data_ds.get());
+			H5Sselect_hyperslab(data_space.get(), H5S_SELECT_SET, indices_offset, nullptr, indices_count, nullptr);
+			H5DataspaceHandle data_mem_space(1, indices_count);
+			
+			// Check data type and read accordingly
+			H5TypeHandle data_dtype(data_ds.get(), H5TypeHandle::TypeClass::DATASET);
+			H5T_class_t type_class = H5Tget_class(data_dtype.get());
+			
+			if (type_class == H5T_FLOAT) {
+				size_t data_size = H5Tget_size(data_dtype.get());
+				if (data_size <= 4) {
+					std::vector<float> float_data(nnz);
+					H5Dread(data_ds.get(), H5T_NATIVE_FLOAT, data_mem_space.get(), data_space.get(), H5P_DEFAULT, float_data.data());
+					for (size_t i = 0; i < float_data.size(); i++) {
+						row_data[i] = static_cast<double>(float_data[i]);
+					}
+				} else {
+					H5Dread(data_ds.get(), H5T_NATIVE_DOUBLE, data_mem_space.get(), data_space.get(), H5P_DEFAULT, row_data.data());
+				}
+			} else if (type_class == H5T_INTEGER) {
+				size_t data_size = H5Tget_size(data_dtype.get());
+				if (data_size <= 4) {
+					std::vector<int32_t> int_data(nnz);
+					H5Dread(data_ds.get(), H5T_NATIVE_INT32, data_mem_space.get(), data_space.get(), H5P_DEFAULT, int_data.data());
+					for (size_t i = 0; i < int_data.size(); i++) {
+						row_data[i] = static_cast<double>(int_data[i]);
+					}
+				} else {
+					std::vector<int64_t> int_data(nnz);
+					H5Dread(data_ds.get(), H5T_NATIVE_INT64, data_mem_space.get(), data_space.get(), H5P_DEFAULT, int_data.data());
+					for (size_t i = 0; i < int_data.size(); i++) {
+						row_data[i] = static_cast<double>(int_data[i]);
+					}
+				}
+			}
+			
+			// Add to sparse data structure only values in the requested var range
+			for (size_t i = 0; i < col_indices.size(); i++) {
+				int32_t col = col_indices[i];
+				if (col >= var_start && col < var_start + var_count) {
+					sparse_data.row_indices.push_back(obs_start + obs_idx);
+					sparse_data.col_indices.push_back(col);
+					sparse_data.values.push_back(row_data[i]);
+				}
+			}
+		}
+	} catch (const std::exception &e) {
+		// Return empty sparse data on error
+	}
+	
+	return sparse_data;
+}
+
+H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseMatrixCSC(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
+	SparseMatrixData sparse_data;
+	
+	try {
+		// Read CSC components from the specified path
+		H5DatasetHandle data_ds(file.get(), path + "/data");
+		H5DatasetHandle indices_ds(file.get(), path + "/indices");
+		H5DatasetHandle indptr_ds(file.get(), path + "/indptr");
+		
+		// Get dataspace for indptr
+		H5DataspaceHandle indptr_space(indptr_ds.get());
+		hsize_t indptr_dims[1];
+		H5Sget_simple_extent_dims(indptr_space.get(), indptr_dims, nullptr);
+		size_t total_var = indptr_dims[0] - 1; // indptr has n_var + 1 elements for CSC
+		
+		// For CSC, iterate through requested columns
+		for (idx_t var_idx = var_start; var_idx < var_start + var_count && var_idx < total_var; var_idx++) {
+			// Read indptr for this column
+			std::vector<int64_t> col_indptr(2);
+			hsize_t indptr_offset[1] = {static_cast<hsize_t>(var_idx)};
+			hsize_t indptr_count[1] = {2};
+			
+			H5Sselect_hyperslab(indptr_space.get(), H5S_SELECT_SET, indptr_offset, nullptr, indptr_count, nullptr);
+			H5DataspaceHandle indptr_mem_space(1, indptr_count);
+			
+			// Check indptr datatype size
+			H5TypeHandle indptr_dtype(indptr_ds.get(), H5TypeHandle::TypeClass::DATASET);
+			size_t dtype_size = H5Tget_size(indptr_dtype.get());
+			
+			if (dtype_size <= 4) {
+				std::vector<int32_t> indptr32(2);
+				H5Dread(indptr_ds.get(), H5T_NATIVE_INT32, indptr_mem_space.get(), indptr_space.get(), H5P_DEFAULT, indptr32.data());
+				col_indptr[0] = indptr32[0];
+				col_indptr[1] = indptr32[1];
+			} else {
+				H5Dread(indptr_ds.get(), H5T_NATIVE_INT64, indptr_mem_space.get(), indptr_space.get(), H5P_DEFAULT, col_indptr.data());
+			}
+			
+			int64_t col_start_idx = col_indptr[0];
+			int64_t col_end_idx = col_indptr[1];
+			int64_t nnz = col_end_idx - col_start_idx;
+			
+			if (nnz == 0) continue;
+			
+			// Read row indices
+			std::vector<int32_t> row_indices(nnz);
+			hsize_t indices_offset[1] = {static_cast<hsize_t>(col_start_idx)};
+			hsize_t indices_count[1] = {static_cast<hsize_t>(nnz)};
+			
+			H5DataspaceHandle indices_space(indices_ds.get());
+			H5Sselect_hyperslab(indices_space.get(), H5S_SELECT_SET, indices_offset, nullptr, indices_count, nullptr);
+			H5DataspaceHandle indices_mem_space(1, indices_count);
+			H5Dread(indices_ds.get(), H5T_NATIVE_INT32, indices_mem_space.get(), indices_space.get(), H5P_DEFAULT, row_indices.data());
+			
+			// Read data values
+			std::vector<double> col_data(nnz);
+			H5DataspaceHandle data_space(data_ds.get());
+			H5Sselect_hyperslab(data_space.get(), H5S_SELECT_SET, indices_offset, nullptr, indices_count, nullptr);
+			H5DataspaceHandle data_mem_space(1, indices_count);
+			
+			// Check data type and read accordingly
+			H5TypeHandle data_dtype(data_ds.get(), H5TypeHandle::TypeClass::DATASET);
+			H5T_class_t type_class = H5Tget_class(data_dtype.get());
+			
+			if (type_class == H5T_FLOAT) {
+				size_t data_size = H5Tget_size(data_dtype.get());
+				if (data_size <= 4) {
+					std::vector<float> float_data(nnz);
+					H5Dread(data_ds.get(), H5T_NATIVE_FLOAT, data_mem_space.get(), data_space.get(), H5P_DEFAULT, float_data.data());
+					for (size_t i = 0; i < float_data.size(); i++) {
+						col_data[i] = static_cast<double>(float_data[i]);
+					}
+				} else {
+					H5Dread(data_ds.get(), H5T_NATIVE_DOUBLE, data_mem_space.get(), data_space.get(), H5P_DEFAULT, col_data.data());
+				}
+			} else if (type_class == H5T_INTEGER) {
+				size_t data_size = H5Tget_size(data_dtype.get());
+				if (data_size <= 4) {
+					std::vector<int32_t> int_data(nnz);
+					H5Dread(data_ds.get(), H5T_NATIVE_INT32, data_mem_space.get(), data_space.get(), H5P_DEFAULT, int_data.data());
+					for (size_t i = 0; i < int_data.size(); i++) {
+						col_data[i] = static_cast<double>(int_data[i]);
+					}
+				} else {
+					std::vector<int64_t> int_data(nnz);
+					H5Dread(data_ds.get(), H5T_NATIVE_INT64, data_mem_space.get(), data_space.get(), H5P_DEFAULT, int_data.data());
+					for (size_t i = 0; i < int_data.size(); i++) {
+						col_data[i] = static_cast<double>(int_data[i]);
+					}
+				}
+			}
+			
+			// Add to sparse data structure only values in the requested obs range
+			for (size_t i = 0; i < row_indices.size(); i++) {
+				int32_t row = row_indices[i];
+				if (row >= obs_start && row < obs_start + obs_count) {
+					sparse_data.row_indices.push_back(row);
+					sparse_data.col_indices.push_back(var_idx);
+					sparse_data.values.push_back(col_data[i]);
+				}
+			}
+		}
+	} catch (const std::exception &e) {
+		// Return empty sparse data on error
+	}
+	
+	return sparse_data;
 }
 
 // Static helper methods
@@ -1212,23 +1929,7 @@ void H5ReaderMultithreaded::InitializeZeros(Vector &vec, idx_t count) {
 	}
 }
 
-H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseMatrixAtPath(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
-	// TODO: Implement in Phase 5
-	SparseMatrixData data;
-	return data;
-}
 
-H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseMatrixCSR(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
-	// TODO: Implement in Phase 5
-	SparseMatrixData data;
-	return data;
-}
-
-H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseMatrixCSC(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count) {
-	// TODO: Implement in Phase 5
-	SparseMatrixData data;
-	return data;
-}
 
 void H5ReaderMultithreaded::ReadDenseMatrix(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count, std::vector<double> &values) {
 	try {
