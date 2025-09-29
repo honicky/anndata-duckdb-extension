@@ -1,0 +1,169 @@
+# name: test/sql/anndata_union.test
+# description: Test UNION queries with multiple AnnData files to verify thread-safe HDF5 access
+# group: [anndata]
+
+require anndata
+
+statement ok
+LOAD anndata;
+
+# Test 1: Basic UNION of anndata_info from two files
+query II
+SELECT 'small' as file, COUNT(*) as properties 
+FROM anndata_info('test/data/test_small.h5ad')
+UNION ALL
+SELECT 'sparse' as file, COUNT(*) as properties 
+FROM anndata_info('test/data/test_sparse.h5ad')
+ORDER BY file;
+----
+small	7
+sparse	6
+
+# Test 2: UNION of obs tables from multiple files
+query II
+SELECT 'small' as source, COUNT(*) as obs_count 
+FROM anndata_scan_obs('test/data/test_small.h5ad')
+UNION ALL
+SELECT 'sparse' as source, COUNT(*) as obs_count 
+FROM anndata_scan_obs('test/data/test_sparse.h5ad')
+ORDER BY source;
+----
+small	100
+sparse	10
+
+# Test 3: UNION of var tables from multiple files
+query II
+SELECT 'small' as source, COUNT(*) as var_count 
+FROM anndata_scan_var('test/data/test_small.h5ad')
+UNION ALL
+SELECT 'sparse' as source, COUNT(*) as var_count 
+FROM anndata_scan_var('test/data/test_sparse.h5ad')
+ORDER BY source;
+----
+small	50
+sparse	20
+
+# Test 4: UNION with aggregation - get min/max var_idx from multiple files
+query III
+SELECT 
+    'small' as file,
+    MIN(var_idx) as min_idx,
+    MAX(var_idx) as max_idx
+FROM anndata_scan_var('test/data/test_small.h5ad')
+UNION ALL
+SELECT 
+    'sparse' as file,
+    MIN(var_idx) as min_idx,
+    MAX(var_idx) as max_idx
+FROM anndata_scan_var('test/data/test_sparse.h5ad')
+ORDER BY file;
+----
+small	0	49
+sparse	0	19
+
+# Test 5: UNION with different table functions - obs and var counts
+query III
+SELECT 
+    'obs_small' as type,
+    COUNT(*) as count,
+    'test_small.h5ad' as file
+FROM anndata_scan_obs('test/data/test_small.h5ad')
+UNION ALL
+SELECT 
+    'var_small' as type,
+    COUNT(*) as count,
+    'test_small.h5ad' as file
+FROM anndata_scan_var('test/data/test_small.h5ad')
+UNION ALL
+SELECT 
+    'obs_sparse' as type,
+    COUNT(*) as count,
+    'test_sparse.h5ad' as file
+FROM anndata_scan_obs('test/data/test_sparse.h5ad')
+UNION ALL
+SELECT 
+    'var_sparse' as type,
+    COUNT(*) as count,
+    'test_sparse.h5ad' as file
+FROM anndata_scan_var('test/data/test_sparse.h5ad')
+ORDER BY type;
+----
+obs_small	100	test_small.h5ad
+obs_sparse	10	test_sparse.h5ad
+var_small	50	test_small.h5ad
+var_sparse	20	test_sparse.h5ad
+
+# Test 6: Three-way UNION - stress test for concurrent access
+query II
+SELECT 'info_small' as type, COUNT(*) as count
+FROM anndata_info('test/data/test_small.h5ad')
+UNION ALL
+SELECT 'info_sparse' as type, COUNT(*) as count  
+FROM anndata_info('test/data/test_sparse.h5ad')
+UNION ALL
+SELECT 'info_small2' as type, COUNT(*) as count
+FROM anndata_info('test/data/test_small.h5ad')
+ORDER BY type;
+----
+info_small	7
+info_small2	7
+info_sparse	6
+
+# Test 7: UNION with subqueries accessing same file multiple times
+query II
+SELECT 
+    data_type,
+    total_count
+FROM (
+    SELECT 'obs_count' as data_type, COUNT(*) as total_count
+    FROM anndata_scan_obs('test/data/test_small.h5ad')
+    UNION ALL
+    SELECT 'var_count' as data_type, COUNT(*) as total_count  
+    FROM anndata_scan_var('test/data/test_small.h5ad')
+) summary
+ORDER BY data_type;
+----
+obs_count	100
+var_count	50
+
+# Test 8: Multiple UNION operations on same files - test concurrent HDF5 access
+query II
+SELECT 'test1' as test, COUNT(*) as cnt FROM anndata_scan_obs('test/data/test_small.h5ad')
+UNION ALL
+SELECT 'test2' as test, COUNT(*) as cnt FROM anndata_scan_obs('test/data/test_sparse.h5ad')
+UNION ALL
+SELECT 'test3' as test, COUNT(*) as cnt FROM anndata_scan_obs('test/data/test_small.h5ad')
+UNION ALL
+SELECT 'test4' as test, COUNT(*) as cnt FROM anndata_scan_obs('test/data/test_sparse.h5ad')
+ORDER BY test;
+----
+test1	100
+test2	10
+test3	100
+test4	10
+
+# Test 9: UNION combining different scan functions on same file
+query II
+SELECT 'obs' as scan_type, COUNT(*) as row_count
+FROM anndata_scan_obs('test/data/test_small.h5ad')
+UNION ALL
+SELECT 'var' as scan_type, COUNT(*) as row_count
+FROM anndata_scan_var('test/data/test_small.h5ad')
+UNION ALL
+SELECT 'info' as scan_type, COUNT(*) as row_count
+FROM anndata_info('test/data/test_small.h5ad')
+ORDER BY scan_type;
+----
+info	7
+obs	100
+var	50
+
+# Test 10: Complex nested UNION - stress test thread safety
+query I
+SELECT COUNT(*) FROM (
+    SELECT var_idx FROM anndata_scan_var('test/data/test_small.h5ad')
+    UNION ALL
+    SELECT var_idx FROM anndata_scan_var('test/data/test_sparse.h5ad')
+) combined_vars;
+----
+70

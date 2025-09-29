@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2025-09-29
+
+### Changed
+- Migrated from HDF5 C++ API to HDF5 C API to enable thread-safe builds
+- Switched vcpkg HDF5 dependency from "cpp" to "threadsafe" feature
+- Renamed H5ReaderNew to H5ReaderMultithreaded for clarity
+
+### Fixed
+- Fixed race condition in H5ReaderMultithreaded initialization using std::call_once
+- Resolved concurrent file access issues enabling proper UNION query support
+
 ## [0.6.0] - 2025-09-25
 
 ### Added
