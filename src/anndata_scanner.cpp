@@ -500,7 +500,7 @@ unique_ptr<FunctionData> AnndataScanner::LayerBind(ClientContext &context, Table
 	// Get dimensions
 	result->n_obs = layer_info.rows;
 	result->n_var = layer_info.cols;
-	
+
 	// Validate dimensions
 	if (result->n_var == 0) {
 		throw InvalidInputException("Layer '%s' has 0 variables/columns", result->layer_name.c_str());

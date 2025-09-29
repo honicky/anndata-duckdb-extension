@@ -173,7 +173,7 @@ private:
 
 	// Helper to initialize vector with zeros based on type
 	static void InitializeZeros(Vector &vec, idx_t count);
-	
+
 	// Helper function to read sparse matrix at any path
 	SparseMatrixData ReadSparseMatrixAtPath(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start,
 	                                        idx_t var_count);
@@ -181,11 +181,11 @@ private:
 	                                     idx_t var_count);
 	SparseMatrixData ReadSparseMatrixCSC(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start,
 	                                     idx_t var_count);
-	
+
 	// Helper function to read dense matrix at any path
 	void ReadDenseMatrix(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count,
 	                     std::vector<double> &values);
-	
+
 	// File handle using RAII
 	H5FileHandle file;
 	std::string file_path;
