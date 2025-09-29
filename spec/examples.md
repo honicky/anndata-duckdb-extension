@@ -5,66 +5,62 @@
 ### 1. Exploring an AnnData File
 
 ```sql
--- Check file metadata before attaching
+-- Load the extension
+LOAD anndata;
+
+-- Check file metadata
 SELECT * FROM anndata_info('pbmc3k.h5ad');
 
--- Attach the file with default settings
-ATTACH 'pbmc3k.h5ad' AS pbmc (TYPE ANNDATA);
+-- Get specific metadata
+SELECT value FROM anndata_info('pbmc3k.h5ad') WHERE property = 'n_obs';
 
--- OR: Attach with custom gene name column (when var_names contains IDs)
-ATTACH 'pbmc3k.h5ad' AS pbmc (
-    TYPE ANNDATA,
-    VAR_NAME_COLUMN='gene_symbols',  -- Use gene_symbols for readable names
-    VAR_ID_COLUMN='gene_ids'          -- Use gene_ids as primary identifier
-);
+-- Check dimensions directly from X matrix
+SELECT COUNT(DISTINCT obs_idx) as n_cells,
+       COUNT(DISTINCT var_idx) as n_genes
+FROM anndata_scan_x('pbmc3k.h5ad')
+LIMIT 1000;  -- Sample for quick count
 
--- List available tables
-SHOW TABLES FROM pbmc;
-
--- Check dimensions
-SELECT COUNT(DISTINCT obs_id) as n_cells,
-       COUNT(DISTINCT var_id) as n_genes
-FROM pbmc.main;
-
--- Query using both gene IDs and names
-SELECT DISTINCT var_id, var_name 
-FROM pbmc.main 
+-- Query expression matrix with gene names
+SELECT DISTINCT var_idx, var_name 
+FROM anndata_scan_x('pbmc3k.h5ad', 'gene_symbols')
 LIMIT 10;
+
+-- Note: ATTACH syntax is planned for future releases
+-- Currently use direct table functions: anndata_scan_obs(), anndata_scan_var(), etc.
 ```
 
 ### 2. Basic Cell and Gene Queries
 
 ```sql
 -- View first 10 cells metadata
-SELECT * FROM pbmc.obs LIMIT 10;
+SELECT * FROM anndata_scan_obs('pbmc3k.h5ad') LIMIT 10;
 
 -- Count cells by type
 SELECT cell_type, COUNT(*) as n_cells
-FROM pbmc.obs
+FROM anndata_scan_obs('pbmc3k.h5ad')
 GROUP BY cell_type
 ORDER BY n_cells DESC;
 
--- Find highly variable genes (scalar columns)
-SELECT var_id, 
-       gene_name,
-       mean_expression,
+-- Find highly variable genes
+SELECT var_idx,
+       _index as gene_name,
+       mean_counts,
        n_cells,
        highly_variable
-FROM pbmc.var
-WHERE highly_variable = true
-ORDER BY mean_expression DESC
+FROM anndata_scan_var('pbmc3k.h5ad')
+WHERE highly_variable = 'True'  -- Note: boolean columns may be stored as strings
+ORDER BY mean_counts DESC
 LIMIT 20;
 
--- Access variable-length array data from var
+-- Get gene statistics
 SELECT 
-    v.var_id,
-    v.gene_name,
-    hvr.index,
-    hvr.value as rank_value
-FROM pbmc.var v
-JOIN pbmc.var_highly_variable_rank hvr ON v.var_id = hvr.var_id
-WHERE v.highly_variable = true
-ORDER BY v.var_id, hvr.index;
+    var_idx,
+    _index as gene_id,
+    n_cells_by_counts,
+    pct_dropout_by_counts
+FROM anndata_scan_var('pbmc3k.h5ad')
+WHERE n_cells_by_counts > 100
+ORDER BY n_cells_by_counts DESC;
 ```
 
 ## Single-Cell Analysis Workflows
@@ -75,21 +71,21 @@ ORDER BY v.var_id, hvr.index;
 -- Calculate QC metrics per cell
 WITH cell_stats AS (
     SELECT 
-        obs_id,
+        obs_idx,
         COUNT(*) as n_genes_expressed,
         SUM(value) as total_counts,
         AVG(value) as mean_expression
-    FROM pbmc.main
+    FROM anndata_scan_x('pbmc3k.h5ad')
     WHERE value > 0
-    GROUP BY obs_id
+    GROUP BY obs_idx
 )
 SELECT 
     o.*,
     cs.n_genes_expressed,
     cs.total_counts,
     cs.mean_expression
-FROM pbmc.obs o
-JOIN cell_stats cs ON o.obs_id = cs.obs_id
+FROM anndata_scan_obs('pbmc3k.h5ad') o
+JOIN cell_stats cs ON o.obs_idx = cs.obs_idx
 WHERE cs.n_genes_expressed > 200  -- Filter low-quality cells
   AND cs.n_genes_expressed < 2500;
 ```
@@ -100,26 +96,26 @@ WHERE cs.n_genes_expressed > 200  -- Filter low-quality cells
 -- Get expression of specific genes across cell types (using gene names)
 SELECT 
     o.cell_type,
-    m.var_name as gene,
-    AVG(m.value) as mean_expression,
-    STDDEV(m.value) as std_expression,
+    x.var_name as gene,
+    AVG(x.value) as mean_expression,
+    STDDEV(x.value) as std_expression,
     COUNT(*) as n_cells
-FROM pbmc.main m
-JOIN pbmc.obs o ON m.obs_id = o.obs_id
-WHERE m.var_name IN ('CD3D', 'CD4', 'CD8A', 'CD19', 'MS4A1')
-GROUP BY o.cell_type, m.var_name
+FROM anndata_scan_x('pbmc3k.h5ad', 'gene_symbols') x
+JOIN anndata_scan_obs('pbmc3k.h5ad') o ON x.obs_idx = o.obs_idx
+WHERE x.var_name IN ('CD3D', 'CD4', 'CD8A', 'CD19', 'MS4A1')
+GROUP BY o.cell_type, x.var_name
 ORDER BY o.cell_type, mean_expression DESC;
 
--- Or query by gene IDs when needed (e.g., Ensembl IDs)
+-- Query expression for specific var indices
 SELECT 
     o.cell_type,
-    m.var_id as gene_id,
-    m.var_name as gene_symbol,
-    AVG(m.value) as mean_expression
-FROM pbmc.main m
-JOIN pbmc.obs o ON m.obs_id = o.obs_id
-WHERE m.var_id IN ('ENSG00000167286', 'ENSG00000010610')
-GROUP BY o.cell_type, m.var_id, m.var_name;
+    x.var_idx,
+    x.var_name,
+    AVG(x.value) as mean_expression
+FROM anndata_scan_x('pbmc3k.h5ad', 'gene_symbols') x
+JOIN anndata_scan_obs('pbmc3k.h5ad') o ON x.obs_idx = o.obs_idx
+WHERE x.var_idx IN (0, 1, 2, 3, 4)  -- First 5 genes
+GROUP BY o.cell_type, x.var_idx, x.var_name;
 ```
 
 ### 3. Differential Expression
@@ -161,21 +157,26 @@ LIMIT 50;
 ```sql
 -- Get UMAP coordinates with cell metadata
 SELECT 
-    o.obs_id,
+    o.obs_idx,
     o.cell_type,
     o.sample_id,
     u.dim_0 as umap_1,
     u.dim_1 as umap_2
-FROM pbmc.obs o
-JOIN pbmc.obsm_umap u ON o.obs_id = u.obs_id;
+FROM anndata_scan_obs('pbmc3k.h5ad') o
+JOIN anndata_scan_obsm('pbmc3k.h5ad', 'X_umap') u ON o.obs_idx = u.obs_idx;
 
 -- Get PCA coordinates for specific cells
 SELECT 
     p.*
-FROM pbmc.obsm_pca p
-JOIN pbmc.obs o ON p.obs_id = o.obs_id
+FROM anndata_scan_obsm('pbmc3k.h5ad', 'X_pca') p
+JOIN anndata_scan_obs('pbmc3k.h5ad') o ON p.obs_idx = o.obs_idx
 WHERE o.cell_type = 'NK'
 LIMIT 100;
+
+-- List available dimensional reductions
+SELECT value 
+FROM anndata_info('pbmc3k.h5ad') 
+WHERE property = 'obsm_keys';
 ```
 
 ### 2. Clustering Analysis

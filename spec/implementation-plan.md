@@ -3,7 +3,7 @@
 ## Overview
 This document outlines the implementation plan for the AnnData DuckDB extension and tracks actual progress, learnings, and deviations from the original design.
 
-## Current Status Summary
+## Current Status Summary (v0.7.0)
 
 ### ✅ Completed Phases
 - **Phase 1**: Hello World Extension - Basic extension infrastructure working
@@ -13,18 +13,17 @@ This document outlines the implementation plan for the AnnData DuckDB extension 
 - **Phase 6**: Read X Matrix - Dense matrix support with gene names
 - **Phase 7**: Sparse Matrix Support - CSR/CSC format handling
 - **Phase 8**: obsm/varm Tables - Dimensional reduction matrices
+- **Phase 9**: obsp/varp Pairwise Tables - Cell-cell and gene-gene relationship matrices ✅
 - **Phase 10**: Layers Support - Alternative expression matrices
-- **Phase 11**: uns (Unstructured) Data - Metadata overview with type detection
+- **Phase 11**: uns (Unstructured) Data - Scalar values, DataFrames, and JSON export ✅
+- **HDF5 C API Migration**: Switched from C++ to C API for thread-safe builds ✅
 
 ### 🔄 In Progress
 - None currently
 
 ### 📋 Pending
-- **Fix**: anndata_info is documented as a table function but implemented as scalar function
 - **Phase 3**: ATTACH/DETACH - Deferred in favor of table functions
-- **Phase 9**: obsp/varp Pairwise Tables - Cell-cell and gene-gene relationship matrices
 - **Phase 12**: ATTACH/DETACH Interface - Schema-based wrapper over table functions
-W
 ## Implementation Approach Changes
 
 ### Major Decision: Table Functions Instead of ATTACH/DETACH
@@ -136,42 +135,43 @@ SELECT * FROM anndata_scan_var('path/to/file.h5ad') LIMIT 5;
 SELECT var_idx, _index, highly_variable FROM anndata_scan_var('path/to/file.h5ad');
 ```
 
-### Phase 6: Dense Matrix X 📋
+### Phase 6: Dense Matrix X ✅
 **Goal**: Read main expression matrix
 
-**Planned Implementation**:
-1. Add `anndata_scan_x` table function
-2. Read `/X` dataset as dense array
-3. Transform to long format: (obs_id, var_id, value)
-4. Implement chunked reading
+**Implementation**:
+1. ✅ Added `anndata_scan_x` table function
+2. ✅ Read `/X` dataset as dense array
+3. ✅ Transform to long format: (obs_idx, var_idx, var_name, value)
+4. ✅ Chunked reading with configurable var_column
 
-### Phase 7: Sparse Matrix X 📋
+### Phase 7: Sparse Matrix Support ✅
 **Goal**: Efficient sparse matrix handling
 
-**Planned Implementation**:
-1. Detect sparse format (CSR/CSC) in `/X`
-2. Read only non-zero values
-3. Use appropriate indices
+**Implementation**:
+1. ✅ Detect sparse format (CSR/CSC) in `/X`
+2. ✅ Read only non-zero values
+3. ✅ Automatic format detection and handling
+4. ✅ Support for both CSR and CSC formats
 
-### Phase 8: obsm/varm Tables 📋
+### Phase 8: obsm/varm Tables ✅
 **Goal**: Access dimensional reductions
 
-**Planned Implementation**:
-1. Scan `/obsm` and `/varm` groups
-2. Create `anndata_scan_obsm_<key>` functions
-3. Dynamic column generation (dim_0, dim_1, ...)
+**Implementation**:
+1. ✅ Scan `/obsm` and `/varm` groups
+2. ✅ Create `anndata_scan_obsm` and `anndata_scan_varm` functions with matrix_name parameter
+3. ✅ Dynamic column generation (dim_0, dim_1, ...)
+4. ✅ Support for PCA, UMAP, t-SNE, etc.
 
-### Phase 9: obsp/varp Pairwise Tables 📋
+### Phase 9: obsp/varp Pairwise Tables ✅
 **Goal**: Access pairwise relationship matrices (e.g., connectivities, distances)
 
-**Planned Implementation**:
-1. Scan `/obsp` and `/varp` groups for sparse matrices
-2. Create table functions:
+**Implementation**:
+1. ✅ Scan `/obsp` and `/varp` groups for sparse matrices
+2. ✅ Create table functions:
    - `anndata_scan_obsp(file, matrix_name)` - Returns (obs_idx_1, obs_idx_2, value)
    - `anndata_scan_varp(file, matrix_name)` - Returns (var_idx_1, var_idx_2, value)
-   - Optional: Could also have a list function `anndata_list_obsp(file)` to see available matrices
-3. Handle sparse formats (CSR/CSC) efficiently
-4. Only return non-zero values to avoid massive result sets
+3. ✅ Handle sparse formats (CSR/CSC) efficiently
+4. ✅ Only return non-zero values to avoid massive result sets
 
 **Index Handling**:
 - **obs_idx_1, obs_idx_2** (for obsp): Synthetic integer indices corresponding to row/column positions in the matrix
@@ -196,24 +196,32 @@ WHERE value < 0.5;
 - Must handle efficiently as returning full matrix would be impractical
 - Common matrices: 'connectivities' (kNN graph), 'distances' (pairwise distances)
 
-### Phase 10: Layers Support 📋
+### Phase 10: Layers Support ✅
 **Goal**: Access alternative expression matrices
 
-**Planned Implementation**:
-1. Scan `/layers` group
-2. Create `anndata_scan_layer_<key>` functions
-3. Support both dense and sparse
+**Implementation**:
+1. ✅ Scan `/layers` group
+2. ✅ Create `anndata_scan_layers` function with layer_name parameter
+3. ✅ Support both dense and sparse formats
+4. ✅ Returns same format as main X matrix (obs_idx, var_idx, var_name, value)
 
 ### Phase 11: uns (Unstructured) Data ✅
 **Goal**: Handle arbitrary metadata
 
-**Status**: Completed in v0.4.0
+**Implementation**:
+1. ✅ Scan `/uns` group recursively  
+2. ✅ Type detection (scalar, array, group, dataframe)
+3. ✅ `anndata_scan_uns()` function returns scalar values
+4. ✅ `anndata_scan_uns_<dataframe>()` functions for DataFrames
+5. ✅ `anndata_scan_uns_json()` for complex nested structures
+
+### anndata_info Function ✅
+**Goal**: Provide file metadata as a table function
 
 **Implementation**:
-1. ✅ Scan `/uns` group recursively
-2. ✅ Type detection (scalar, array, group, dataframe)
-3. ✅ `anndata_scan_uns()` function returns metadata overview
-4. JSON fallback for complex structures (future enhancement)
+1. ✅ Converted from scalar function to table function (v0.5.0)
+2. ✅ Returns key-value pairs: (property VARCHAR, value VARCHAR)
+3. ✅ Properties include: n_obs, n_vars, obsm_keys, varm_keys, layers, uns_keys, obsp_keys, varp_keys
 
 ### Phase 12: ATTACH/DETACH Interface 📋
 **Goal**: Provide standard DuckDB attachment semantics
@@ -274,20 +282,28 @@ DETACH mydata;
 
 ```
 src/
-├── anndata_extension.cpp    # Extension entry point
-├── anndata_scanner.cpp      # Table function implementations
-├── h5_reader.cpp           # HDF5 file operations
+├── anndata_extension.cpp           # Extension entry point
+├── anndata_scanner.cpp             # Table function implementations  
+├── h5_reader_multithreaded.cpp     # HDF5 C API operations (thread-safe)
 └── include/
     ├── anndata_extension.hpp
     ├── anndata_scanner.hpp
-    └── h5_reader.hpp
+    ├── h5_reader_multithreaded.hpp
+    └── h5_handles.hpp              # RAII wrappers for HDF5 C API
 ```
 
-### H5Reader Class Design
+### Major Architecture Change: HDF5 C API Migration
+**Why**: The HDF5 C++ API is incompatible with thread-safe builds (`--enable-threadsafe`)
+**Solution**: Complete migration to HDF5 C API with RAII wrappers
+
+### H5ReaderMultithreaded Class Design
 ```cpp
-class H5Reader {
-    // File management
-    std::unique_ptr<H5::H5File> file;
+class H5ReaderMultithreaded {
+    // File management with RAII wrapper
+    H5FileHandle file;  // RAII wrapper for hid_t
+    
+    // Thread-safe initialization
+    static std::once_flag hdf5_init_flag;
     
     // Categorical caching
     struct CategoricalCache {
@@ -296,11 +312,23 @@ class H5Reader {
     };
     std::unordered_map<std::string, CategoricalCache> categorical_cache;
     
-    // Core operations
+    // Core operations using HDF5 C API
     bool IsValidAnnData();
     std::vector<ColumnInfo> GetObsColumns();
     void ReadObsColumn(const std::string &column_name, Vector &result, 
                       idx_t offset, idx_t count);
+};
+```
+
+### RAII Handle Wrappers for HDF5 C API
+```cpp
+// Example from h5_handles.hpp
+class H5FileHandle {
+    hid_t id;
+public:
+    explicit H5FileHandle(const std::string &path, unsigned int flags = H5F_ACC_RDONLY);
+    ~H5FileHandle() { if (id >= 0) H5Fclose(id); }
+    // Move-only semantics, no copying
 };
 ```
 
@@ -332,10 +360,11 @@ OVERRIDE_GIT_DESCRIBE=v1.1.0 make
 ```
 
 ### Key Requirements
-- DuckDB v1.1.0
-- HDF5 1.10.7+ with C++ support
+- DuckDB v1.3.2+ 
+- HDF5 1.14.0+ with thread-safe support (C API only, no C++)
 - CMake 3.5+
 - C++11 compiler
+- vcpkg for dependency management
 
 ## Testing Strategy
 

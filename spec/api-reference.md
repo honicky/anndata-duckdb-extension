@@ -65,31 +65,58 @@ DETACH scdata;
 
 ## Table Functions
 
-### anndata_scan
+### Component-Specific Table Functions
 
-Direct table function for scanning AnnData files without attaching.
+Direct table functions for scanning AnnData components without attaching.
 
-#### Syntax
+#### anndata_scan_obs
 ```sql
-SELECT * FROM anndata_scan('path', 'component');
+SELECT * FROM anndata_scan_obs('path');
 ```
+Returns observation (cell) metadata with obs_idx and all metadata columns.
 
-#### Parameters
-- `path`: Path to the .h5ad file
-- `component`: Component to read ('X', 'obs', 'var', 'obsm', 'varm', 'layers', 'uns')
-
-#### Example
+#### anndata_scan_var
 ```sql
--- Read observation metadata directly
-SELECT * FROM anndata_scan('data.h5ad', 'obs');
-
--- Read main matrix
-SELECT * FROM anndata_scan('data.h5ad', 'X') LIMIT 100;
+SELECT * FROM anndata_scan_var('path');
 ```
+Returns variable (gene) metadata with var_idx and all metadata columns.
+
+#### anndata_scan_x
+```sql
+SELECT * FROM anndata_scan_x('path' [, var_column]);
+```
+Returns expression matrix in long format: (obs_idx, var_idx, var_name, value).
+Optional var_column parameter specifies which var column to use for var_name.
+
+#### anndata_scan_obsm / anndata_scan_varm
+```sql
+SELECT * FROM anndata_scan_obsm('path', 'matrix_name');
+SELECT * FROM anndata_scan_varm('path', 'matrix_name');
+```
+Returns dimensional reduction matrices (e.g., 'X_pca', 'X_umap') with obs_idx/var_idx and dim_0, dim_1, ... columns.
+
+#### anndata_scan_obsp / anndata_scan_varp
+```sql
+SELECT * FROM anndata_scan_obsp('path', 'matrix_name');
+SELECT * FROM anndata_scan_varp('path', 'matrix_name');
+```
+Returns pairwise relationship matrices in sparse format: (obs_idx_1, obs_idx_2, value) or (var_idx_1, var_idx_2, value).
+
+#### anndata_scan_layers
+```sql
+SELECT * FROM anndata_scan_layers('path', 'layer_name' [, var_column]);
+```
+Returns alternative expression matrices with same format as anndata_scan_x.
+
+#### anndata_scan_uns
+```sql
+SELECT * FROM anndata_scan_uns('path');
+```
+Returns scalar metadata from the uns (unstructured) group.
 
 ### anndata_info
 
-Returns metadata about an AnnData file.
+Returns metadata about an AnnData file as a table function.
 
 #### Syntax
 ```sql
@@ -97,21 +124,33 @@ SELECT * FROM anndata_info('path');
 ```
 
 #### Returns
+Table with two columns:
 | Column | Type | Description |
 |--------|------|-------------|
-| `n_obs` | BIGINT | Number of observations |
-| `n_vars` | BIGINT | Number of variables |
-| `matrix_type` | VARCHAR | Type of main matrix (dense/sparse) |
-| `layers` | LIST(VARCHAR) | Available layers |
-| `obsm_keys` | LIST(VARCHAR) | Available obsm matrices |
-| `varm_keys` | LIST(VARCHAR) | Available varm matrices |
-| `uns_keys` | LIST(VARCHAR) | Available uns keys |
-| `obsp_keys` | LIST(VARCHAR) | Available obsp keys |
-| `varp_keys` | LIST(VARCHAR) | Available varp keys |
+| `property` | VARCHAR | Property name |
+| `value` | VARCHAR | Property value |
+
+Properties include:
+- `n_obs`: Number of observations
+- `n_vars`: Number of variables  
+- `obsm_keys`: Available obsm matrices (comma-separated)
+- `varm_keys`: Available varm matrices (comma-separated)
+- `layers`: Available layers (comma-separated)
+- `uns_keys`: Available uns keys (comma-separated)
+- `obsp_keys`: Available obsp matrices (comma-separated)
+- `varp_keys`: Available varp matrices (comma-separated)
 
 #### Example
 ```sql
 SELECT * FROM anndata_info('data.h5ad');
+-- Returns:
+-- property    | value
+-- ------------|-------
+-- n_obs       | 2638
+-- n_vars      | 1838
+-- obsm_keys   | X_pca, X_umap
+-- layers      | raw, normalized
+-- ...
 ```
 
 ## Configuration Parameters
