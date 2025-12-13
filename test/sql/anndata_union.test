@@ -1,6 +1,6 @@
 # name: test/sql/anndata_union.test
 # description: Test UNION queries with multiple AnnData files to verify thread-safe HDF5 access
-# group: [anndata]
+# group: [sql]
 
 require anndata
 

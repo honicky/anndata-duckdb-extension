@@ -439,10 +439,10 @@ assert db_count == adata.n_obs
 ## Next Immediate Steps
 
 1. ✅ Complete actual HDF5 data reading for obs
-2. ⬜ Implement var data reading
-3. ⬜ Add dense X matrix support
-4. ⬜ Performance benchmarking
-5. ⬜ Add sparse matrix support
+2. ✅ Implement var data reading
+3. ✅ Add dense X matrix support
+4. ✅ Performance benchmarking
+5. ✅ Add sparse matrix support
 
 ## Success Criteria
 

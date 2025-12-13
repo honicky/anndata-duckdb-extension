@@ -1,6 +1,7 @@
 #include "include/h5_reader_multithreaded.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
 #include <cstring>
 #include <unordered_set>
 #include <algorithm>
@@ -12,7 +13,7 @@ namespace duckdb {
 // Phase 2: Core Infrastructure - Constructor/Destructor and Helper Methods
 // ============================================================================
 
-H5ReaderMultithreaded::H5ReaderMultithreaded(const std::string &file_path) : file_path(file_path), file() {
+H5ReaderMultithreaded::H5ReaderMultithreaded(const std::string &file_path) : file_path(file_path) {
 	// Initialize HDF5 library and set up thread safety
 	// Use a function-level static to ensure thread-safe initialization (C++11 guarantees this)
 	static std::once_flag hdf5_init_flag;
@@ -30,30 +31,37 @@ H5ReaderMultithreaded::H5ReaderMultithreaded(const std::string &file_path) : fil
 			fprintf(stderr, "WARNING: HDF5 library is not thread-safe. UNION queries may fail.\n");
 		}
 
-		// Turn off HDF5 error printing
+		// Turn off HDF5 error printing to avoid stderr spam
 		H5Eset_auto2(H5E_DEFAULT, nullptr, nullptr);
+		
+		// Disable atexit handling to avoid shutdown races
+		H5dont_atexit();
 	});
 
-	// Open the HDF5 file using the C API with thread-safe support
+	// Get shared file handle from cache
 	try {
-		file = H5FileHandle(file_path, H5F_ACC_RDONLY);
+		file_handle = H5FileCache::Open(file_path);
+		if (!file_handle || *file_handle < 0) {
+			throw IOException("Failed to get valid file handle from cache");
+		}
 	} catch (const std::exception &e) {
 		throw IOException("Failed to open HDF5 file " + file_path + ": " + std::string(e.what()));
 	}
 }
 
 H5ReaderMultithreaded::~H5ReaderMultithreaded() {
-	// Destructor automatically handled by H5FileHandle RAII
+	// File handle will be closed by shared_ptr when last reference is released
+	file_handle.reset();
 }
 
 // Helper method to check if a group exists
 bool H5ReaderMultithreaded::IsGroupPresent(const std::string &group_name) {
-	if (!H5LinkExists(file.get(), group_name)) {
+	if (!H5LinkExists(*file_handle, group_name)) {
 		return false;
 	}
 
 	// Check if it's actually a group (not a dataset)
-	return H5GetObjectType(file.get(), group_name) == H5O_TYPE_GROUP;
+	return H5GetObjectType(*file_handle, group_name) == H5O_TYPE_GROUP;
 }
 
 // Helper method to check if a dataset exists within a group
@@ -64,7 +72,7 @@ bool H5ReaderMultithreaded::IsDatasetPresent(const std::string &group_name, cons
 	}
 
 	try {
-		H5GroupHandle group(file.get(), group_name);
+		H5GroupHandle group(*file_handle, group_name);
 
 		if (!H5LinkExists(group.get(), dataset_name)) {
 			return false;
@@ -93,7 +101,7 @@ std::vector<std::string> H5ReaderMultithreaded::GetGroupMembers(const std::strin
 	std::vector<std::string> members;
 
 	try {
-		H5GroupHandle group(file.get(), group_name);
+		H5GroupHandle group(*file_handle, group_name);
 
 		IterateData data;
 		data.members = &members;
@@ -147,7 +155,7 @@ LogicalType H5ReaderMultithreaded::H5TypeToDuckDBType(hid_t h5_type) {
 // Check if file is valid AnnData format
 bool H5ReaderMultithreaded::IsValidAnnData() {
 	// Check for required groups: /obs, /var, and either /X group or dataset
-	return IsGroupPresent("/obs") && IsGroupPresent("/var") && (IsGroupPresent("/X") || H5LinkExists(file.get(), "/X"));
+	return IsGroupPresent("/obs") && IsGroupPresent("/var") && (IsGroupPresent("/X") || H5LinkExists(*file_handle, "/X"));
 }
 
 // Get number of observations (cells)
@@ -155,7 +163,7 @@ size_t H5ReaderMultithreaded::GetObsCount() {
 	try {
 		// Try to get shape from obs/_index first (standard location)
 		if (IsDatasetPresent("/obs", "_index")) {
-			H5DatasetHandle dataset(file.get(), "/obs/_index");
+			H5DatasetHandle dataset(*file_handle, "/obs/_index");
 			H5DataspaceHandle dataspace(dataset.get());
 			hsize_t dims[1];
 			H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
@@ -164,7 +172,7 @@ size_t H5ReaderMultithreaded::GetObsCount() {
 
 		// Try index (alternative location)
 		if (IsDatasetPresent("/obs", "index")) {
-			H5DatasetHandle dataset(file.get(), "/obs/index");
+			H5DatasetHandle dataset(*file_handle, "/obs/index");
 			H5DataspaceHandle dataspace(dataset.get());
 			hsize_t dims[1];
 			H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
@@ -172,28 +180,28 @@ size_t H5ReaderMultithreaded::GetObsCount() {
 		}
 
 		// Try getting from X matrix shape
-		if (H5LinkExists(file.get(), "/X")) {
-			if (H5GetObjectType(file.get(), "/X") == H5O_TYPE_DATASET) {
+		if (H5LinkExists(*file_handle, "/X")) {
+			if (H5GetObjectType(*file_handle, "/X") == H5O_TYPE_DATASET) {
 				// Dense matrix
-				H5DatasetHandle dataset(file.get(), "/X");
+				H5DatasetHandle dataset(*file_handle, "/X");
 				H5DataspaceHandle dataspace(dataset.get());
 				hsize_t dims[2];
 				int ndims = H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
 				if (ndims == 2) {
 					return dims[0];
 				}
-			} else if (H5GetObjectType(file.get(), "/X") == H5O_TYPE_GROUP) {
+			} else if (H5GetObjectType(*file_handle, "/X") == H5O_TYPE_GROUP) {
 				// Sparse matrix - check indptr for CSR or shape attribute
 				if (IsDatasetPresent("/X", "indptr")) {
-					H5DatasetHandle indptr(file.get(), "/X/indptr");
+					H5DatasetHandle indptr(*file_handle, "/X/indptr");
 					H5DataspaceHandle indptr_space(indptr.get());
 					hsize_t indptr_dims[1];
 					H5Sget_simple_extent_dims(indptr_space.get(), indptr_dims, nullptr);
 
 					// For CSR format, n_obs = len(indptr) - 1
 					// Check if there's a shape attribute to be sure
-					if (H5Aexists(file.get(), "shape")) {
-						H5AttributeHandle shape_attr(file.get(), "shape");
+					if (H5Aexists(*file_handle, "shape")) {
+						H5AttributeHandle shape_attr(*file_handle, "shape");
 						hsize_t shape[2];
 						H5Aread(shape_attr.get(), H5T_NATIVE_HSIZE, shape);
 						return shape[0];
@@ -217,7 +225,7 @@ size_t H5ReaderMultithreaded::GetVarCount() {
 	try {
 		// Try to get shape from var/_index first (standard location)
 		if (IsDatasetPresent("/var", "_index")) {
-			H5DatasetHandle dataset(file.get(), "/var/_index");
+			H5DatasetHandle dataset(*file_handle, "/var/_index");
 			H5DataspaceHandle dataspace(dataset.get());
 			hsize_t dims[1];
 			H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
@@ -226,7 +234,7 @@ size_t H5ReaderMultithreaded::GetVarCount() {
 
 		// Try index (alternative location)
 		if (IsDatasetPresent("/var", "index")) {
-			H5DatasetHandle dataset(file.get(), "/var/index");
+			H5DatasetHandle dataset(*file_handle, "/var/index");
 			H5DataspaceHandle dataspace(dataset.get());
 			hsize_t dims[1];
 			H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
@@ -234,20 +242,20 @@ size_t H5ReaderMultithreaded::GetVarCount() {
 		}
 
 		// Try getting from X matrix shape
-		if (H5LinkExists(file.get(), "/X")) {
-			if (H5GetObjectType(file.get(), "/X") == H5O_TYPE_DATASET) {
+		if (H5LinkExists(*file_handle, "/X")) {
+			if (H5GetObjectType(*file_handle, "/X") == H5O_TYPE_DATASET) {
 				// Dense matrix
-				H5DatasetHandle dataset(file.get(), "/X");
+				H5DatasetHandle dataset(*file_handle, "/X");
 				H5DataspaceHandle dataspace(dataset.get());
 				hsize_t dims[2];
 				int ndims = H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
 				if (ndims == 2) {
 					return dims[1];
 				}
-			} else if (H5GetObjectType(file.get(), "/X") == H5O_TYPE_GROUP) {
+			} else if (H5GetObjectType(*file_handle, "/X") == H5O_TYPE_GROUP) {
 				// Sparse matrix - check shape attribute or indptr for CSC
-				if (H5Aexists(file.get(), "shape")) {
-					H5AttributeHandle shape_attr(file.get(), "shape");
+				if (H5Aexists(*file_handle, "shape")) {
+					H5AttributeHandle shape_attr(*file_handle, "shape");
 					hsize_t shape[2];
 					H5Aread(shape_attr.get(), H5T_NATIVE_HSIZE, shape);
 					return shape[1];
@@ -255,7 +263,7 @@ size_t H5ReaderMultithreaded::GetVarCount() {
 
 				// Check indptr for CSC format
 				if (IsDatasetPresent("/X", "indptr")) {
-					H5DatasetHandle indptr(file.get(), "/X/indptr");
+					H5DatasetHandle indptr(*file_handle, "/X/indptr");
 					H5DataspaceHandle indptr_space(indptr.get());
 					hsize_t indptr_dims[1];
 					H5Sget_simple_extent_dims(indptr_space.get(), indptr_dims, nullptr);
@@ -315,15 +323,15 @@ std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetObsColu
 
 			// Check if it's categorical (has codes and categories)
 			std::string member_path = "/obs/" + member;
-			if (H5GetObjectType(file.get(), member_path) == H5O_TYPE_GROUP) {
+			if (H5GetObjectType(*file_handle, member_path) == H5O_TYPE_GROUP) {
 				col.is_categorical = true;
 				col.type = LogicalType::VARCHAR;
 
 				// Load categories
 				try {
 					std::string cat_path = member_path + "/categories";
-					if (H5LinkExists(file.get(), cat_path.c_str())) {
-						H5DatasetHandle cat_dataset(file.get(), cat_path);
+					if (H5LinkExists(*file_handle, cat_path.c_str())) {
+						H5DatasetHandle cat_dataset(*file_handle, cat_path);
 						H5DataspaceHandle cat_space(cat_dataset.get());
 						hsize_t cat_dims[1];
 						H5Sget_simple_extent_dims(cat_space.get(), cat_dims, nullptr);
@@ -349,7 +357,7 @@ std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetObsColu
 				}
 			} else if (IsDatasetPresent("/obs", member)) {
 				// Direct dataset
-				H5DatasetHandle dataset(file.get(), "/obs/" + member);
+				H5DatasetHandle dataset(*file_handle, "/obs/" + member);
 				H5TypeHandle dtype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
 				col.type = H5TypeToDuckDBType(dtype.get());
 			}
@@ -398,15 +406,15 @@ std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetVarColu
 
 			// Check if it's categorical
 			std::string member_path = "/var/" + member;
-			if (H5GetObjectType(file.get(), member_path) == H5O_TYPE_GROUP) {
+			if (H5GetObjectType(*file_handle, member_path) == H5O_TYPE_GROUP) {
 				col.is_categorical = true;
 				col.type = LogicalType::VARCHAR;
 
 				// Load categories similar to obs
 				try {
 					std::string cat_path = member_path + "/categories";
-					if (H5LinkExists(file.get(), cat_path.c_str())) {
-						H5DatasetHandle cat_dataset(file.get(), cat_path);
+					if (H5LinkExists(*file_handle, cat_path.c_str())) {
+						H5DatasetHandle cat_dataset(*file_handle, cat_path);
 						H5DataspaceHandle cat_space(cat_dataset.get());
 						hsize_t cat_dims[1];
 						H5Sget_simple_extent_dims(cat_space.get(), cat_dims, nullptr);
@@ -432,7 +440,7 @@ std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetVarColu
 				}
 			} else if (IsDatasetPresent("/var", member)) {
 				// Direct dataset
-				H5DatasetHandle dataset(file.get(), "/var/" + member);
+				H5DatasetHandle dataset(*file_handle, "/var/" + member);
 				H5TypeHandle dtype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
 				col.type = H5TypeToDuckDBType(dtype.get());
 			}
@@ -458,15 +466,15 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 
 		// Check if it's a categorical column
 		std::string group_path = "/obs/" + column_name;
-		if (H5GetObjectType(file.get(), group_path) == H5O_TYPE_GROUP) {
+		if (H5GetObjectType(*file_handle, group_path) == H5O_TYPE_GROUP) {
 			// Handle categorical columns
 			try {
 				// Read codes
-				H5DatasetHandle codes_dataset(file.get(), group_path + "/codes");
+				H5DatasetHandle codes_dataset(*file_handle, group_path + "/codes");
 				H5DataspaceHandle codes_space(codes_dataset.get());
 
 				// Read categories into memory (usually small)
-				H5DatasetHandle cat_dataset(file.get(), group_path + "/categories");
+				H5DatasetHandle cat_dataset(*file_handle, group_path + "/categories");
 				H5DataspaceHandle cat_space(cat_dataset.get());
 				hsize_t cat_dims[1];
 				H5Sget_simple_extent_dims(cat_space.get(), cat_dims, nullptr);
@@ -531,7 +539,7 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 			}
 		} else if (IsDatasetPresent("/obs", column_name)) {
 			// Direct dataset (non-categorical)
-			H5DatasetHandle dataset(file.get(), "/obs/" + column_name);
+			H5DatasetHandle dataset(*file_handle, "/obs/" + column_name);
 			H5DataspaceHandle dataspace(dataset.get());
 			H5TypeHandle dtype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
 
@@ -553,26 +561,50 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 					H5Dread(dataset.get(), dtype.get(), mem_space.get(), dataspace.get(), H5P_DEFAULT,
 					        str_buffer.data());
 
+					// Ensure vector is properly initialized
+					result.SetVectorType(VectorType::FLAT_VECTOR);
+					auto string_vec = FlatVector::GetData<string_t>(result);
+					auto &validity = FlatVector::Validity(result);
+					validity.SetAllValid(count); // Start with all valid
+					
 					for (idx_t i = 0; i < count; i++) {
-						if (str_buffer[i]) {
-							result.SetValue(i, Value(std::string(str_buffer[i])));
+						if (str_buffer[i] != nullptr) {
+							string_vec[i] = StringVector::AddString(result, str_buffer[i]);
 						} else {
-							result.SetValue(i, Value());
+							// Mark as NULL in the validity mask
+							validity.SetInvalid(i);
 						}
 					}
 
+					// Reclaim HDF5 memory after we've copied the strings
 					H5Dvlen_reclaim(dtype.get(), mem_space.get(), H5P_DEFAULT, str_buffer.data());
+					
+#ifdef DEBUG
+					// Verify the vector is valid
+					Vector::Verify(result, count);
+#endif
 				} else {
 					// Fixed-length strings
 					size_t str_size = H5Tget_size(dtype.get());
 					std::vector<char> buffer(count * str_size);
 					H5Dread(dataset.get(), dtype.get(), mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
 
+					// Ensure vector is properly initialized
+					result.SetVectorType(VectorType::FLAT_VECTOR);
+					auto string_vec = FlatVector::GetData<string_t>(result);
+					auto &validity = FlatVector::Validity(result);
+					validity.SetAllValid(count);
+					
 					for (idx_t i = 0; i < count; i++) {
 						char *str_ptr = buffer.data() + i * str_size;
 						size_t len = strnlen(str_ptr, str_size);
-						result.SetValue(i, Value(std::string(str_ptr, len)));
+						string_vec[i] = StringVector::AddString(result, str_ptr, len);
 					}
+					
+#ifdef DEBUG
+					// Verify the vector is valid
+					Vector::Verify(result, count);
+#endif
 				}
 			} else if (type_class == H5T_INTEGER) {
 				// Read integer data
@@ -643,15 +675,15 @@ void H5ReaderMultithreaded::ReadVarColumn(const std::string &column_name, Vector
 
 		// Check if it's a categorical column
 		std::string group_path = "/var/" + column_name;
-		if (H5GetObjectType(file.get(), group_path) == H5O_TYPE_GROUP) {
+		if (H5GetObjectType(*file_handle, group_path) == H5O_TYPE_GROUP) {
 			// Handle categorical columns - same logic as obs
 			try {
 				// Read codes
-				H5DatasetHandle codes_dataset(file.get(), group_path + "/codes");
+				H5DatasetHandle codes_dataset(*file_handle, group_path + "/codes");
 				H5DataspaceHandle codes_space(codes_dataset.get());
 
 				// Read categories into memory
-				H5DatasetHandle cat_dataset(file.get(), group_path + "/categories");
+				H5DatasetHandle cat_dataset(*file_handle, group_path + "/categories");
 				H5DataspaceHandle cat_space(cat_dataset.get());
 				hsize_t cat_dims[1];
 				H5Sget_simple_extent_dims(cat_space.get(), cat_dims, nullptr);
@@ -715,7 +747,7 @@ void H5ReaderMultithreaded::ReadVarColumn(const std::string &column_name, Vector
 			}
 		} else if (IsDatasetPresent("/var", column_name)) {
 			// Direct dataset (non-categorical) - same logic as obs
-			H5DatasetHandle dataset(file.get(), "/var/" + column_name);
+			H5DatasetHandle dataset(*file_handle, "/var/" + column_name);
 			H5DataspaceHandle dataspace(dataset.get());
 			H5TypeHandle dtype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
 
@@ -737,26 +769,50 @@ void H5ReaderMultithreaded::ReadVarColumn(const std::string &column_name, Vector
 					H5Dread(dataset.get(), dtype.get(), mem_space.get(), dataspace.get(), H5P_DEFAULT,
 					        str_buffer.data());
 
+					// Ensure vector is properly initialized
+					result.SetVectorType(VectorType::FLAT_VECTOR);
+					auto string_vec = FlatVector::GetData<string_t>(result);
+					auto &validity = FlatVector::Validity(result);
+					validity.SetAllValid(count); // Start with all valid
+					
 					for (idx_t i = 0; i < count; i++) {
-						if (str_buffer[i]) {
-							result.SetValue(i, Value(std::string(str_buffer[i])));
+						if (str_buffer[i] != nullptr) {
+							string_vec[i] = StringVector::AddString(result, str_buffer[i]);
 						} else {
-							result.SetValue(i, Value());
+							// Mark as NULL in the validity mask
+							validity.SetInvalid(i);
 						}
 					}
 
+					// Reclaim HDF5 memory after we've copied the strings
 					H5Dvlen_reclaim(dtype.get(), mem_space.get(), H5P_DEFAULT, str_buffer.data());
+					
+#ifdef DEBUG
+					// Verify the vector is valid
+					Vector::Verify(result, count);
+#endif
 				} else {
 					// Fixed-length strings
 					size_t str_size = H5Tget_size(dtype.get());
 					std::vector<char> buffer(count * str_size);
 					H5Dread(dataset.get(), dtype.get(), mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
 
+					// Ensure vector is properly initialized
+					result.SetVectorType(VectorType::FLAT_VECTOR);
+					auto string_vec = FlatVector::GetData<string_t>(result);
+					auto &validity = FlatVector::Validity(result);
+					validity.SetAllValid(count);
+					
 					for (idx_t i = 0; i < count; i++) {
 						char *str_ptr = buffer.data() + i * str_size;
 						size_t len = strnlen(str_ptr, str_size);
-						result.SetValue(i, Value(std::string(str_ptr, len)));
+						string_vec[i] = StringVector::AddString(result, str_ptr, len);
 					}
+					
+#ifdef DEBUG
+					// Verify the vector is valid
+					Vector::Verify(result, count);
+#endif
 				}
 			} else if (type_class == H5T_INTEGER) {
 				// Read integer data
@@ -847,14 +903,14 @@ H5ReaderMultithreaded::XMatrixInfo H5ReaderMultithreaded::GetXMatrixInfo() {
 	info.n_var = GetVarCount();
 
 	// Check if X is sparse or dense
-	if (H5LinkExists(file.get(), "/X")) {
-		if (H5GetObjectType(file.get(), "/X") == H5O_TYPE_GROUP) {
+	if (H5LinkExists(*file_handle, "/X")) {
+		if (H5GetObjectType(*file_handle, "/X") == H5O_TYPE_GROUP) {
 			// Sparse matrix
 			info.is_sparse = true;
 			// Try to determine format (CSR vs CSC)
 			if (IsDatasetPresent("/X", "indptr") && IsDatasetPresent("/X", "indices")) {
 				// Check indptr length to determine format
-				H5DatasetHandle indptr(file.get(), "/X/indptr");
+				H5DatasetHandle indptr(*file_handle, "/X/indptr");
 				H5DataspaceHandle indptr_space(indptr.get());
 				hsize_t indptr_dims[1];
 				H5Sget_simple_extent_dims(indptr_space.get(), indptr_dims, nullptr);
@@ -903,9 +959,9 @@ std::vector<std::string> H5ReaderMultithreaded::GetVarNames(const std::string &c
 
 		if (column_name.empty() || column_name == "var_names") {
 			// Try to get default var names from _index attribute
-			if (H5AttributeExists(file.get(), "/var", "_index")) {
+			if (H5AttributeExists(*file_handle, "/var", "_index")) {
 				// Open the /var group
-				H5GroupHandle var_group(file.get(), "/var");
+				H5GroupHandle var_group(*file_handle, "/var");
 				H5AttributeHandle attr(var_group.get(), "_index");
 
 				// Get attribute dataspace
@@ -946,7 +1002,7 @@ std::vector<std::string> H5ReaderMultithreaded::GetVarNames(const std::string &c
 			// Try to get specific column from var DataFrame
 			std::string dataset_path = "/var/" + column_name;
 			if (IsDatasetPresent("/var", column_name)) {
-				H5DatasetHandle dataset(file.get(), dataset_path);
+				H5DatasetHandle dataset(*file_handle, dataset_path);
 				H5DataspaceHandle dataspace(dataset.get());
 				hsize_t dims[1];
 				H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
@@ -1045,11 +1101,11 @@ void H5ReaderMultithreaded::ReadXMatrixBatch(idx_t row_start, idx_t row_count, i
 		}
 
 		// Read dense matrix
-		if (!H5LinkExists(file.get(), "/X")) {
+		if (!H5LinkExists(*file_handle, "/X")) {
 			throw IOException("X matrix not found in file");
 		}
 
-		H5DatasetHandle dataset(file.get(), "/X");
+		H5DatasetHandle dataset(*file_handle, "/X");
 		H5DataspaceHandle dataspace(dataset.get());
 
 		// Get dimensions
@@ -1139,9 +1195,9 @@ std::vector<H5ReaderMultithreaded::MatrixInfo> H5ReaderMultithreaded::GetObsmMat
 			for (const auto &matrix_name : members) {
 				// Check if it's a dataset
 				std::string path = "/obsm/" + matrix_name;
-				if (H5LinkExists(file.get(), path) && H5GetObjectType(file.get(), path) == H5O_TYPE_DATASET) {
+				if (H5LinkExists(*file_handle, path) && H5GetObjectType(*file_handle, path) == H5O_TYPE_DATASET) {
 					// Open dataset and get dimensions
-					H5DatasetHandle dataset(file.get(), path);
+					H5DatasetHandle dataset(*file_handle, path);
 					H5DataspaceHandle dataspace(dataset.get());
 
 					int ndims = H5Sget_simple_extent_ndims(dataspace.get());
@@ -1190,9 +1246,9 @@ std::vector<H5ReaderMultithreaded::MatrixInfo> H5ReaderMultithreaded::GetVarmMat
 			for (const auto &matrix_name : members) {
 				// Check if it's a dataset
 				std::string path = "/varm/" + matrix_name;
-				if (H5LinkExists(file.get(), path) && H5GetObjectType(file.get(), path) == H5O_TYPE_DATASET) {
+				if (H5LinkExists(*file_handle, path) && H5GetObjectType(*file_handle, path) == H5O_TYPE_DATASET) {
 					// Open dataset and get dimensions
-					H5DatasetHandle dataset(file.get(), path);
+					H5DatasetHandle dataset(*file_handle, path);
 					H5DataspaceHandle dataspace(dataset.get());
 
 					int ndims = H5Sget_simple_extent_ndims(dataspace.get());
@@ -1234,7 +1290,7 @@ void H5ReaderMultithreaded::ReadObsmMatrix(const std::string &matrix_name, idx_t
                                            idx_t col_idx, Vector &result) {
 	try {
 		std::string dataset_path = "/obsm/" + matrix_name;
-		H5DatasetHandle dataset(file.get(), dataset_path);
+		H5DatasetHandle dataset(*file_handle, dataset_path);
 		H5DataspaceHandle dataspace(dataset.get());
 
 		// Get dimensions
@@ -1298,7 +1354,7 @@ void H5ReaderMultithreaded::ReadVarmMatrix(const std::string &matrix_name, idx_t
                                            idx_t col_idx, Vector &result) {
 	try {
 		std::string dataset_path = "/varm/" + matrix_name;
-		H5DatasetHandle dataset(file.get(), dataset_path);
+		H5DatasetHandle dataset(*file_handle, dataset_path);
 		H5DataspaceHandle dataspace(dataset.get());
 
 		// Get dimensions
@@ -1365,7 +1421,7 @@ std::vector<H5ReaderMultithreaded::LayerInfo> H5ReaderMultithreaded::GetLayers()
 		return layers; // No layers in this file
 	}
 
-	H5GroupHandle layers_group(file.get(), "/layers");
+	H5GroupHandle layers_group(*file_handle, "/layers");
 
 	// Get number of objects in the layers group
 	hsize_t num_objs;
@@ -1387,12 +1443,12 @@ std::vector<H5ReaderMultithreaded::LayerInfo> H5ReaderMultithreaded::GetLayers()
 
 		// Check object type
 		H5O_info_t obj_info;
-		H5_CHECK(H5Oget_info_by_name(file.get(), layer_path.c_str(), &obj_info, H5O_INFO_BASIC, H5P_DEFAULT));
+		H5_CHECK(H5Oget_info_by_name(*file_handle, layer_path.c_str(), &obj_info, H5O_INFO_BASIC, H5P_DEFAULT));
 
 		if (obj_info.type == H5O_TYPE_DATASET) {
 			// Dense layer
 			info.is_sparse = false;
-			H5DatasetHandle dataset(file.get(), layer_path);
+			H5DatasetHandle dataset(*file_handle, layer_path);
 			H5DataspaceHandle dataspace(dataset.get());
 
 			// Get dimensions
@@ -1412,7 +1468,7 @@ std::vector<H5ReaderMultithreaded::LayerInfo> H5ReaderMultithreaded::GetLayers()
 			// Check for indptr to determine format and dimensions
 			std::string indptr_path = layer_path + "/indptr";
 			if (IsDatasetPresent(layer_path, "indptr")) {
-				H5DatasetHandle indptr(file.get(), indptr_path);
+				H5DatasetHandle indptr(*file_handle, indptr_path);
 				H5DataspaceHandle indptr_space(indptr.get());
 
 				hsize_t indptr_dims;
@@ -1477,7 +1533,7 @@ std::vector<H5ReaderMultithreaded::LayerInfo> H5ReaderMultithreaded::GetLayers()
 			// Get data type from data array
 			std::string data_path = layer_path + "/data";
 			if (IsDatasetPresent(layer_path, "data")) {
-				H5DatasetHandle data_dataset(file.get(), data_path);
+				H5DatasetHandle data_dataset(*file_handle, data_path);
 				H5TypeHandle dtype(data_dataset.get(), H5TypeHandle::TypeClass::DATASET);
 				info.dtype = H5TypeToDuckDBType(dtype.get());
 			}
@@ -1495,11 +1551,11 @@ void H5ReaderMultithreaded::ReadLayerMatrix(const std::string &layer_name, idx_t
 
 	// Check object type
 	H5O_info_t obj_info;
-	H5_CHECK(H5Oget_info_by_name(file.get(), layer_path.c_str(), &obj_info, H5O_INFO_BASIC, H5P_DEFAULT));
+	H5_CHECK(H5Oget_info_by_name(*file_handle, layer_path.c_str(), &obj_info, H5O_INFO_BASIC, H5P_DEFAULT));
 
 	if (obj_info.type == H5O_TYPE_DATASET) {
 		// Dense layer - read directly
-		H5DatasetHandle dataset(file.get(), layer_path);
+		H5DatasetHandle dataset(*file_handle, layer_path);
 		H5DataspaceHandle dataspace(dataset.get());
 
 		// Get dimensions
@@ -1534,11 +1590,11 @@ void H5ReaderMultithreaded::ReadLayerMatrix(const std::string &layer_name, idx_t
 
 	} else if (obj_info.type == H5O_TYPE_GROUP) {
 		// Sparse layer
-		H5GroupHandle layer_group(file.get(), layer_path);
+		H5GroupHandle layer_group(*file_handle, layer_path);
 
 		// Determine format
 		std::string indptr_path = layer_path + "/indptr";
-		H5DatasetHandle indptr(file.get(), indptr_path);
+		H5DatasetHandle indptr(*file_handle, indptr_path);
 
 		// Check encoding
 		std::string format = "CSR"; // default
@@ -1631,7 +1687,7 @@ void H5ReaderMultithreaded::ReadMatrixBatch(const std::string &path, idx_t row_s
 
 	// Check object type
 	H5O_info_t obj_info;
-	H5_CHECK(H5Oget_info_by_name(file.get(), path.c_str(), &obj_info, H5O_INFO_BASIC, H5P_DEFAULT));
+	H5_CHECK(H5Oget_info_by_name(*file_handle, path.c_str(), &obj_info, H5O_INFO_BASIC, H5P_DEFAULT));
 
 	if (is_layer) {
 		// For layers, check the structure
@@ -1645,7 +1701,7 @@ void H5ReaderMultithreaded::ReadMatrixBatch(const std::string &path, idx_t row_s
 
 	if (is_dense) {
 		// Read dense matrix
-		H5DatasetHandle dataset(file.get(), path);
+		H5DatasetHandle dataset(*file_handle, path);
 		H5DataspaceHandle dataspace(dataset.get());
 
 		// Get dimensions
@@ -1678,7 +1734,7 @@ void H5ReaderMultithreaded::ReadMatrixBatch(const std::string &path, idx_t row_s
 		std::string indptr_path = path + "/indptr";
 
 		if (IsDatasetPresent(path, "indptr")) {
-			H5DatasetHandle indptr(file.get(), indptr_path);
+			H5DatasetHandle indptr(*file_handle, indptr_path);
 			H5DataspaceHandle indptr_space(indptr.get());
 
 			// Get indptr dimensions to help infer format
@@ -1757,7 +1813,7 @@ std::vector<H5ReaderMultithreaded::UnsInfo> H5ReaderMultithreaded::GetUnsKeys() 
 		return uns_keys;
 	}
 
-	H5GroupHandle uns_group(file.get(), "/uns");
+	H5GroupHandle uns_group(*file_handle, "/uns");
 
 	// Get number of objects in the uns group
 	hsize_t num_objs;
@@ -1779,11 +1835,11 @@ std::vector<H5ReaderMultithreaded::UnsInfo> H5ReaderMultithreaded::GetUnsKeys() 
 		// Check object type
 		std::string obj_path = "/uns/" + key_name;
 		H5O_info_t obj_info;
-		H5_CHECK(H5Oget_info_by_name(file.get(), obj_path.c_str(), &obj_info, H5O_INFO_BASIC, H5P_DEFAULT));
+		H5_CHECK(H5Oget_info_by_name(*file_handle, obj_path.c_str(), &obj_info, H5O_INFO_BASIC, H5P_DEFAULT));
 
 		if (obj_info.type == H5O_TYPE_DATASET) {
 			// It's a dataset (scalar or array)
-			H5DatasetHandle dataset(file.get(), obj_path);
+			H5DatasetHandle dataset(*file_handle, obj_path);
 			H5DataspaceHandle dataspace(dataset.get());
 			H5TypeHandle datatype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
 
@@ -1868,13 +1924,13 @@ std::vector<H5ReaderMultithreaded::UnsInfo> H5ReaderMultithreaded::GetUnsKeys() 
 			}
 		} else if (obj_info.type == H5O_TYPE_GROUP) {
 			// It's a group - check if it's a dataframe
-			H5GroupHandle sub_group(file.get(), obj_path);
+			H5GroupHandle sub_group(*file_handle, obj_path);
 
 			// Check for common dataframe indicators
-			bool has_axis0 = H5LinkExists(file.get(), (obj_path + "/axis0").c_str());
-			bool has_axis1 = H5LinkExists(file.get(), (obj_path + "/axis1").c_str());
-			bool has_values = H5LinkExists(file.get(), (obj_path + "/values").c_str()) ||
-			                  H5LinkExists(file.get(), (obj_path + "/data").c_str());
+			bool has_axis0 = H5LinkExists(*file_handle, (obj_path + "/axis0").c_str());
+			bool has_axis1 = H5LinkExists(*file_handle, (obj_path + "/axis1").c_str());
+			bool has_values = H5LinkExists(*file_handle, (obj_path + "/values").c_str()) ||
+			                  H5LinkExists(*file_handle, (obj_path + "/data").c_str());
 
 			// Check if the group contains only datasets (dataframe pattern)
 			// Dataframes are groups with multiple datasets and no sub-groups
@@ -1925,7 +1981,7 @@ Value H5ReaderMultithreaded::ReadUnsScalar(const std::string &key) {
 		return Value(); // Return NULL
 	}
 
-	H5DatasetHandle dataset(file.get(), path);
+	H5DatasetHandle dataset(*file_handle, path);
 	H5DataspaceHandle dataspace(dataset.get());
 
 	// Verify it's a scalar (0-dimensional)
@@ -1985,7 +2041,7 @@ void H5ReaderMultithreaded::ReadUnsArray(const std::string &key, Vector &result,
 		throw IOException("Uns array '%s' not found", key.c_str());
 	}
 
-	H5DatasetHandle dataset(file.get(), path);
+	H5DatasetHandle dataset(*file_handle, path);
 	H5DataspaceHandle dataspace(dataset.get());
 
 	// Get dimensions
@@ -2026,7 +2082,10 @@ void H5ReaderMultithreaded::ReadUnsArray(const std::string &key, Vector &result,
 
 	if (type_class == H5T_STRING) {
 		// String array
+		result.SetVectorType(VectorType::FLAT_VECTOR);
 		auto string_vec = FlatVector::GetData<string_t>(result);
+		auto &validity = FlatVector::Validity(result);
+		validity.SetAllValid(count);
 
 		if (H5Tis_variable_str(dtype_id)) {
 			// Variable-length strings
@@ -2038,7 +2097,7 @@ void H5ReaderMultithreaded::ReadUnsArray(const std::string &key, Vector &result,
 					string_vec[i] = StringVector::AddString(result, str_buffer[i]);
 					H5free_memory(str_buffer[i]);
 				} else {
-					string_vec[i] = StringVector::EmptyString(result, 0);
+					validity.SetInvalid(i); // Mark NULL properly
 				}
 			}
 		} else {
@@ -2049,9 +2108,15 @@ void H5ReaderMultithreaded::ReadUnsArray(const std::string &key, Vector &result,
 
 			for (idx_t i = 0; i < count; i++) {
 				char *str_ptr = buffer.data() + i * str_size;
-				string_vec[i] = StringVector::AddString(result, str_ptr);
+				size_t len = strnlen(str_ptr, str_size);
+				string_vec[i] = StringVector::AddString(result, str_ptr, len);
 			}
 		}
+		
+#ifdef DEBUG
+		// Verify the vector is valid
+		Vector::Verify(result, count);
+#endif
 	} else if (type_class == H5T_INTEGER) {
 		// Integer array
 		auto data = FlatVector::GetData<int64_t>(result);
@@ -2089,7 +2154,7 @@ std::vector<std::string> H5ReaderMultithreaded::GetObspKeys() {
 		for (const auto &key_name : members) {
 			// obsp matrices are stored as groups (sparse format)
 			std::string path = "/obsp/" + key_name;
-			if (H5LinkExists(file.get(), path) && H5GetObjectType(file.get(), path) == H5O_TYPE_GROUP) {
+			if (H5LinkExists(*file_handle, path) && H5GetObjectType(*file_handle, path) == H5O_TYPE_GROUP) {
 				keys.push_back(key_name);
 			}
 		}
@@ -2115,7 +2180,7 @@ std::vector<std::string> H5ReaderMultithreaded::GetVarpKeys() {
 		for (const auto &key_name : members) {
 			// varp matrices are stored as groups (sparse format)
 			std::string path = "/varp/" + key_name;
-			if (H5LinkExists(file.get(), path) && H5GetObjectType(file.get(), path) == H5O_TYPE_GROUP) {
+			if (H5LinkExists(*file_handle, path) && H5GetObjectType(*file_handle, path) == H5O_TYPE_GROUP) {
 				keys.push_back(key_name);
 			}
 		}
@@ -2137,7 +2202,7 @@ H5ReaderMultithreaded::SparseMatrixInfo H5ReaderMultithreaded::GetObspMatrixInfo
 	try {
 		// Check for indptr to determine format
 		if (IsDatasetPresent(matrix_path, "indptr")) {
-			H5DatasetHandle indptr_ds(file.get(), matrix_path + "/indptr");
+			H5DatasetHandle indptr_ds(*file_handle, matrix_path + "/indptr");
 			H5DataspaceHandle indptr_space(indptr_ds.get());
 			hsize_t indptr_dims[1];
 			H5Sget_simple_extent_dims(indptr_space.get(), indptr_dims, nullptr);
@@ -2159,7 +2224,7 @@ H5ReaderMultithreaded::SparseMatrixInfo H5ReaderMultithreaded::GetObspMatrixInfo
 
 			// Get number of non-zero elements
 			if (IsDatasetPresent(matrix_path, "data")) {
-				H5DatasetHandle data_ds(file.get(), matrix_path + "/data");
+				H5DatasetHandle data_ds(*file_handle, matrix_path + "/data");
 				H5DataspaceHandle data_space(data_ds.get());
 				hsize_t data_dims[1];
 				H5Sget_simple_extent_dims(data_space.get(), data_dims, nullptr);
@@ -2184,7 +2249,7 @@ H5ReaderMultithreaded::SparseMatrixInfo H5ReaderMultithreaded::GetVarpMatrixInfo
 	try {
 		// Check for indptr to determine format
 		if (IsDatasetPresent(matrix_path, "indptr")) {
-			H5DatasetHandle indptr_ds(file.get(), matrix_path + "/indptr");
+			H5DatasetHandle indptr_ds(*file_handle, matrix_path + "/indptr");
 			H5DataspaceHandle indptr_space(indptr_ds.get());
 			hsize_t indptr_dims[1];
 			H5Sget_simple_extent_dims(indptr_space.get(), indptr_dims, nullptr);
@@ -2206,7 +2271,7 @@ H5ReaderMultithreaded::SparseMatrixInfo H5ReaderMultithreaded::GetVarpMatrixInfo
 
 			// Get number of non-zero elements
 			if (IsDatasetPresent(matrix_path, "data")) {
-				H5DatasetHandle data_ds(file.get(), matrix_path + "/data");
+				H5DatasetHandle data_ds(*file_handle, matrix_path + "/data");
 				H5DataspaceHandle data_space(data_ds.get());
 				hsize_t data_dims[1];
 				H5Sget_simple_extent_dims(data_space.get(), data_dims, nullptr);
@@ -2232,9 +2297,9 @@ void H5ReaderMultithreaded::ReadObspMatrix(const std::string &key, Vector &row_r
 		SparseMatrixInfo info = GetObspMatrixInfo(key);
 
 		// Read the sparse matrix components
-		H5DatasetHandle data_ds(file.get(), matrix_path + "/data");
-		H5DatasetHandle indices_ds(file.get(), matrix_path + "/indices");
-		H5DatasetHandle indptr_ds(file.get(), matrix_path + "/indptr");
+		H5DatasetHandle data_ds(*file_handle, matrix_path + "/data");
+		H5DatasetHandle indices_ds(*file_handle, matrix_path + "/indices");
+		H5DatasetHandle indptr_ds(*file_handle, matrix_path + "/indptr");
 
 		if (info.format == "csr") {
 			// Read all indptr to find which rows contain our offset range
@@ -2307,9 +2372,9 @@ void H5ReaderMultithreaded::ReadVarpMatrix(const std::string &key, Vector &row_r
 		SparseMatrixInfo info = GetVarpMatrixInfo(key);
 
 		// Read the sparse matrix components
-		H5DatasetHandle data_ds(file.get(), matrix_path + "/data");
-		H5DatasetHandle indices_ds(file.get(), matrix_path + "/indices");
-		H5DatasetHandle indptr_ds(file.get(), matrix_path + "/indptr");
+		H5DatasetHandle data_ds(*file_handle, matrix_path + "/data");
+		H5DatasetHandle indices_ds(*file_handle, matrix_path + "/indices");
+		H5DatasetHandle indptr_ds(*file_handle, matrix_path + "/indptr");
 
 		if (info.format == "csr") {
 			// Read all indptr to find which rows contain our offset range
@@ -2378,9 +2443,9 @@ H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseMatrixC
 
 	try {
 		// Read CSR components from the specified path
-		H5DatasetHandle data_ds(file.get(), path + "/data");
-		H5DatasetHandle indices_ds(file.get(), path + "/indices");
-		H5DatasetHandle indptr_ds(file.get(), path + "/indptr");
+		H5DatasetHandle data_ds(*file_handle, path + "/data");
+		H5DatasetHandle indices_ds(*file_handle, path + "/indices");
+		H5DatasetHandle indptr_ds(*file_handle, path + "/indptr");
 
 		// Get dataspace for indptr
 		H5DataspaceHandle indptr_space(indptr_ds.get());
@@ -2497,9 +2562,9 @@ H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseMatrixC
 
 	try {
 		// Read CSC components from the specified path
-		H5DatasetHandle data_ds(file.get(), path + "/data");
-		H5DatasetHandle indices_ds(file.get(), path + "/indices");
-		H5DatasetHandle indptr_ds(file.get(), path + "/indptr");
+		H5DatasetHandle data_ds(*file_handle, path + "/data");
+		H5DatasetHandle indices_ds(*file_handle, path + "/indices");
+		H5DatasetHandle indptr_ds(*file_handle, path + "/indptr");
 
 		// Get dataspace for indptr
 		H5DataspaceHandle indptr_space(indptr_ds.get());
@@ -2680,7 +2745,7 @@ void H5ReaderMultithreaded::ReadDenseMatrix(const std::string &path, idx_t obs_s
                                             idx_t var_count, std::vector<double> &values) {
 	try {
 		// Open the dataset
-		H5DatasetHandle dataset(file.get(), path);
+		H5DatasetHandle dataset(*file_handle, path);
 		H5DataspaceHandle dataspace(dataset.get());
 
 		// Get dimensions

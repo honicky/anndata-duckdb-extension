@@ -2,6 +2,7 @@
 
 #include "duckdb.hpp"
 #include "h5_handles.hpp"
+#include "h5_file_cache.hpp"
 #include <hdf5.h>
 #include <string>
 #include <vector>
@@ -15,6 +16,14 @@ class H5ReaderMultithreaded {
 public:
 	H5ReaderMultithreaded(const std::string &file_path);
 	~H5ReaderMultithreaded();
+	
+	// Delete copy constructor and copy assignment to make class move-only
+	H5ReaderMultithreaded(const H5ReaderMultithreaded&) = delete;
+	H5ReaderMultithreaded& operator=(const H5ReaderMultithreaded&) = delete;
+	
+	// Allow move operations (default implementation is fine)
+	H5ReaderMultithreaded(H5ReaderMultithreaded&&) = default;
+	H5ReaderMultithreaded& operator=(H5ReaderMultithreaded&&) = default;
 
 	// Check if file is valid AnnData format
 	bool IsValidAnnData();
@@ -186,8 +195,8 @@ private:
 	void ReadDenseMatrix(const std::string &path, idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count,
 	                     std::vector<double> &values);
 
-	// File handle using RAII
-	H5FileHandle file;
+	// File handle using shared cache
+	std::shared_ptr<hid_t> file_handle;
 	std::string file_path;
 
 	// Helper methods

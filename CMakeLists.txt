@@ -53,6 +53,11 @@ elseif(CLANG_TIDY)
     # Add compile definitions to handle missing HDF5 in code
     add_compile_definitions(DUCKDB_NO_HDF5)
 else()
+    # Check for unsupported configuration: Windows static build
+    if(WIN32 AND EXTENSION_STATIC_BUILD)
+        message(FATAL_ERROR "Static builds are not supported on Windows because HDF5 thread-safe mode is required but not available for static Windows builds. Please use dynamic builds on Windows.")
+    endif()
+    
     # For native builds, use system HDF5
     find_package(hdf5 CONFIG QUIET)
     if(hdf5_FOUND)

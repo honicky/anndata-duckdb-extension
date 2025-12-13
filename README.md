@@ -97,7 +97,15 @@ WHERE type = 'scalar';
 
 ## Development
 
-This extension uses the DuckDB extension template and VCPKG for dependency management. 
+This extension uses the DuckDB extension template and VCPKG for dependency management.
+
+### Prerequisites
+
+For macOS:
+```bash
+# Required for timeout command in tests
+brew install coreutils
+```
 
 ### Project Structure
 
