@@ -33,7 +33,7 @@ H5ReaderMultithreaded::H5ReaderMultithreaded(const std::string &file_path) : fil
 
 		// Turn off HDF5 error printing to avoid stderr spam
 		H5Eset_auto2(H5E_DEFAULT, nullptr, nullptr);
-		
+
 		// Disable atexit handling to avoid shutdown races
 		H5dont_atexit();
 	});
@@ -155,7 +155,8 @@ LogicalType H5ReaderMultithreaded::H5TypeToDuckDBType(hid_t h5_type) {
 // Check if file is valid AnnData format
 bool H5ReaderMultithreaded::IsValidAnnData() {
 	// Check for required groups: /obs, /var, and either /X group or dataset
-	return IsGroupPresent("/obs") && IsGroupPresent("/var") && (IsGroupPresent("/X") || H5LinkExists(*file_handle, "/X"));
+	return IsGroupPresent("/obs") && IsGroupPresent("/var") &&
+	       (IsGroupPresent("/X") || H5LinkExists(*file_handle, "/X"));
 }
 
 // Get number of observations (cells)
@@ -566,7 +567,7 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 					auto string_vec = FlatVector::GetData<string_t>(result);
 					auto &validity = FlatVector::Validity(result);
 					validity.SetAllValid(count); // Start with all valid
-					
+
 					for (idx_t i = 0; i < count; i++) {
 						if (str_buffer[i] != nullptr) {
 							string_vec[i] = StringVector::AddString(result, str_buffer[i]);
@@ -578,7 +579,7 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 
 					// Reclaim HDF5 memory after we've copied the strings
 					H5Dvlen_reclaim(dtype.get(), mem_space.get(), H5P_DEFAULT, str_buffer.data());
-					
+
 #ifdef DEBUG
 					// Verify the vector is valid
 					Vector::Verify(result, count);
@@ -594,13 +595,13 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 					auto string_vec = FlatVector::GetData<string_t>(result);
 					auto &validity = FlatVector::Validity(result);
 					validity.SetAllValid(count);
-					
+
 					for (idx_t i = 0; i < count; i++) {
 						char *str_ptr = buffer.data() + i * str_size;
 						size_t len = strnlen(str_ptr, str_size);
 						string_vec[i] = StringVector::AddString(result, str_ptr, len);
 					}
-					
+
 #ifdef DEBUG
 					// Verify the vector is valid
 					Vector::Verify(result, count);
@@ -655,6 +656,32 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 					for (idx_t i = 0; i < count; i++) {
 						result.SetValue(i, Value::DOUBLE(buffer[i]));
 					}
+				}
+			} else if (type_class == H5T_ENUM) {
+				// HDF5 ENUM is often used for boolean types in AnnData
+				// Read as int8 and convert to string "true"/"false"
+				std::vector<int8_t> buffer(count);
+				H5Dread(dataset.get(), H5T_NATIVE_INT8, mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
+
+				// Ensure vector is properly initialized for strings
+				result.SetVectorType(VectorType::FLAT_VECTOR);
+				auto string_vec = FlatVector::GetData<string_t>(result);
+				auto &validity = FlatVector::Validity(result);
+				validity.SetAllValid(count);
+
+				for (idx_t i = 0; i < count; i++) {
+					if (buffer[i] == 0) {
+						string_vec[i] = StringVector::AddString(result, "False");
+					} else {
+						string_vec[i] = StringVector::AddString(result, "True");
+					}
+				}
+			} else {
+				// Unknown type - set all values to NULL
+				result.SetVectorType(VectorType::FLAT_VECTOR);
+				auto &validity = FlatVector::Validity(result);
+				for (idx_t i = 0; i < count; i++) {
+					validity.SetInvalid(i);
 				}
 			}
 		}
@@ -774,7 +801,7 @@ void H5ReaderMultithreaded::ReadVarColumn(const std::string &column_name, Vector
 					auto string_vec = FlatVector::GetData<string_t>(result);
 					auto &validity = FlatVector::Validity(result);
 					validity.SetAllValid(count); // Start with all valid
-					
+
 					for (idx_t i = 0; i < count; i++) {
 						if (str_buffer[i] != nullptr) {
 							string_vec[i] = StringVector::AddString(result, str_buffer[i]);
@@ -786,7 +813,7 @@ void H5ReaderMultithreaded::ReadVarColumn(const std::string &column_name, Vector
 
 					// Reclaim HDF5 memory after we've copied the strings
 					H5Dvlen_reclaim(dtype.get(), mem_space.get(), H5P_DEFAULT, str_buffer.data());
-					
+
 #ifdef DEBUG
 					// Verify the vector is valid
 					Vector::Verify(result, count);
@@ -802,13 +829,13 @@ void H5ReaderMultithreaded::ReadVarColumn(const std::string &column_name, Vector
 					auto string_vec = FlatVector::GetData<string_t>(result);
 					auto &validity = FlatVector::Validity(result);
 					validity.SetAllValid(count);
-					
+
 					for (idx_t i = 0; i < count; i++) {
 						char *str_ptr = buffer.data() + i * str_size;
 						size_t len = strnlen(str_ptr, str_size);
 						string_vec[i] = StringVector::AddString(result, str_ptr, len);
 					}
-					
+
 #ifdef DEBUG
 					// Verify the vector is valid
 					Vector::Verify(result, count);
@@ -863,6 +890,32 @@ void H5ReaderMultithreaded::ReadVarColumn(const std::string &column_name, Vector
 					for (idx_t i = 0; i < count; i++) {
 						result.SetValue(i, Value::DOUBLE(buffer[i]));
 					}
+				}
+			} else if (type_class == H5T_ENUM) {
+				// HDF5 ENUM is often used for boolean types in AnnData
+				// Read as int8 and convert to string "true"/"false"
+				std::vector<int8_t> buffer(count);
+				H5Dread(dataset.get(), H5T_NATIVE_INT8, mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
+
+				// Ensure vector is properly initialized for strings
+				result.SetVectorType(VectorType::FLAT_VECTOR);
+				auto string_vec = FlatVector::GetData<string_t>(result);
+				auto &validity = FlatVector::Validity(result);
+				validity.SetAllValid(count);
+
+				for (idx_t i = 0; i < count; i++) {
+					if (buffer[i] == 0) {
+						string_vec[i] = StringVector::AddString(result, "False");
+					} else {
+						string_vec[i] = StringVector::AddString(result, "True");
+					}
+				}
+			} else {
+				// Unknown type - set all values to NULL
+				result.SetVectorType(VectorType::FLAT_VECTOR);
+				auto &validity = FlatVector::Validity(result);
+				for (idx_t i = 0; i < count; i++) {
+					validity.SetInvalid(i);
 				}
 			}
 		}
@@ -2112,7 +2165,7 @@ void H5ReaderMultithreaded::ReadUnsArray(const std::string &key, Vector &result,
 				string_vec[i] = StringVector::AddString(result, str_ptr, len);
 			}
 		}
-		
+
 #ifdef DEBUG
 		// Verify the vector is valid
 		Vector::Verify(result, count);
