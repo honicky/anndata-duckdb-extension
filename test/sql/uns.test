@@ -5,45 +5,53 @@
 # Ensure the extension is loaded
 require anndata
 
-# Test with file that has uns data
-query IIIII
-SELECT * FROM anndata_scan_uns('test/data/test_uns.h5ad') ORDER BY key;
+# Test basic uns scan - check a few key entries
+query III
+SELECT key, type, dtype FROM anndata_scan_uns('test/data/test_uns.h5ad') WHERE key IN ('dataset_name', 'n_cells', 'batch_colors') ORDER BY key;
 ----
-batch_colors	array	string	(2)	NULL
-batch_effects	array	float64	(10)	NULL
-cell_type_colors	array	string	(3)	NULL
-dataset_name	scalar	string	()	Test Dataset
-is_normalized	scalar	string	()	true
-leiden	group	string	NULL	NULL
-n_cells	scalar	int64	()	100
-normalization_method	scalar	string	()	log1p
-pca	group	string	NULL	NULL
-processing_date	scalar	string	()	2024-01-01
-quality_metrics	array	float64	(5)	NULL
-rank_genes_groups	dataframe	string	NULL	NULL
-umap	group	string	NULL	NULL
-version	scalar	string	()	1.0.0
+batch_colors	array	string
+dataset_name	scalar	string
+n_cells	scalar	int64
 
-# Test that scalar values are correctly displayed
+# Test that scalar values are correctly returned via UNION type
 query I
-SELECT value FROM anndata_scan_uns('test/data/test_uns.h5ad') WHERE key = 'dataset_name';
+SELECT value.scalar FROM anndata_scan_uns('test/data/test_uns.h5ad') WHERE key = 'dataset_name';
 ----
 Test Dataset
 
-# Test that array shapes are correctly displayed
+# Test that array values are correctly returned via UNION type
+query I
+SELECT len(value.arr) FROM anndata_scan_uns('test/data/test_uns.h5ad') WHERE key = 'batch_colors';
+----
+2
+
+# Test union_tag function
+query II
+SELECT key, union_tag(value) FROM anndata_scan_uns('test/data/test_uns.h5ad') WHERE key IN ('dataset_name', 'batch_colors') ORDER BY key;
+----
+batch_colors	arr
+dataset_name	scalar
+
+# Test flattened hierarchy - nested params should have dotted paths
+query II
+SELECT key, value.scalar FROM anndata_scan_uns('test/data/test_uns.h5ad') WHERE key LIKE 'pca/params/%' ORDER BY key;
+----
+pca/params/n_comps	50
+pca/params/random_state	42
+pca/params/use_highly_variable	true
+
+# Test array shapes are correctly displayed
 query I
 SELECT shape FROM anndata_scan_uns('test/data/test_uns.h5ad') WHERE key = 'batch_effects';
 ----
 (10)
 
-# Test type breakdown
+# Test type breakdown - no more group/dataframe since hierarchy is flattened
 query II
 SELECT type, COUNT(*) as count FROM anndata_scan_uns('test/data/test_uns.h5ad') GROUP BY type ORDER BY type;
 ----
-array	4
-dataframe	1
-group	3
-scalar	6
+array	12
+scalar	15
 
 # Test with non-existent file (should error)
 statement error
