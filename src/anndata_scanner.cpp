@@ -746,22 +746,19 @@ void AnndataScanner::UnsScan(ClientContext &context, TableFunctionInput &data, D
 			output.data[3].SetValue(i, Value());
 		}
 
-		// Value column - for scalars, show the actual value
-		if (uns_info.type == "scalar") {
-			if (!uns_info.value_str.empty()) {
-				// String scalar - we already have the value
-				output.data[4].SetValue(i, Value(uns_info.value_str));
+		// Value column - show value_str if available (scalars always, small arrays)
+		if (!uns_info.value_str.empty()) {
+			output.data[4].SetValue(i, Value(uns_info.value_str));
+		} else if (uns_info.type == "scalar") {
+			// Non-string scalar - read it
+			Value scalar_value = gstate.h5_reader->ReadUnsScalar(uns_info.key);
+			if (!scalar_value.IsNull()) {
+				output.data[4].SetValue(i, scalar_value.ToString());
 			} else {
-				// Non-string scalar - read it
-				Value scalar_value = gstate.h5_reader->ReadUnsScalar(uns_info.key);
-				if (!scalar_value.IsNull()) {
-					output.data[4].SetValue(i, scalar_value.ToString());
-				} else {
-					output.data[4].SetValue(i, Value());
-				}
+				output.data[4].SetValue(i, Value());
 			}
 		} else {
-			output.data[4].SetValue(i, Value()); // NULL for non-scalars
+			output.data[4].SetValue(i, Value()); // NULL for large arrays
 		}
 	}
 

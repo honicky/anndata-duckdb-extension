@@ -200,7 +200,7 @@ private:
 	std::string file_path;
 
 	// Helper methods
-	LogicalType H5TypeToDuckDBType(hid_t h5_type);
+	static LogicalType H5TypeToDuckDBType(hid_t h5_type);
 	bool IsGroupPresent(const std::string &group_name);
 	bool IsDatasetPresent(const std::string &group_name, const std::string &dataset_name);
 	std::vector<std::string> GetGroupMembers(const std::string &group_name);

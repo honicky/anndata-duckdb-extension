@@ -1858,56 +1858,128 @@ void H5ReaderMultithreaded::ReadMatrixBatch(const std::string &path, idx_t row_s
 	output.SetCardinality(row_count);
 }
 
-std::vector<H5ReaderMultithreaded::UnsInfo> H5ReaderMultithreaded::GetUnsKeys() {
-	std::vector<UnsInfo> uns_keys;
-
-	// Check if uns group exists
-	if (!IsGroupPresent("/uns")) {
-		return uns_keys;
+// Helper function to read small arrays and format as JSON-like string
+static std::string FormatSmallArray(hid_t file_handle, const std::string &path, hid_t dtype, hsize_t total_size,
+                                    H5T_class_t type_class) {
+	const hsize_t MAX_INLINE_SIZE = 10;
+	if (total_size > MAX_INLINE_SIZE) {
+		return ""; // Too large to inline
 	}
 
-	H5GroupHandle uns_group(*file_handle, "/uns");
+	H5DatasetHandle dataset(file_handle, path);
+	std::string result = "[";
 
-	// Get number of objects in the uns group
+	if (type_class == H5T_STRING) {
+		// String array
+		if (H5Tis_variable_str(dtype)) {
+			std::vector<char *> str_buffer(total_size);
+			H5Dread(dataset.get(), dtype, H5S_ALL, H5S_ALL, H5P_DEFAULT, str_buffer.data());
+			for (hsize_t i = 0; i < total_size; i++) {
+				if (i > 0)
+					result += ", ";
+				if (str_buffer[i]) {
+					result += "\"" + std::string(str_buffer[i]) + "\"";
+				} else {
+					result += "null";
+				}
+			}
+			// Free memory
+			hid_t space = H5Dget_space(dataset.get());
+			H5Dvlen_reclaim(dtype, space, H5P_DEFAULT, str_buffer.data());
+			H5Sclose(space);
+		} else {
+			size_t str_size = H5Tget_size(dtype);
+			std::vector<char> buffer(total_size * str_size);
+			H5Dread(dataset.get(), dtype, H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
+			for (hsize_t i = 0; i < total_size; i++) {
+				if (i > 0)
+					result += ", ";
+				char *str_ptr = buffer.data() + i * str_size;
+				size_t len = strnlen(str_ptr, str_size);
+				result += "\"" + std::string(str_ptr, len) + "\"";
+			}
+		}
+	} else if (type_class == H5T_INTEGER) {
+		std::vector<int64_t> buffer(total_size);
+		H5Dread(dataset.get(), H5T_NATIVE_INT64, H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
+		for (hsize_t i = 0; i < total_size; i++) {
+			if (i > 0)
+				result += ", ";
+			result += std::to_string(buffer[i]);
+		}
+	} else if (type_class == H5T_FLOAT) {
+		std::vector<double> buffer(total_size);
+		H5Dread(dataset.get(), H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
+		for (hsize_t i = 0; i < total_size; i++) {
+			if (i > 0)
+				result += ", ";
+			// Format with reasonable precision
+			char buf[32];
+			snprintf(buf, sizeof(buf), "%.6g", buffer[i]);
+			result += buf;
+		}
+	} else if (type_class == H5T_ENUM) {
+		// Boolean array
+		std::vector<int8_t> buffer(total_size);
+		H5Dread(dataset.get(), H5T_NATIVE_INT8, H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
+		for (hsize_t i = 0; i < total_size; i++) {
+			if (i > 0)
+				result += ", ";
+			result += (buffer[i] != 0) ? "true" : "false";
+		}
+	} else {
+		return ""; // Unknown type
+	}
+
+	result += "]";
+	return result;
+}
+
+// Helper function to recursively collect uns items
+static void CollectUnsItems(hid_t file_handle, const std::string &base_path, const std::string &key_prefix,
+                            std::vector<H5ReaderMultithreaded::UnsInfo> &uns_keys,
+                            LogicalType (*H5TypeToDuckDBType)(hid_t)) {
+	H5GroupHandle group(file_handle, base_path);
+
 	hsize_t num_objs;
-	H5_CHECK(H5Gget_num_objs(uns_group.get(), &num_objs));
+	H5_CHECK(H5Gget_num_objs(group.get(), &num_objs));
 
 	for (hsize_t i = 0; i < num_objs; i++) {
-		// Get object name
-		ssize_t name_size = H5Gget_objname_by_idx(uns_group.get(), i, nullptr, 0);
+		ssize_t name_size = H5Gget_objname_by_idx(group.get(), i, nullptr, 0);
 		if (name_size < 0)
 			continue;
 
 		std::vector<char> name_buffer(name_size + 1);
-		H5Gget_objname_by_idx(uns_group.get(), i, name_buffer.data(), name_size + 1);
-		std::string key_name(name_buffer.data());
+		H5Gget_objname_by_idx(group.get(), i, name_buffer.data(), name_size + 1);
+		std::string member_name(name_buffer.data());
 
-		UnsInfo info;
-		info.key = key_name;
+		std::string full_key = key_prefix.empty() ? member_name : key_prefix + "/" + member_name;
+		std::string obj_path = base_path + "/" + member_name;
 
-		// Check object type
-		std::string obj_path = "/uns/" + key_name;
 		H5O_info_t obj_info;
-		H5_CHECK(H5Oget_info_by_name(*file_handle, obj_path.c_str(), &obj_info, H5O_INFO_BASIC, H5P_DEFAULT));
+		if (H5Oget_info_by_name(file_handle, obj_path.c_str(), &obj_info, H5O_INFO_BASIC, H5P_DEFAULT) < 0)
+			continue;
+
+		H5ReaderMultithreaded::UnsInfo info;
+		info.key = full_key;
 
 		if (obj_info.type == H5O_TYPE_DATASET) {
-			// It's a dataset (scalar or array)
-			H5DatasetHandle dataset(*file_handle, obj_path);
+			H5DatasetHandle dataset(file_handle, obj_path);
 			H5DataspaceHandle dataspace(dataset.get());
 			H5TypeHandle datatype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
 
 			int rank = H5Sget_simple_extent_ndims(dataspace.get());
+			H5T_class_t type_class = H5Tget_class(datatype.get());
 
 			if (rank == 0) {
 				// Scalar value
 				info.type = "scalar";
 				info.dtype = H5TypeToDuckDBType(datatype.get());
-				info.shape.clear(); // Empty vector for scalar
+				info.shape.clear();
 
-				// For scalars, read the value directly
-				if (info.dtype == LogicalType::VARCHAR) {
-					// String scalar
-					hid_t dtype_id = H5Dget_type(dataset.get());
+				// Read scalar value
+				hid_t dtype_id = H5Dget_type(dataset.get());
+				if (type_class == H5T_STRING) {
 					if (H5Tis_variable_str(dtype_id)) {
 						char *str_value = nullptr;
 						H5Dread(dataset.get(), dtype_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, &str_value);
@@ -1916,112 +1988,64 @@ std::vector<H5ReaderMultithreaded::UnsInfo> H5ReaderMultithreaded::GetUnsKeys() 
 							H5free_memory(str_value);
 						}
 					} else {
-						// Fixed-length string
 						size_t str_size = H5Tget_size(dtype_id);
 						std::vector<char> buffer(str_size + 1, 0);
 						H5Dread(dataset.get(), dtype_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
 						info.value_str = std::string(buffer.data());
 					}
-					H5Tclose(dtype_id);
-				} else if (info.dtype == LogicalType::BIGINT) {
-					// Integer scalar
+				} else if (type_class == H5T_INTEGER) {
 					int64_t value;
 					H5Dread(dataset.get(), H5T_NATIVE_INT64, H5S_ALL, H5S_ALL, H5P_DEFAULT, &value);
 					info.value_str = std::to_string(value);
-				} else if (info.dtype == LogicalType::DOUBLE) {
-					// Float scalar
+				} else if (type_class == H5T_FLOAT) {
 					double value;
 					H5Dread(dataset.get(), H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &value);
-					info.value_str = std::to_string(value);
-				} else if (info.dtype == LogicalType::BOOLEAN) {
-					// Boolean scalar
-					int8_t value;
-					H5Dread(dataset.get(), H5T_NATIVE_INT8, H5S_ALL, H5S_ALL, H5P_DEFAULT, &value);
-					info.value_str = (value != 0) ? "true" : "false";
-				}
-
-				// Check if it's an HDF5 enum type (often used for booleans in AnnData)
-				H5T_class_t type_class = H5Tget_class(datatype.get());
-				if (type_class == H5T_ENUM) {
-					// Handle enum - read as integer and convert to string
+					char buf[32];
+					snprintf(buf, sizeof(buf), "%.6g", value);
+					info.value_str = buf;
+				} else if (type_class == H5T_ENUM) {
 					int8_t enum_val;
 					H5Dread(dataset.get(), H5T_NATIVE_INT8, H5S_ALL, H5S_ALL, H5P_DEFAULT, &enum_val);
-
-					// For boolean enums, convert 0->false, 1->true
-					if (enum_val == 0) {
-						info.value_str = "false";
-					} else if (enum_val == 1) {
-						info.value_str = "true";
-					} else {
-						info.value_str = std::to_string(enum_val);
-					}
+					info.value_str = (enum_val != 0) ? "true" : "false";
 				}
+				H5Tclose(dtype_id);
 			} else {
 				// Array value
 				info.type = "array";
 				info.dtype = H5TypeToDuckDBType(datatype.get());
 
-				// Get array dimensions
 				std::vector<hsize_t> dims(rank);
 				H5Sget_simple_extent_dims(dataspace.get(), dims.data(), nullptr);
-
-				// Format shape string
-				std::string shape = "(";
-				for (int j = 0; j < rank; j++) {
-					if (j > 0)
-						shape += ",";
-					shape += std::to_string(dims[j]);
-				}
-				shape += ")";
 				info.shape = dims;
-			}
-		} else if (obj_info.type == H5O_TYPE_GROUP) {
-			// It's a group - check if it's a dataframe
-			H5GroupHandle sub_group(*file_handle, obj_path);
 
-			// Check for common dataframe indicators
-			bool has_axis0 = H5LinkExists(*file_handle, (obj_path + "/axis0").c_str());
-			bool has_axis1 = H5LinkExists(*file_handle, (obj_path + "/axis1").c_str());
-			bool has_values = H5LinkExists(*file_handle, (obj_path + "/values").c_str()) ||
-			                  H5LinkExists(*file_handle, (obj_path + "/data").c_str());
-
-			// Check if the group contains only datasets (dataframe pattern)
-			// Dataframes are groups with multiple datasets and no sub-groups
-			H5G_info_t group_info;
-			bool has_multiple_datasets = false;
-			if (H5Gget_info(sub_group.get(), &group_info) >= 0) {
-				// Count datasets and groups in the group
-				int dataset_count = 0;
-				int group_count = 0;
-				for (hsize_t i = 0; i < group_info.nlinks; i++) {
-					char name[256];
-					H5Lget_name_by_idx(sub_group.get(), ".", H5_INDEX_NAME, H5_ITER_INC, i, name, sizeof(name),
-					                   H5P_DEFAULT);
-
-					H5O_info_t member_info;
-					if (H5Oget_info_by_name(sub_group.get(), name, &member_info, H5O_INFO_BASIC, H5P_DEFAULT) >= 0) {
-						if (member_info.type == H5O_TYPE_DATASET) {
-							dataset_count++;
-						} else if (member_info.type == H5O_TYPE_GROUP) {
-							group_count++;
-						}
-					}
+				// Calculate total size and try to read small arrays inline
+				hsize_t total_size = 1;
+				for (int j = 0; j < rank; j++) {
+					total_size *= dims[j];
 				}
-				// Dataframe: multiple datasets with no sub-groups
-				has_multiple_datasets = (dataset_count >= 2 && group_count == 0);
-			}
 
-			if (has_axis0 || has_axis1 || has_values || has_multiple_datasets) {
-				info.type = "dataframe";
-				info.dtype = LogicalType::VARCHAR;
-			} else {
-				info.type = "group";
-				info.dtype = LogicalType::VARCHAR;
+				hid_t dtype_id = H5Dget_type(dataset.get());
+				info.value_str = FormatSmallArray(file_handle, obj_path, dtype_id, total_size, type_class);
+				H5Tclose(dtype_id);
 			}
+			uns_keys.push_back(info);
+		} else if (obj_info.type == H5O_TYPE_GROUP) {
+			// Recursively process subgroup
+			CollectUnsItems(file_handle, obj_path, full_key, uns_keys, H5TypeToDuckDBType);
 		}
-
-		uns_keys.push_back(info);
 	}
+}
+
+std::vector<H5ReaderMultithreaded::UnsInfo> H5ReaderMultithreaded::GetUnsKeys() {
+	std::vector<UnsInfo> uns_keys;
+
+	// Check if uns group exists
+	if (!IsGroupPresent("/uns")) {
+		return uns_keys;
+	}
+
+	// Recursively collect all items with flattened paths
+	CollectUnsItems(*file_handle, "/uns", "", uns_keys, H5ReaderMultithreaded::H5TypeToDuckDBType);
 
 	return uns_keys;
 }
