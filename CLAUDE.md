@@ -123,3 +123,35 @@ The script will automatically update the VERSION file. Remember to also:
 2. Commit both VERSION and CHANGELOG.md together with your feature changes
 
 - use uv run for all python actions
+
+## Updating extension-ci-tools
+
+The `extension-ci-tools` dependency is used in TWO places that must be updated together:
+
+1. **Submodule** (for local builds): The `extension-ci-tools/` directory is a git submodule used by the local Makefile
+2. **CI Workflow** (for CI builds): `.github/workflows/MainDistributionPipeline.yml` references extension-ci-tools via `uses:` and `ci_tools_version:`
+
+**When updating extension-ci-tools:**
+
+```bash
+# 1. Update the submodule to latest
+cd extension-ci-tools
+git fetch origin
+git checkout origin/main  # or a specific version tag like origin/v1.4.3
+cd ..
+
+# 2. Stage the submodule update
+git add extension-ci-tools
+
+# 3. Update the workflow file to match
+# Edit .github/workflows/MainDistributionPipeline.yml:
+#   - Change: uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
+#   - Change: ci_tools_version: main
+# (or use a specific version tag like @v1.4.3)
+
+# 4. Commit both changes together
+git add .github/workflows/MainDistributionPipeline.yml
+git commit -m "chore: update extension-ci-tools to <version>"
+```
+
+**Why both?** The submodule provides Makefile targets for local development, while the CI workflow pulls extension-ci-tools directly from GitHub for builds.
