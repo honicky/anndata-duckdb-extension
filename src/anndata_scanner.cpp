@@ -657,7 +657,11 @@ unique_ptr<FunctionData> AnndataScanner::UnsBind(ClientContext &context, TableFu
 		return_types.push_back(LogicalType::VARCHAR);
 
 		names.push_back("value");
-		return_types.push_back(LogicalType::VARCHAR);
+		// UNION type: scalar VARCHAR or arr LIST(VARCHAR)
+		child_list_t<LogicalType> union_members;
+		union_members.emplace_back("scalar", LogicalType::VARCHAR);
+		union_members.emplace_back("arr", LogicalType::LIST(LogicalType::VARCHAR));
+		return_types.push_back(LogicalType::UNION(std::move(union_members)));
 
 		bind_data->row_count = bind_data->uns_keys.size();
 	}
@@ -746,19 +750,38 @@ void AnndataScanner::UnsScan(ClientContext &context, TableFunctionInput &data, D
 			output.data[3].SetValue(i, Value());
 		}
 
-		// Value column - show value_str if available (scalars always, small arrays)
-		if (!uns_info.value_str.empty()) {
-			output.data[4].SetValue(i, Value(uns_info.value_str));
-		} else if (uns_info.type == "scalar") {
-			// Non-string scalar - read it
-			Value scalar_value = gstate.h5_reader->ReadUnsScalar(uns_info.key);
-			if (!scalar_value.IsNull()) {
-				output.data[4].SetValue(i, scalar_value.ToString());
+		// Value column - UNION type with scalar or arr variant
+		// Create members list for UNION value creation
+		child_list_t<LogicalType> union_members;
+		union_members.emplace_back("scalar", LogicalType::VARCHAR);
+		union_members.emplace_back("arr", LogicalType::LIST(LogicalType::VARCHAR));
+
+		if (uns_info.type == "scalar") {
+			// Scalar value - use the "scalar" variant of the UNION (tag 0)
+			string scalar_str;
+			if (!uns_info.value_str.empty()) {
+				scalar_str = uns_info.value_str;
+			} else {
+				Value scalar_value = gstate.h5_reader->ReadUnsScalar(uns_info.key);
+				if (!scalar_value.IsNull()) {
+					scalar_str = scalar_value.ToString();
+				}
+			}
+			if (!scalar_str.empty()) {
+				output.data[4].SetValue(i, Value::UNION(union_members, 0, Value(scalar_str)));
 			} else {
 				output.data[4].SetValue(i, Value());
 			}
+		} else if (uns_info.type == "array" && !uns_info.array_values.empty()) {
+			// Array value - use the "arr" variant of the UNION (tag 1)
+			vector<Value> list_values;
+			for (const auto &val : uns_info.array_values) {
+				list_values.emplace_back(val);
+			}
+			Value list_val = Value::LIST(LogicalType::VARCHAR, std::move(list_values));
+			output.data[4].SetValue(i, Value::UNION(union_members, 1, std::move(list_val)));
 		} else {
-			output.data[4].SetValue(i, Value()); // NULL for large arrays
+			output.data[4].SetValue(i, Value()); // NULL for empty arrays or other types
 		}
 	}
 

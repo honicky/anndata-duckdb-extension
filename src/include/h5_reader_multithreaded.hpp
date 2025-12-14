@@ -142,7 +142,8 @@ public:
 		std::string type; // "scalar", "array", "group", "dataframe"
 		LogicalType dtype;
 		std::vector<hsize_t> shape;
-		std::string value_str; // For scalar string values
+		std::string value_str;                 // For scalar values (as string)
+		std::vector<std::string> array_values; // For array values (as strings)
 	};
 
 	// Get list of uns keys

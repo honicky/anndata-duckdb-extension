@@ -1858,16 +1858,12 @@ void H5ReaderMultithreaded::ReadMatrixBatch(const std::string &path, idx_t row_s
 	output.SetCardinality(row_count);
 }
 
-// Helper function to read small arrays and format as JSON-like string
-static std::string FormatSmallArray(hid_t file_handle, const std::string &path, hid_t dtype, hsize_t total_size,
-                                    H5T_class_t type_class) {
-	const hsize_t MAX_INLINE_SIZE = 10;
-	if (total_size > MAX_INLINE_SIZE) {
-		return ""; // Too large to inline
-	}
+// Helper function to read array and return as vector of strings
+static std::vector<std::string> ReadArrayAsStrings(hid_t file_handle, const std::string &path, hid_t dtype,
+                                                   hsize_t total_size, H5T_class_t type_class) {
+	std::vector<std::string> result;
 
 	H5DatasetHandle dataset(file_handle, path);
-	std::string result = "[";
 
 	if (type_class == H5T_STRING) {
 		// String array
@@ -1875,12 +1871,10 @@ static std::string FormatSmallArray(hid_t file_handle, const std::string &path, 
 			std::vector<char *> str_buffer(total_size);
 			H5Dread(dataset.get(), dtype, H5S_ALL, H5S_ALL, H5P_DEFAULT, str_buffer.data());
 			for (hsize_t i = 0; i < total_size; i++) {
-				if (i > 0)
-					result += ", ";
 				if (str_buffer[i]) {
-					result += "\"" + std::string(str_buffer[i]) + "\"";
+					result.emplace_back(str_buffer[i]);
 				} else {
-					result += "null";
+					result.emplace_back("");
 				}
 			}
 			// Free memory
@@ -1892,46 +1886,34 @@ static std::string FormatSmallArray(hid_t file_handle, const std::string &path, 
 			std::vector<char> buffer(total_size * str_size);
 			H5Dread(dataset.get(), dtype, H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
 			for (hsize_t i = 0; i < total_size; i++) {
-				if (i > 0)
-					result += ", ";
 				char *str_ptr = buffer.data() + i * str_size;
 				size_t len = strnlen(str_ptr, str_size);
-				result += "\"" + std::string(str_ptr, len) + "\"";
+				result.emplace_back(str_ptr, len);
 			}
 		}
 	} else if (type_class == H5T_INTEGER) {
 		std::vector<int64_t> buffer(total_size);
 		H5Dread(dataset.get(), H5T_NATIVE_INT64, H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
 		for (hsize_t i = 0; i < total_size; i++) {
-			if (i > 0)
-				result += ", ";
-			result += std::to_string(buffer[i]);
+			result.emplace_back(std::to_string(buffer[i]));
 		}
 	} else if (type_class == H5T_FLOAT) {
 		std::vector<double> buffer(total_size);
 		H5Dread(dataset.get(), H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
 		for (hsize_t i = 0; i < total_size; i++) {
-			if (i > 0)
-				result += ", ";
-			// Format with reasonable precision
 			char buf[32];
 			snprintf(buf, sizeof(buf), "%.6g", buffer[i]);
-			result += buf;
+			result.emplace_back(buf);
 		}
 	} else if (type_class == H5T_ENUM) {
 		// Boolean array
 		std::vector<int8_t> buffer(total_size);
 		H5Dread(dataset.get(), H5T_NATIVE_INT8, H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
 		for (hsize_t i = 0; i < total_size; i++) {
-			if (i > 0)
-				result += ", ";
-			result += (buffer[i] != 0) ? "true" : "false";
+			result.emplace_back((buffer[i] != 0) ? "true" : "false");
 		}
-	} else {
-		return ""; // Unknown type
 	}
 
-	result += "]";
 	return result;
 }
 
@@ -2018,14 +2000,14 @@ static void CollectUnsItems(hid_t file_handle, const std::string &base_path, con
 				H5Sget_simple_extent_dims(dataspace.get(), dims.data(), nullptr);
 				info.shape = dims;
 
-				// Calculate total size and try to read small arrays inline
+				// Calculate total size and read array values
 				hsize_t total_size = 1;
 				for (int j = 0; j < rank; j++) {
 					total_size *= dims[j];
 				}
 
 				hid_t dtype_id = H5Dget_type(dataset.get());
-				info.value_str = FormatSmallArray(file_handle, obj_path, dtype_id, total_size, type_class);
+				info.array_values = ReadArrayAsStrings(file_handle, obj_path, dtype_id, total_size, type_class);
 				H5Tclose(dtype_id);
 			}
 			uns_keys.push_back(info);
