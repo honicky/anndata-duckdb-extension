@@ -1,12 +1,14 @@
 #define DUCKDB_EXTENSION_MAIN
 
 #include "include/anndata_extension.hpp"
+#include "include/anndata_storage.hpp"
 #include "anndata_version.hpp"
 #include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/main/extension_util.hpp"
+#include "duckdb/main/config.hpp"
 
 #include <iostream>
 
@@ -38,6 +40,10 @@ void AnndataExtension::Load(DuckDB &db) {
 
 	// Register the AnnData table functions
 	RegisterAnndataTableFunctions(*db.instance);
+
+	// Register the AnnData storage extension for ATTACH support
+	auto &config = DBConfig::GetConfig(*db.instance);
+	config.storage_extensions["anndata"] = CreateAnndataStorageExtension();
 
 	// Log that the extension is loaded
 	std::cout << "AnnData DuckDB Extension loaded successfully!" << std::endl;

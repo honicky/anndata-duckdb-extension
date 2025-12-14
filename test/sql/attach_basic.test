@@ -1,0 +1,173 @@
+# name: test/sql/attach_basic.test
+# description: Test ATTACH semantics for AnnData files
+# group: [sql]
+
+require anndata
+
+# Test basic ATTACH and DETACH
+statement ok
+ATTACH 'test/data/test_small.h5ad' AS ad (TYPE ANNDATA);
+
+# Test querying obs table through attached database
+query I
+SELECT COUNT(*) FROM ad.obs;
+----
+100
+
+# Test querying var table
+query I
+SELECT COUNT(*) FROM ad.var;
+----
+50
+
+# Test querying X table
+query I
+SELECT COUNT(*) FROM ad.X;
+----
+100
+
+# Test selecting specific columns from obs
+query II
+SELECT obs_idx, cell_type
+FROM ad.obs
+WHERE obs_idx < 2
+ORDER BY obs_idx;
+----
+0	T cell
+1	Monocyte
+
+# Test DETACH
+statement ok
+DETACH ad;
+
+# After DETACH, the database should no longer be accessible
+statement error
+SELECT * FROM ad.obs;
+----
+Catalog Error
+
+# Test reattaching with a different alias
+statement ok
+ATTACH 'test/data/test_small.h5ad' AS cells (TYPE ANNDATA);
+
+query I
+SELECT COUNT(*) FROM cells.obs;
+----
+100
+
+statement ok
+DETACH cells;
+
+# Test ATTACH with obsm tables
+statement ok
+ATTACH 'test/data/test_obsm_varm.h5ad' AS ad (TYPE ANNDATA);
+
+# Test obsm_X_pca table exists and has correct structure
+query I
+SELECT COUNT(*) FROM ad.obsm_X_pca;
+----
+100
+
+# Test obsm columns
+query II
+SELECT obs_idx, X_pca_0 IS NOT NULL as has_pca_0
+FROM ad.obsm_X_pca
+LIMIT 1;
+----
+0	true
+
+# Test varm table
+query I
+SELECT COUNT(*) FROM ad.varm_PCs;
+----
+200
+
+statement ok
+DETACH ad;
+
+# Test ATTACH with layers
+statement ok
+ATTACH 'test/data/test_layers.h5ad' AS ad (TYPE ANNDATA);
+
+# Test layers_raw_counts table
+query I
+SELECT COUNT(*) FROM ad.layers_raw_counts;
+----
+100
+
+# Test layers_scaled table
+query I
+SELECT COUNT(*) FROM ad.layers_scaled;
+----
+100
+
+statement ok
+DETACH ad;
+
+# Test ATTACH with obsp/varp
+statement ok
+ATTACH 'test/data/test_obsp_varp.h5ad' AS ad (TYPE ANNDATA);
+
+# Test obsp_distances table (sparse format returns triplets)
+query I
+SELECT COUNT(*) FROM ad.obsp_distances;
+----
+299
+
+# Test obsp columns
+query III
+SELECT obs_idx_1, obs_idx_2, value IS NOT NULL as has_value
+FROM ad.obsp_distances
+LIMIT 1;
+----
+0	32	true
+
+statement ok
+DETACH ad;
+
+# Test ATTACH with uns
+statement ok
+ATTACH 'test/data/test_uns.h5ad' AS ad (TYPE ANNDATA);
+
+# Test uns table
+query I
+SELECT COUNT(*) FROM ad.uns;
+----
+27
+
+# Test uns key lookup
+query II
+SELECT key, type
+FROM ad.uns
+WHERE key = 'dataset_name';
+----
+dataset_name	scalar
+
+statement ok
+DETACH ad;
+
+# Test multiple simultaneous attachments
+statement ok
+ATTACH 'test/data/test_small.h5ad' AS ad1 (TYPE ANNDATA);
+
+statement ok
+ATTACH 'test/data/test_obsm_varm.h5ad' AS ad2 (TYPE ANNDATA);
+
+# Query both databases
+query II
+SELECT (SELECT COUNT(*) FROM ad1.obs) as count1,
+       (SELECT COUNT(*) FROM ad2.obs) as count2;
+----
+100	100
+
+statement ok
+DETACH ad1;
+
+statement ok
+DETACH ad2;
+
+# Test error case: non-existent file
+statement error
+ATTACH 'nonexistent.h5ad' AS ad (TYPE ANNDATA);
+----
+IO Error

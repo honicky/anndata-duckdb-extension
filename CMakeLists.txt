@@ -82,9 +82,10 @@ else()
     endif()
 endif()
 
-set(EXTENSION_SOURCES 
+set(EXTENSION_SOURCES
     src/anndata_extension.cpp
     src/anndata_scanner.cpp
+    src/anndata_storage.cpp
     src/h5_reader_multithreaded.cpp
 )
 
