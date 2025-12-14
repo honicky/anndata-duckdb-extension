@@ -9,7 +9,11 @@
     {
       "name": "hdf5",
       "features": ["threadsafe"],
-      "platform": "!emscripten"
+      "platform": "!emscripten & !windows"
+    },
+    {
+      "name": "hdf5",
+      "platform": "windows"
     }
   ]
 }

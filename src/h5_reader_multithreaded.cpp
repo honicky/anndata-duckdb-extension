@@ -154,6 +154,9 @@ LogicalType H5ReaderMultithreaded::H5TypeToDuckDBType(hid_t h5_type) {
 
 // Check if file is valid AnnData format
 bool H5ReaderMultithreaded::IsValidAnnData() {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	// Check for required groups: /obs, /var, and either /X group or dataset
 	return IsGroupPresent("/obs") && IsGroupPresent("/var") &&
 	       (IsGroupPresent("/X") || H5LinkExists(*file_handle, "/X"));
@@ -161,6 +164,9 @@ bool H5ReaderMultithreaded::IsValidAnnData() {
 
 // Get number of observations (cells)
 size_t H5ReaderMultithreaded::GetObsCount() {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	try {
 		// Try to get shape from obs/_index first (standard location)
 		if (IsDatasetPresent("/obs", "_index")) {
@@ -223,6 +229,9 @@ size_t H5ReaderMultithreaded::GetObsCount() {
 
 // Get number of variables (genes)
 size_t H5ReaderMultithreaded::GetVarCount() {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	try {
 		// Try to get shape from var/_index first (standard location)
 		if (IsDatasetPresent("/var", "_index")) {
@@ -290,6 +299,9 @@ size_t H5ReaderMultithreaded::GetVarCount() {
 // ============================================================================
 
 std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetObsColumns() {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	std::vector<ColumnInfo> columns;
 	std::unordered_set<std::string> seen_names;
 
@@ -373,6 +385,9 @@ std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetObsColu
 }
 
 std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetVarColumns() {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	std::vector<ColumnInfo> columns;
 	std::unordered_set<std::string> seen_names;
 
@@ -456,6 +471,9 @@ std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetVarColu
 }
 
 void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector &result, idx_t offset, idx_t count) {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	try {
 		// Handle obs_idx column (row index)
 		if (column_name == "obs_idx") {
@@ -691,6 +709,9 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 }
 
 void H5ReaderMultithreaded::ReadVarColumn(const std::string &column_name, Vector &result, idx_t offset, idx_t count) {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	try {
 		// Handle var_idx column (row index)
 		if (column_name == "var_idx") {
@@ -951,6 +972,9 @@ std::string H5ReaderMultithreaded::GetCategoricalValue(const std::string &group_
 }
 
 H5ReaderMultithreaded::XMatrixInfo H5ReaderMultithreaded::GetXMatrixInfo() {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	XMatrixInfo info;
 	info.n_obs = GetObsCount();
 	info.n_var = GetVarCount();
@@ -1005,6 +1029,9 @@ static bool H5AttributeExists(hid_t loc_id, const std::string &obj_name, const s
 }
 
 std::vector<std::string> H5ReaderMultithreaded::GetVarNames(const std::string &column_name) {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	std::vector<std::string> names;
 	try {
 		auto var_count = GetVarCount();
@@ -1111,6 +1138,9 @@ void H5ReaderMultithreaded::ReadXMatrix(idx_t obs_start, idx_t obs_count, idx_t 
 
 void H5ReaderMultithreaded::ReadXMatrixBatch(idx_t row_start, idx_t row_count, idx_t col_start, idx_t col_count,
                                              DataChunk &output) {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	try {
 		auto x_info = GetXMatrixInfo();
 
@@ -1238,6 +1268,9 @@ H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseXMatrix
 }
 
 std::vector<H5ReaderMultithreaded::MatrixInfo> H5ReaderMultithreaded::GetObsmMatrices() {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	std::vector<MatrixInfo> matrices;
 
 	try {
@@ -1289,6 +1322,9 @@ std::vector<H5ReaderMultithreaded::MatrixInfo> H5ReaderMultithreaded::GetObsmMat
 }
 
 std::vector<H5ReaderMultithreaded::MatrixInfo> H5ReaderMultithreaded::GetVarmMatrices() {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	std::vector<MatrixInfo> matrices;
 
 	try {
@@ -1341,6 +1377,9 @@ std::vector<H5ReaderMultithreaded::MatrixInfo> H5ReaderMultithreaded::GetVarmMat
 
 void H5ReaderMultithreaded::ReadObsmMatrix(const std::string &matrix_name, idx_t row_start, idx_t row_count,
                                            idx_t col_idx, Vector &result) {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	try {
 		std::string dataset_path = "/obsm/" + matrix_name;
 		H5DatasetHandle dataset(*file_handle, dataset_path);
@@ -1405,6 +1444,9 @@ void H5ReaderMultithreaded::ReadObsmMatrix(const std::string &matrix_name, idx_t
 
 void H5ReaderMultithreaded::ReadVarmMatrix(const std::string &matrix_name, idx_t row_start, idx_t row_count,
                                            idx_t col_idx, Vector &result) {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	try {
 		std::string dataset_path = "/varm/" + matrix_name;
 		H5DatasetHandle dataset(*file_handle, dataset_path);
@@ -1468,6 +1510,9 @@ void H5ReaderMultithreaded::ReadVarmMatrix(const std::string &matrix_name, idx_t
 }
 
 std::vector<H5ReaderMultithreaded::LayerInfo> H5ReaderMultithreaded::GetLayers() {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	std::vector<LayerInfo> layers;
 
 	if (!IsGroupPresent("/layers")) {
@@ -1600,6 +1645,9 @@ std::vector<H5ReaderMultithreaded::LayerInfo> H5ReaderMultithreaded::GetLayers()
 
 void H5ReaderMultithreaded::ReadLayerMatrix(const std::string &layer_name, idx_t row_idx, idx_t start_col, idx_t count,
                                             DataChunk &output, const std::vector<std::string> &var_names) {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	std::string layer_path = "/layers/" + layer_name;
 
 	// Check object type
@@ -1721,6 +1769,9 @@ void H5ReaderMultithreaded::ReadLayerMatrixBatch(const std::string &layer_name, 
 
 void H5ReaderMultithreaded::ReadMatrixBatch(const std::string &path, idx_t row_start, idx_t row_count, idx_t col_start,
                                             idx_t col_count, DataChunk &output, bool is_layer) {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	// First column is always obs_idx
 	auto &obs_idx_vec = output.data[0];
 	for (idx_t i = 0; i < row_count; i++) {
@@ -2019,6 +2070,9 @@ static void CollectUnsItems(hid_t file_handle, const std::string &base_path, con
 }
 
 std::vector<H5ReaderMultithreaded::UnsInfo> H5ReaderMultithreaded::GetUnsKeys() {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	std::vector<UnsInfo> uns_keys;
 
 	// Check if uns group exists
@@ -2033,6 +2087,9 @@ std::vector<H5ReaderMultithreaded::UnsInfo> H5ReaderMultithreaded::GetUnsKeys() 
 }
 
 Value H5ReaderMultithreaded::ReadUnsScalar(const std::string &key) {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	std::string path = "/uns/" + key;
 
 	// Check if the dataset exists
@@ -2093,6 +2150,9 @@ Value H5ReaderMultithreaded::ReadUnsScalar(const std::string &key) {
 }
 
 void H5ReaderMultithreaded::ReadUnsArray(const std::string &key, Vector &result, idx_t offset, idx_t count) {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	std::string path = "/uns/" + key;
 
 	// Check if the dataset exists
@@ -2199,6 +2259,9 @@ void H5ReaderMultithreaded::ReadUnsArray(const std::string &key, Vector &result,
 }
 
 std::vector<std::string> H5ReaderMultithreaded::GetObspKeys() {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	std::vector<std::string> keys;
 
 	// Check if obsp group exists
@@ -2225,6 +2288,9 @@ std::vector<std::string> H5ReaderMultithreaded::GetObspKeys() {
 }
 
 std::vector<std::string> H5ReaderMultithreaded::GetVarpKeys() {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	std::vector<std::string> keys;
 
 	// Check if varp group exists
@@ -2251,6 +2317,9 @@ std::vector<std::string> H5ReaderMultithreaded::GetVarpKeys() {
 }
 
 H5ReaderMultithreaded::SparseMatrixInfo H5ReaderMultithreaded::GetObspMatrixInfo(const std::string &key) {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	SparseMatrixInfo info;
 	std::string matrix_path = "/obsp/" + key;
 
@@ -2298,6 +2367,9 @@ H5ReaderMultithreaded::SparseMatrixInfo H5ReaderMultithreaded::GetObspMatrixInfo
 }
 
 H5ReaderMultithreaded::SparseMatrixInfo H5ReaderMultithreaded::GetVarpMatrixInfo(const std::string &key) {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	SparseMatrixInfo info;
 	std::string matrix_path = "/varp/" + key;
 
@@ -2346,6 +2418,9 @@ H5ReaderMultithreaded::SparseMatrixInfo H5ReaderMultithreaded::GetVarpMatrixInfo
 
 void H5ReaderMultithreaded::ReadObspMatrix(const std::string &key, Vector &row_result, Vector &col_result,
                                            Vector &value_result, idx_t offset, idx_t count) {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	std::string matrix_path = "/obsp/" + key;
 
 	if (!IsGroupPresent(matrix_path)) {
@@ -2421,6 +2496,9 @@ void H5ReaderMultithreaded::ReadObspMatrix(const std::string &key, Vector &row_r
 
 void H5ReaderMultithreaded::ReadVarpMatrix(const std::string &key, Vector &row_result, Vector &col_result,
                                            Vector &value_result, idx_t offset, idx_t count) {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
 	std::string matrix_path = "/varp/" + key;
 
 	if (!IsGroupPresent(matrix_path)) {

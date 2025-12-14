@@ -9,10 +9,42 @@
 
 namespace duckdb {
 
+// Global lock for HDF5 operations when library is not threadsafe.
+// On threadsafe builds (Linux/macOS), Acquire() returns an empty lock (no overhead).
+// On non-threadsafe builds (Windows), all HDF5 operations are serialized.
+// Uses recursive_mutex to allow nested calls within the same thread.
+class H5GlobalLock {
+public:
+	static std::recursive_mutex &GetMutex() {
+		static std::recursive_mutex mu;
+		return mu;
+	}
+
+	static bool IsThreadSafe() {
+		static bool is_safe = CheckThreadSafe();
+		return is_safe;
+	}
+
+	static std::unique_lock<std::recursive_mutex> Acquire() {
+		if (IsThreadSafe()) {
+			return std::unique_lock<std::recursive_mutex>(); // No lock needed
+		}
+		return std::unique_lock<std::recursive_mutex>(GetMutex());
+	}
+
+private:
+	static bool CheckThreadSafe() {
+		hbool_t is_threadsafe = false;
+		H5is_library_threadsafe(&is_threadsafe);
+		return is_threadsafe;
+	}
+};
+
 struct H5FileDeleter {
 	void operator()(hid_t *id) const {
 		if (id && *id >= 0) {
 			// Force closing of all open objects under this file
+			auto lock = H5GlobalLock::Acquire();
 			H5Fclose(*id);
 		}
 		delete id;
@@ -37,6 +69,9 @@ public:
 		}
 
 		// Create a new shared handle with proper settings
+		// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+		auto h5_lock = H5GlobalLock::Acquire();
+
 		hid_t fapl = H5Pcreate(H5P_FILE_ACCESS);
 		if (fapl < 0) {
 			throw std::runtime_error("H5Pcreate failed");
