@@ -171,11 +171,9 @@ def main():
         
         # Commit changes
         print("\nTo complete the version bump:")
-        print(f"  git add -A")
+        print(f"  git add VERSION CHANGELOG.md")
         print(f'  git commit -m "chore: bump version to {new_version}"')
-        print(f"  git tag -a v{new_version} -m 'Release version {new_version}'")
         print(f"  git push origin main")
-        print(f"  git push origin v{new_version}")
         
         # Optionally create tag
         if "--tag" in sys.argv:
