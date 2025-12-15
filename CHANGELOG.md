@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2025-12-15
+
+### Added
+- ATTACH/DETACH semantics for mounting .h5ad files as virtual databases
+- New syntax: `ATTACH 'file.h5ad' AS name (TYPE ANNDATA)`
+- Dynamic table discovery from HDF5 structure (obs, var, X, obsm_*, varm_*, layers_*, obsp_*, varp_*, uns)
+- `SHOW ALL TABLES` support for listing tables in attached AnnData databases
+- Cross-database queries with multiple attached AnnData files
+
 ## [0.7.0] - 2025-09-29
 
 ### Changed
