@@ -3,6 +3,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include <cstring>
+#include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
 #include <mutex>
@@ -1837,7 +1838,47 @@ void H5ReaderMultithreaded::ReadMatrixBatch(const std::string &path, idx_t row_s
 		std::string format = "CSR"; // default
 		std::string indptr_path = path + "/indptr";
 
-		if (IsDatasetPresent(path, "indptr")) {
+		// Check encoding attribute on the GROUP first (AnnData stores it on the sparse group, not datasets)
+		bool format_determined = false;
+		H5GroupHandle group(*file_handle, path);
+		htri_t attr_exists = H5Aexists(group.get(), "encoding-type");
+		if (attr_exists > 0) {
+			H5AttributeHandle encoding_attr(group.get(), "encoding-type");
+			hid_t atype = H5Aget_type(encoding_attr.get());
+
+			std::string encoding;
+			// Check if it's a variable-length string
+			if (H5Tis_variable_str(atype)) {
+				// Variable-length string - read into a char* pointer
+				char *vlen_str = nullptr;
+				H5Aread(encoding_attr.get(), atype, &vlen_str);
+				if (vlen_str) {
+					encoding = vlen_str;
+					// Free the memory allocated by HDF5
+					hid_t space = H5Aget_space(encoding_attr.get());
+					H5Dvlen_reclaim(atype, space, H5P_DEFAULT, &vlen_str);
+					H5Sclose(space);
+				}
+			} else {
+				// Fixed-length string
+				size_t size = H5Tget_size(atype);
+				std::vector<char> buffer(size + 1, 0);
+				H5Aread(encoding_attr.get(), atype, buffer.data());
+				encoding = std::string(buffer.data());
+			}
+			H5Tclose(atype);
+
+			if (encoding == "csc_matrix") {
+				format = "CSC";
+				format_determined = true;
+			} else if (encoding == "csr_matrix") {
+				format = "CSR";
+				format_determined = true;
+			}
+		}
+
+		// If no encoding attribute on group, try to infer from dimensions
+		if (!format_determined && IsDatasetPresent(path, "indptr")) {
 			H5DatasetHandle indptr(*file_handle, indptr_path);
 			H5DataspaceHandle indptr_space(indptr.get());
 
@@ -1845,28 +1886,7 @@ void H5ReaderMultithreaded::ReadMatrixBatch(const std::string &path, idx_t row_s
 			hsize_t indptr_dims;
 			H5Sget_simple_extent_dims(indptr_space.get(), &indptr_dims, nullptr);
 
-			// Check encoding attribute first
-			bool format_determined = false;
-			if (H5Aexists(indptr.get(), "encoding-type") > 0) {
-				H5AttributeHandle encoding_attr(indptr.get(), "encoding-type");
-				hid_t atype = H5Aget_type(encoding_attr.get());
-				size_t size = H5Tget_size(atype);
-				std::vector<char> buffer(size + 1, 0);
-				H5Aread(encoding_attr.get(), atype, buffer.data());
-				std::string encoding(buffer.data());
-				H5Tclose(atype);
-
-				if (encoding == "csc_matrix") {
-					format = "CSC";
-					format_determined = true;
-				} else if (encoding == "csr_matrix") {
-					format = "CSR";
-					format_determined = true;
-				}
-			}
-
-			// If no encoding attribute, try to infer from dimensions
-			if (!format_determined && is_layer) {
+			if (is_layer) {
 				// For layers, they should match X matrix dimensions
 				auto x_info = GetXMatrixInfo();
 				if (indptr_dims - 1 == x_info.n_obs) {
@@ -1902,6 +1922,121 @@ void H5ReaderMultithreaded::ReadMatrixBatch(const std::string &path, idx_t row_s
 				if (row < row_count && col < col_count && col + 1 < output.data.size()) {
 					output.data[col + 1].SetValue(row, Value::DOUBLE(sparse_data.values[i]));
 				}
+			}
+		}
+	}
+
+	output.SetCardinality(row_count);
+}
+
+void H5ReaderMultithreaded::ReadMatrixColumns(const std::string &path, idx_t row_start, idx_t row_count,
+                                              const std::vector<idx_t> &matrix_col_indices, DataChunk &output,
+                                              bool is_layer) {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
+	// If no columns requested, just return empty result
+	if (matrix_col_indices.empty()) {
+		output.SetCardinality(row_count);
+		return;
+	}
+
+	// Initialize all output columns with zeros
+	for (idx_t col = 0; col < output.data.size(); col++) {
+		InitializeZeros(output.data[col], row_count);
+	}
+
+	// Check if matrix is sparse or dense
+	bool is_sparse = false;
+	bool is_dense = false;
+
+	// Check object type
+	H5O_info_t obj_info;
+	H5_CHECK(H5Oget_info_by_name(*file_handle, path.c_str(), &obj_info, H5O_INFO_BASIC, H5P_DEFAULT));
+
+	if (is_layer) {
+		is_dense = (obj_info.type == H5O_TYPE_DATASET);
+		is_sparse = (obj_info.type == H5O_TYPE_GROUP);
+	} else {
+		is_dense = IsDatasetPresent("/", "X");
+		is_sparse = !is_dense && IsGroupPresent("/X");
+	}
+
+	if (is_dense) {
+		// Read dense matrix - use hyperslab selection for each requested column
+		H5DatasetHandle dataset(*file_handle, path);
+		H5DataspaceHandle dataspace(dataset.get());
+
+		// Get dimensions
+		hsize_t dims[2];
+		H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
+
+		// Read each requested column individually using hyperslab selection
+		std::vector<double> col_buffer(row_count);
+
+		for (idx_t out_col = 0; out_col < matrix_col_indices.size() && out_col < output.data.size(); out_col++) {
+			idx_t matrix_col = matrix_col_indices[out_col];
+
+			// Skip invalid column indices
+			if (matrix_col >= dims[1]) {
+				continue;
+			}
+
+			// Select single column hyperslab: rows [row_start, row_start+row_count), column [matrix_col]
+			hsize_t offset[2] = {row_start, matrix_col};
+			hsize_t count_dims[2] = {row_count, 1};
+
+			// Reset dataspace selection
+			H5Sselect_none(dataspace.get());
+			H5Sselect_hyperslab(dataspace.get(), H5S_SELECT_SET, offset, nullptr, count_dims, nullptr);
+
+			// Create memory dataspace for single column (use 2D to match file dataspace rank)
+			hsize_t mem_dims[2] = {row_count, 1};
+			H5DataspaceHandle memspace(2, mem_dims);
+
+			// Read the column data
+			H5Dread(dataset.get(), H5T_NATIVE_DOUBLE, memspace.get(), dataspace.get(), H5P_DEFAULT, col_buffer.data());
+
+			// Fill the output column
+			auto &vec = output.data[out_col];
+			for (idx_t row = 0; row < row_count; row++) {
+				SetTypedValue(vec, row, col_buffer[row]);
+			}
+		}
+	} else if (is_sparse) {
+		// For sparse matrices, use the original batch reading approach and extract needed columns
+		// This is simpler and more reliable than column-selective sparse reading
+		// Find the range of columns we need
+		idx_t min_col = matrix_col_indices.empty() ? 0 : matrix_col_indices[0];
+		idx_t max_col = matrix_col_indices.empty() ? 0 : matrix_col_indices[0];
+		for (idx_t col : matrix_col_indices) {
+			min_col = MinValue(min_col, col);
+			max_col = MaxValue(max_col, col);
+		}
+		idx_t col_count = max_col - min_col + 1;
+
+		// Create a temporary chunk to read all needed columns (from min to max)
+		DataChunk temp_chunk;
+		vector<LogicalType> temp_types;
+		temp_types.push_back(LogicalType::BIGINT); // obs_idx
+		for (idx_t i = 0; i < col_count; i++) {
+			temp_types.push_back(LogicalType::DOUBLE);
+		}
+		temp_chunk.Initialize(Allocator::DefaultAllocator(), temp_types);
+
+		// Use the original batch reader
+		ReadMatrixBatch(path, row_start, row_count, min_col, col_count, temp_chunk, is_layer);
+
+		// Extract only the columns we need
+		for (idx_t out_col = 0; out_col < matrix_col_indices.size() && out_col < output.data.size(); out_col++) {
+			idx_t matrix_col = matrix_col_indices[out_col];
+			idx_t temp_col = matrix_col - min_col + 1; // +1 to skip obs_idx in temp_chunk
+
+			auto &src = temp_chunk.data[temp_col];
+			auto &dst = output.data[out_col];
+
+			for (idx_t row = 0; row < row_count; row++) {
+				dst.SetValue(row, src.GetValue(row));
 			}
 		}
 	}

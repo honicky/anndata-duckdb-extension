@@ -116,6 +116,7 @@ struct AnndataBindData : public TableFunctionData {
 struct AnndataGlobalState : public GlobalTableFunctionState {
 	idx_t current_row;
 	unique_ptr<H5ReaderMultithreaded> h5_reader;
+	vector<column_t> column_ids; // Column indices requested by DuckDB (for projection pushdown)
 
 	AnndataGlobalState() : current_row(0) {
 	}

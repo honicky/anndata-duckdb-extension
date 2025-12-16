@@ -203,6 +203,15 @@ static unique_ptr<GlobalTableFunctionState> AnndataInitGlobal(ClientContext &con
 	return make_uniq<AnndataGlobalState>();
 }
 
+// Global state initialization with projection pushdown support
+// Captures column_ids from DuckDB's optimizer to only read requested columns
+static unique_ptr<GlobalTableFunctionState> AnndataInitGlobalWithProjection(ClientContext &context,
+                                                                            TableFunctionInitInput &input) {
+	auto state = make_uniq<AnndataGlobalState>();
+	state->column_ids = input.column_ids;
+	return std::move(state);
+}
+
 // Local state initialization
 static unique_ptr<LocalTableFunctionState> AnndataInitLocal(ExecutionContext &context, TableFunctionInitInput &input,
                                                             GlobalTableFunctionState *global_state) {
@@ -275,8 +284,89 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 		return;
 	}
 
-	// Use unified batch reader for X matrix
-	gstate.h5_reader->ReadXMatrixBatch(gstate.current_row, count, 0, bind_data.n_var, output);
+	// Check if projection pushdown is enabled (column_ids not empty)
+	if (!gstate.column_ids.empty()) {
+		// Projection pushdown: only read requested columns
+		// column_ids[0] is typically obs_idx (column 0), rest are gene columns
+		// We need to convert column_ids to matrix column indices
+		// Column 0 in table = obs_idx, Column 1+ = matrix columns 0+
+
+		// First, handle obs_idx column (fill it if requested)
+		// Then read only the requested matrix columns
+		vector<idx_t> matrix_col_indices;
+		idx_t output_col_idx = 0;
+
+		for (idx_t i = 0; i < gstate.column_ids.size(); i++) {
+			idx_t col_id = gstate.column_ids[i];
+			if (col_id == 0) {
+				// obs_idx column - fill with row indices
+				auto &obs_idx_vec = output.data[output_col_idx];
+				for (idx_t row = 0; row < count; row++) {
+					obs_idx_vec.SetValue(row, Value::BIGINT(gstate.current_row + row));
+				}
+				output_col_idx++;
+			} else {
+				// Gene column - map to matrix column (col_id - 1)
+				matrix_col_indices.push_back(col_id - 1);
+			}
+		}
+
+		if (!matrix_col_indices.empty()) {
+			// Build a mapping from output column index to matrix column index
+			// for columns that are gene columns (not obs_idx)
+			vector<idx_t> output_col_mapping;
+			for (idx_t i = 0; i < gstate.column_ids.size(); i++) {
+				if (gstate.column_ids[i] != 0) {
+					output_col_mapping.push_back(i);
+				}
+			}
+
+			// Read matrix data directly into the output vectors
+			// We need to read each column individually using hyperslab selection
+			for (idx_t m = 0; m < matrix_col_indices.size(); m++) {
+				idx_t out_col = output_col_mapping[m];
+				idx_t matrix_col = matrix_col_indices[m];
+
+				// Initialize the output column with zeros
+				auto &vec = output.data[out_col];
+				for (idx_t row = 0; row < count; row++) {
+					vec.SetValue(row, Value(0.0));
+				}
+
+				// Read this specific column from the matrix
+				// The ReadMatrixColumns function reads into a flat output, so we call it once with all columns
+			}
+
+			// Create a temporary DataChunk for the matrix columns
+			DataChunk matrix_output;
+			vector<LogicalType> matrix_types;
+			for (idx_t i = 0; i < matrix_col_indices.size(); i++) {
+				matrix_types.push_back(LogicalType::DOUBLE);
+			}
+			matrix_output.Initialize(Allocator::DefaultAllocator(), matrix_types);
+
+			// Read only the requested matrix columns
+			gstate.h5_reader->ReadMatrixColumns("/X", gstate.current_row, count, matrix_col_indices, matrix_output,
+			                                    false);
+
+			// Copy values from matrix_output to the correct output columns
+			for (idx_t m = 0; m < matrix_col_indices.size(); m++) {
+				idx_t out_col = output_col_mapping[m];
+				auto &src = matrix_output.data[m];
+				auto &dst = output.data[out_col];
+
+				// Copy values row by row to handle type conversion
+				for (idx_t row = 0; row < count; row++) {
+					dst.SetValue(row, src.GetValue(row));
+				}
+			}
+		}
+
+		output.SetCardinality(count);
+	} else {
+		// No projection pushdown - read all columns (original behavior)
+		gstate.h5_reader->ReadXMatrixBatch(gstate.current_row, count, 0, bind_data.n_var, output);
+	}
 
 	gstate.current_row += count;
 }
@@ -601,8 +691,67 @@ void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data,
 		return;
 	}
 
-	// Use batch reading for better performance
-	state.h5_reader->ReadLayerMatrixBatch(bind_data.layer_name, state.current_row, count, 0, bind_data.n_var, output);
+	// Check if projection pushdown is enabled (column_ids not empty)
+	if (!state.column_ids.empty()) {
+		// Projection pushdown: only read requested columns
+		// column_ids[0] is typically obs_idx (column 0), rest are gene columns
+		vector<idx_t> matrix_col_indices;
+
+		for (idx_t i = 0; i < state.column_ids.size(); i++) {
+			idx_t col_id = state.column_ids[i];
+			if (col_id == 0) {
+				// obs_idx column - fill with row indices
+				auto &obs_idx_vec = output.data[i];
+				for (idx_t row = 0; row < count; row++) {
+					obs_idx_vec.SetValue(row, Value::BIGINT(state.current_row + row));
+				}
+			} else {
+				// Gene column - map to matrix column (col_id - 1)
+				matrix_col_indices.push_back(col_id - 1);
+			}
+		}
+
+		if (!matrix_col_indices.empty()) {
+			// Build a mapping from output column index to matrix column index
+			vector<idx_t> output_col_mapping;
+			for (idx_t i = 0; i < state.column_ids.size(); i++) {
+				if (state.column_ids[i] != 0) {
+					output_col_mapping.push_back(i);
+				}
+			}
+
+			// Create a temporary DataChunk for the matrix columns
+			DataChunk matrix_output;
+			vector<LogicalType> matrix_types;
+			for (idx_t i = 0; i < matrix_col_indices.size(); i++) {
+				matrix_types.push_back(LogicalType::DOUBLE);
+			}
+			matrix_output.Initialize(Allocator::DefaultAllocator(), matrix_types);
+
+			// Read only the requested matrix columns
+			string layer_path = "/layers/" + bind_data.layer_name;
+			state.h5_reader->ReadMatrixColumns(layer_path, state.current_row, count, matrix_col_indices, matrix_output,
+			                                   true);
+
+			// Copy values from matrix_output to the correct output columns
+			for (idx_t m = 0; m < matrix_col_indices.size(); m++) {
+				idx_t out_col = output_col_mapping[m];
+				auto &src = matrix_output.data[m];
+				auto &dst = output.data[out_col];
+
+				// Copy values row by row to handle type conversion
+				for (idx_t row = 0; row < count; row++) {
+					dst.SetValue(row, src.GetValue(row));
+				}
+			}
+		}
+
+		output.SetCardinality(count);
+	} else {
+		// No projection pushdown - read all columns (original behavior)
+		state.h5_reader->ReadLayerMatrixBatch(bind_data.layer_name, state.current_row, count, 0, bind_data.n_var,
+		                                      output);
+	}
 
 	state.current_row += count;
 }
@@ -1117,16 +1266,19 @@ void RegisterAnndataTableFunctions(DatabaseInstance &db) {
 	var_func.name = "anndata_scan_var";
 	ExtensionUtil::RegisterFunction(db, var_func);
 
-	// Register anndata_scan_x function
+	// Register anndata_scan_x function with projection pushdown enabled
 	TableFunction x_func("anndata_scan_x", {LogicalType::VARCHAR}, AnndataScanner::XScan, AnndataScanner::XBind,
-	                     AnndataInitGlobal, AnndataInitLocal);
+	                     AnndataInitGlobalWithProjection, AnndataInitLocal);
 	x_func.name = "anndata_scan_x";
+	x_func.projection_pushdown = true;
 	ExtensionUtil::RegisterFunction(db, x_func);
 
 	// Also register with optional var_name_column parameter
 	TableFunction x_func_with_param("anndata_scan_x", {LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                AnndataScanner::XScan, AnndataScanner::XBind, AnndataInitGlobal, AnndataInitLocal);
+	                                AnndataScanner::XScan, AnndataScanner::XBind, AnndataInitGlobalWithProjection,
+	                                AnndataInitLocal);
 	x_func_with_param.name = "anndata_scan_x";
+	x_func_with_param.projection_pushdown = true;
 	ExtensionUtil::RegisterFunction(db, x_func_with_param);
 
 	// Register anndata_scan_obsm function (2 parameters - correct usage)
@@ -1153,18 +1305,20 @@ void RegisterAnndataTableFunctions(DatabaseInstance &db) {
 	varm_func_error.name = "anndata_scan_varm";
 	ExtensionUtil::RegisterFunction(db, varm_func_error);
 
-	// Register anndata_scan_layers function (2 parameters)
+	// Register anndata_scan_layers function (2 parameters) with projection pushdown enabled
 	TableFunction layers_func("anndata_scan_layers", {LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                          AnndataScanner::LayerScan, AnndataScanner::LayerBind, AnndataInitGlobal,
+	                          AnndataScanner::LayerScan, AnndataScanner::LayerBind, AnndataInitGlobalWithProjection,
 	                          AnndataInitLocal);
 	layers_func.name = "anndata_scan_layers";
+	layers_func.projection_pushdown = true;
 	ExtensionUtil::RegisterFunction(db, layers_func);
 
 	// Register anndata_scan_layers function (3 parameters - with custom var column)
 	TableFunction layers_func_custom(
 	    "anndata_scan_layers", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
-	    AnndataScanner::LayerScan, AnndataScanner::LayerBind, AnndataInitGlobal, AnndataInitLocal);
+	    AnndataScanner::LayerScan, AnndataScanner::LayerBind, AnndataInitGlobalWithProjection, AnndataInitLocal);
 	layers_func_custom.name = "anndata_scan_layers";
+	layers_func_custom.projection_pushdown = true;
 	ExtensionUtil::RegisterFunction(db, layers_func_custom);
 
 	// Register anndata_scan_layers function (1 parameter - error message)

@@ -136,6 +136,13 @@ public:
 	void ReadMatrixBatch(const std::string &path, idx_t row_start, idx_t row_count, idx_t col_start, idx_t col_count,
 	                     DataChunk &output, bool is_layer = false);
 
+	// Projection pushdown: Read only specific columns from a matrix
+	// column_ids maps output column indices to matrix column indices
+	// For example, if user requests columns [0, 5, 10], output.data[0] gets obs_idx,
+	// output.data[1] gets matrix column 5, output.data[2] gets matrix column 10
+	void ReadMatrixColumns(const std::string &path, idx_t row_start, idx_t row_count,
+	                       const std::vector<idx_t> &matrix_col_indices, DataChunk &output, bool is_layer = false);
+
 	// Uns (unstructured) data information structure
 	struct UnsInfo {
 		std::string key;

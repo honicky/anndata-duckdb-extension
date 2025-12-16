@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2025-12-16
+
+### Added
+- Projection pushdown for X matrix and layer scans - queries selecting specific genes now only read requested columns from HDF5
+- `ReadMatrixColumns` method for column-selective matrix reading with HDF5 hyperslab selection
+- Installation instructions in README for extension repository and local builds
+
+### Changed
+- X and layer table functions now capture DuckDB's column_ids for optimized reading
+- Updated LICENSE to MIT with proper copyright attribution
+- Expanded README with comprehensive usage examples and API documentation
+
+### Fixed
+- CSC sparse matrix format detection now correctly reads encoding-type attribute from HDF5 group
+- String memory management: use `StringVector::AddString()` instead of `SetValue()` for proper string lifecycle
+- NULL value handling: use validity masks with `SetInvalid()` instead of `EmptyString()`
+- Made H5ReaderMultithreaded move-only to prevent accidental copies and resource issues
+- Segfaults in subqueries accessing the same HDF5 file multiple times
+
 ## [0.8.1] - 2025-12-15
 
 ### Added
