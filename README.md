@@ -14,7 +14,7 @@ INSTALL anndata;
 LOAD anndata;
 ```
 
-### Install from the Custom Extension Repository (not )
+### Install from the Custom Extension Repository (not usually needed)
 
 ```sql
 -- Allow unsigned extensions (required for non-community extensions)
@@ -23,6 +23,11 @@ SET allow_unsigned_extensions = true;
 -- Set the extension repository -- first time you use it, or updating to a new version
 SET custom_extension_repository = 'https://software-releasers.s3.us-west-2.amazonaws.com';
 
+-- Install the first time you use it or update to the latest version
+FORCE INSTALL anndata; 
+
+-- Load the extension before using 
+LOAD anndata;
 ```
 
 ### Use it!
@@ -302,4 +307,4 @@ The script updates the VERSION file and adds a new section to CHANGELOG.md. **No
 
 ## License
 
-MIT
+[MIT](./LICENSE)
