@@ -89,3 +89,19 @@ statement error
 SELECT * FROM anndata_scan_layers('test/data/test_layers.h5ad', 'non_existent_layer');
 ----
 Layer 'non_existent_layer' not found
+
+# Regression test: Verify layer column names use real gene names from _index (not generic Gene_000)
+# This test uses a file with actual gene names to ensure layers don't fall back to generic names
+query III
+SELECT
+    (SELECT column_name FROM (DESCRIBE SELECT * FROM anndata_scan_x('test/data/test_layer_gene_names.h5ad')) WHERE column_name = 'BRCA1') as x_col,
+    (SELECT column_name FROM (DESCRIBE SELECT * FROM anndata_scan_layers('test/data/test_layer_gene_names.h5ad', 'raw_counts')) WHERE column_name = 'BRCA1') as layer_col,
+    'BRCA1' as expected;
+----
+BRCA1	BRCA1	BRCA1
+
+# Verify layer data can be queried using gene name columns
+query II
+SELECT obs_idx, BRCA1 FROM anndata_scan_layers('test/data/test_layer_gene_names.h5ad', 'raw_counts') WHERE obs_idx = 0;
+----
+0	17

@@ -597,65 +597,14 @@ unique_ptr<FunctionData> AnndataScanner::LayerBind(ClientContext &context, Table
 	}
 
 	// Get variable names - allow custom column selection
-	string var_column;
+	// Default to "_index" which is standard AnnData var_names column (same as XBind)
+	string var_column = "_index";
 	if (input.inputs.size() > 2) {
 		var_column = input.inputs[2].GetValue<string>();
-	} else {
-		// Try to find a suitable default column
-		auto var_columns = reader.GetVarColumns();
-		bool has_gene_name = false;
-		bool has_gene_id = false;
-		for (const auto &col : var_columns) {
-			if (col.name == "gene_name")
-				has_gene_name = true;
-			if (col.name == "gene_id")
-				has_gene_id = true;
-		}
-
-		// Use gene_name if available, otherwise gene_id, otherwise generate generic names
-		if (has_gene_name) {
-			var_column = "gene_name";
-		} else if (has_gene_id) {
-			var_column = "gene_id";
-		} else {
-			var_column = ""; // Will generate generic names
-		}
 	}
 
-	// Validate var column if specified
-	if (!var_column.empty()) {
-		auto var_columns = reader.GetVarColumns();
-		bool var_column_found = false;
-		for (const auto &col : var_columns) {
-			if (col.name == var_column) {
-				var_column_found = true;
-				break;
-			}
-		}
-
-		if (!var_column_found) {
-			throw InvalidInputException("Variable column '%s' not found in var table", var_column.c_str());
-		}
-	}
-
-	// Read variable names for column headers
-	result->var_names.resize(result->n_var);
-	for (idx_t i = 0; i < result->n_var; i++) {
-		string var_name;
-		if (var_column.empty()) {
-			// Generate generic names with zero-padded indices
-			char buffer[20];
-			snprintf(buffer, sizeof(buffer), "Gene_%03zu", i);
-			var_name = buffer;
-		} else {
-			var_name = reader.ReadVarColumnString(var_column, i);
-			// Sanitize column names
-			std::replace(var_name.begin(), var_name.end(), ' ', '_');
-			std::replace(var_name.begin(), var_name.end(), '-', '_');
-			std::replace(var_name.begin(), var_name.end(), '.', '_');
-		}
-		result->var_names[i] = var_name;
-	}
+	// Get variable names for column headers using the same method as XBind
+	result->var_names = reader.GetVarNames(var_column);
 
 	// Set up column schema: obs_idx + all gene columns
 	names.push_back("obs_idx");

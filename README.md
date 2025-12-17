@@ -19,7 +19,7 @@ This extension provides DuckDB with the ability to read AnnData (`.h5ad`) files,
 
 ## Installation
 
-### From Extension Repository
+### From the Custom Extension Repository
 
 ```sql
 -- Allow unsigned extensions (required for non-community extensions)
@@ -33,94 +33,11 @@ INSTALL anndata;
 LOAD anndata;
 ```
 
-Or from the command line:
-
-```bash
-duckdb -unsigned -c "
-SET custom_extension_repository = 'https://software-releasers.s3.us-west-2.amazonaws.com';
-INSTALL anndata;
-LOAD anndata;
-SELECT * FROM anndata_info('your_file.h5ad');
-"
-```
-
-### From Local Build
-
-```sql
--- Allow unsigned extensions
-SET allow_unsigned_extensions = true;
-
--- Load directly from built extension
-LOAD 'path/to/anndata.duckdb_extension';
-```
-
-## Building
-
-### Prerequisites
-
-- CMake 3.5+
-- C++11 compatible compiler
-- Git
-- VCPKG (will be installed automatically if not present)
-- ninja and ccache (optional, for faster builds)
-
-### Quick Setup
-
-Run the setup script to install dependencies:
-
-```bash
-./setup-dev.sh
-```
-
-This will:
-- Install VCPKG if not present
-- Configure VCPKG environment variables
-- Install HDF5 via VCPKG
-- Set up Python environment (if uv is installed)
-
-### Build Commands
-
-```bash
-# Standard build
-make
-
-# Build with ninja (faster)
-GEN=ninja make
-
-# Debug build
-make debug
-
-# Clean build
-make clean
-```
-
-The built extension will be located at:
-`build/release/extension/anndata/anndata.duckdb_extension`
-
 ## Usage
 
 ### Quick Start
 
-```sql
--- Load the extension
-LOAD anndata;
-
--- Get file information
-SELECT * FROM anndata_info('data.h5ad');
-
--- Query observation (cell) metadata
-SELECT * FROM anndata_scan_obs('data.h5ad');
-
--- Query variable (gene) metadata
-SELECT * FROM anndata_scan_var('data.h5ad');
-
--- Query expression matrix
-SELECT * FROM anndata_scan_x('data.h5ad');
-```
-
-### ATTACH Syntax
-
-The ATTACH syntax provides a more intuitive way to work with AnnData files, similar to how DuckDB handles SQLite databases:
+The ATTACH syntax provides a the most intuitive way to work with AnnData files, similar to how DuckDB handles SQLite databases:
 
 ```sql
 -- Attach an AnnData file
@@ -140,6 +57,24 @@ SELECT * FROM scdata.layers_raw;
 
 -- Detach when done
 DETACH scdata;
+```
+
+You can also use the function syntax:
+```sql
+-- Load the extension
+LOAD anndata;
+
+-- Get file information
+SELECT * FROM anndata_info('data.h5ad');
+
+-- Query observation (cell) metadata
+SELECT * FROM anndata_scan_obs('data.h5ad');
+
+-- Query variable (gene) metadata
+SELECT * FROM anndata_scan_var('data.h5ad');
+
+-- Query expression matrix
+SELECT * FROM anndata_scan_x('data.h5ad');
 ```
 
 ### Table Functions
@@ -225,6 +160,14 @@ SELECT 'sample2' as source, * FROM anndata_scan_obs('sample2.h5ad');
 -- Export to Parquet
 COPY (SELECT * FROM anndata_scan_obs('data.h5ad'))
 TO 'obs_metadata.parquet';
+
+-- Combine with other data sourcesL
+select count(*)
+from scdata.var
+where scdata.var.gene_ids in (
+  select human_EnsemblID
+  from read_csv('https://raw.githubusercontent.com/AllenInstitute/GeneOrthology/refs/heads/main/csv/mouse_human_marmoset_macaque_orthologs_20231113.csv')
+);
 ```
 
 ## Development
@@ -238,6 +181,45 @@ For macOS:
 # Required for timeout command in tests
 brew install coreutils
 ```
+
+- CMake 3.5+
+- C++11 compatible compiler
+- Git
+- VCPKG (will be installed automatically if not present)
+- ninja and ccache (optional, for faster builds)
+
+### Quick Setup
+
+Run the setup script to install dependencies:
+
+```bash
+./setup-dev.sh
+```
+
+This will:
+- Install VCPKG if not present
+- Configure VCPKG environment variables
+- Install HDF5 via VCPKG
+- Set up Python environment (if uv is installed)
+
+### Build Commands
+
+```bash
+# Standard build
+make
+
+# Build with ninja (faster)
+GEN=ninja make
+
+# Debug build
+make debug
+
+# Clean build
+make clean
+```
+
+The built extension will be located at:
+`build/release/extension/anndata/anndata.duckdb_extension`
 
 ### Project Structure
 
