@@ -2,40 +2,30 @@
 
 This extension provides DuckDB with the ability to read AnnData (`.h5ad`) files, which are the standard format for single-cell genomics data analysis.
 
-## Features
+## Quick Start
 
-- Read-only access to AnnData HDF5 files
-- Query observation (cell) metadata from `.obs`
-- Query variable (gene) metadata from `.var`
-- Query expression matrix (`.X`) in wide format with genes as columns
-- Query dimensional reductions from `.obsm` and `.varm` (PCA, UMAP, etc.)
-- Query pairwise matrices from `.obsp` and `.varp`
-- Query alternative expression matrices from `.layers`
-- Query unstructured metadata from `.uns`
-- Support for categorical data in observation and variable metadata
-- Configurable gene name columns for expression matrix
-- Efficient HDF5 data reading with proper memory management
-- Thread-safe operation on all platforms
+### Install from the Community Extension Repository
 
-## Installation
+```sql
+-- Install the first time you use it
+INSTALL anndata; 
 
-### From the Custom Extension Repository
+-- Load the extension before using 
+LOAD anndata;
+```
+
+### Install from the Custom Extension Repository (not )
 
 ```sql
 -- Allow unsigned extensions (required for non-community extensions)
 SET allow_unsigned_extensions = true;
 
--- Set the extension repository
+-- Set the extension repository -- first time you use it, or updating to a new version
 SET custom_extension_repository = 'https://software-releasers.s3.us-west-2.amazonaws.com';
 
--- Install and load
-INSTALL anndata;
-LOAD anndata;
 ```
 
-## Usage
-
-### Quick Start
+### Use it!
 
 The ATTACH syntax provides a the most intuitive way to work with AnnData files, similar to how DuckDB handles SQLite databases:
 
@@ -76,6 +66,31 @@ SELECT * FROM anndata_scan_var('data.h5ad');
 -- Query expression matrix
 SELECT * FROM anndata_scan_x('data.h5ad');
 ```
+
+
+## Features
+
+- Read-only access to AnnData HDF5 files
+- Attach to an AnnData file like a database
+- Query observation (cell) metadata from `.obs`
+- Query variable (gene) metadata from `.var`
+- Query expression matrix (`.X`) in wide format with genes as columns
+- Query dimensional reductions from `.obsm` and `.varm` (PCA, UMAP, etc.)
+- Query pairwise matrices from `.obsp` and `.varp`
+- Query alternative expression matrices from `.layers`
+- Query unstructured metadata from `.uns`
+- Configurable gene name columns for expression matrix
+- Efficient HDF5 data reading with proper memory management
+- Thread-safe operation on all platforms
+
+## Limitations
+
+- Read only
+- Single file access (for now)
+- No support for remote files (for now)
+- Windows HDF5 library limitations mean that we don't support threading on Windows. This limits the throughput of more complicated queries on Windows.
+
+## Usage
 
 ### Table Functions
 
@@ -205,14 +220,14 @@ This will:
 ### Build Commands
 
 ```bash
-# Standard build
-make
+# Standard build (recommended: use uv for reproducible Python environment)
+uv run make
 
 # Build with ninja (faster)
-GEN=ninja make
+GEN=ninja uv run make
 
 # Debug build
-make debug
+uv run make debug
 
 # Clean build
 make clean
@@ -220,6 +235,53 @@ make clean
 
 The built extension will be located at:
 `build/release/extension/anndata/anndata.duckdb_extension`
+
+### Code Quality
+
+Before committing code, always run format and tidy checks:
+
+```bash
+# Check and fix code formatting (uses DuckDB's clang-format rules)
+uv run make format
+
+# Run clang-tidy static analysis
+uv run make tidy-check
+```
+
+The CI/CD pipeline will fail if format or tidy checks don't pass.
+
+### Testing
+
+```bash
+# Run all SQL tests
+./build/release/test/unittest --test-dir test "[sql]"
+
+# Run specific test file
+./build/release/test/unittest --test-dir test "*layers*"
+
+# Run DuckDB with the extension loaded (for manual testing)
+./build/release/duckdb -unsigned
+```
+
+### Version Management
+
+Use the version bump script to update the version number:
+
+```bash
+# Bump patch version (e.g., 0.1.0 -> 0.1.1)
+uv run python scripts/bump_version.py patch
+
+# Bump minor version (e.g., 0.1.0 -> 0.2.0)
+uv run python scripts/bump_version.py minor
+
+# Bump major version (e.g., 0.1.0 -> 1.0.0)
+uv run python scripts/bump_version.py major
+
+# Set a specific version
+uv run python scripts/bump_version.py set 0.3.0
+```
+
+The script updates the VERSION file and adds a new section to CHANGELOG.md. **Note:** You must manually edit CHANGELOG.md to fill in the Added/Changed/Fixed sections with your actual changes. See [docs/UPDATING.md](docs/UPDATING.md) for the complete version bump procedure.
 
 ### Project Structure
 
@@ -236,12 +298,6 @@ The built extension will be located at:
 ├── vcpkg.json                   # VCPKG manifest (HDF5 dependency)
 ├── CMakeLists.txt              # Build configuration
 └── extension_config.cmake      # DuckDB extension config
-```
-
-### Testing
-
-```bash
-make test
 ```
 
 ## License
