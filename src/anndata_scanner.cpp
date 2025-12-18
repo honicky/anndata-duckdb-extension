@@ -1,6 +1,6 @@
 #include "include/anndata_scanner.hpp"
 #include "duckdb/common/exception.hpp"
-#include "duckdb/main/extension_util.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 #include <fstream>
 #include <iostream>
 
@@ -1202,25 +1202,25 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 }
 
 // Register the table functions
-void RegisterAnndataTableFunctions(DatabaseInstance &db) {
+void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 	// Register anndata_scan_obs function
 	TableFunction obs_func("anndata_scan_obs", {LogicalType::VARCHAR}, AnndataScanner::ObsScan, AnndataScanner::ObsBind,
 	                       AnndataInitGlobal, AnndataInitLocal);
 	obs_func.name = "anndata_scan_obs";
-	ExtensionUtil::RegisterFunction(db, obs_func);
+	loader.RegisterFunction(obs_func);
 
 	// Register anndata_scan_var function
 	TableFunction var_func("anndata_scan_var", {LogicalType::VARCHAR}, AnndataScanner::VarScan, AnndataScanner::VarBind,
 	                       AnndataInitGlobal, AnndataInitLocal);
 	var_func.name = "anndata_scan_var";
-	ExtensionUtil::RegisterFunction(db, var_func);
+	loader.RegisterFunction(var_func);
 
 	// Register anndata_scan_x function with projection pushdown enabled
 	TableFunction x_func("anndata_scan_x", {LogicalType::VARCHAR}, AnndataScanner::XScan, AnndataScanner::XBind,
 	                     AnndataInitGlobalWithProjection, AnndataInitLocal);
 	x_func.name = "anndata_scan_x";
 	x_func.projection_pushdown = true;
-	ExtensionUtil::RegisterFunction(db, x_func);
+	loader.RegisterFunction(x_func);
 
 	// Also register with optional var_name_column parameter
 	TableFunction x_func_with_param("anndata_scan_x", {LogicalType::VARCHAR, LogicalType::VARCHAR},
@@ -1228,31 +1228,31 @@ void RegisterAnndataTableFunctions(DatabaseInstance &db) {
 	                                AnndataInitLocal);
 	x_func_with_param.name = "anndata_scan_x";
 	x_func_with_param.projection_pushdown = true;
-	ExtensionUtil::RegisterFunction(db, x_func_with_param);
+	loader.RegisterFunction(x_func_with_param);
 
 	// Register anndata_scan_obsm function (2 parameters - correct usage)
 	TableFunction obsm_func("anndata_scan_obsm", {LogicalType::VARCHAR, LogicalType::VARCHAR}, AnndataScanner::ObsmScan,
 	                        AnndataScanner::ObsmBind, AnndataInitGlobal, AnndataInitLocal);
 	obsm_func.name = "anndata_scan_obsm";
-	ExtensionUtil::RegisterFunction(db, obsm_func);
+	loader.RegisterFunction(obsm_func);
 
 	// Register anndata_scan_obsm function (1 parameter - error message)
 	TableFunction obsm_func_error("anndata_scan_obsm", {LogicalType::VARCHAR}, DummyScan, ObsmBindError,
 	                              AnndataInitGlobal, AnndataInitLocal);
 	obsm_func_error.name = "anndata_scan_obsm";
-	ExtensionUtil::RegisterFunction(db, obsm_func_error);
+	loader.RegisterFunction(obsm_func_error);
 
 	// Register anndata_scan_varm function (2 parameters - correct usage)
 	TableFunction varm_func("anndata_scan_varm", {LogicalType::VARCHAR, LogicalType::VARCHAR}, AnndataScanner::VarmScan,
 	                        AnndataScanner::VarmBind, AnndataInitGlobal, AnndataInitLocal);
 	varm_func.name = "anndata_scan_varm";
-	ExtensionUtil::RegisterFunction(db, varm_func);
+	loader.RegisterFunction(varm_func);
 
 	// Register anndata_scan_varm function (1 parameter - error message)
 	TableFunction varm_func_error("anndata_scan_varm", {LogicalType::VARCHAR}, DummyScan, VarmBindError,
 	                              AnndataInitGlobal, AnndataInitLocal);
 	varm_func_error.name = "anndata_scan_varm";
-	ExtensionUtil::RegisterFunction(db, varm_func_error);
+	loader.RegisterFunction(varm_func_error);
 
 	// Register anndata_scan_layers function (2 parameters) with projection pushdown enabled
 	TableFunction layers_func("anndata_scan_layers", {LogicalType::VARCHAR, LogicalType::VARCHAR},
@@ -1260,7 +1260,7 @@ void RegisterAnndataTableFunctions(DatabaseInstance &db) {
 	                          AnndataInitLocal);
 	layers_func.name = "anndata_scan_layers";
 	layers_func.projection_pushdown = true;
-	ExtensionUtil::RegisterFunction(db, layers_func);
+	loader.RegisterFunction(layers_func);
 
 	// Register anndata_scan_layers function (3 parameters - with custom var column)
 	TableFunction layers_func_custom(
@@ -1268,37 +1268,37 @@ void RegisterAnndataTableFunctions(DatabaseInstance &db) {
 	    AnndataScanner::LayerScan, AnndataScanner::LayerBind, AnndataInitGlobalWithProjection, AnndataInitLocal);
 	layers_func_custom.name = "anndata_scan_layers";
 	layers_func_custom.projection_pushdown = true;
-	ExtensionUtil::RegisterFunction(db, layers_func_custom);
+	loader.RegisterFunction(layers_func_custom);
 
 	// Register anndata_scan_layers function (1 parameter - error message)
 	TableFunction layers_func_error("anndata_scan_layers", {LogicalType::VARCHAR}, DummyScan, LayerBindError,
 	                                AnndataInitGlobal, AnndataInitLocal);
 	layers_func_error.name = "anndata_scan_layers";
-	ExtensionUtil::RegisterFunction(db, layers_func_error);
+	loader.RegisterFunction(layers_func_error);
 
 	// Register anndata_scan_uns function
 	TableFunction uns_func("anndata_scan_uns", {LogicalType::VARCHAR}, AnndataScanner::UnsScan, AnndataScanner::UnsBind,
 	                       AnndataInitGlobal, AnndataInitLocal);
 	uns_func.name = "anndata_scan_uns";
-	ExtensionUtil::RegisterFunction(db, uns_func);
+	loader.RegisterFunction(uns_func);
 
 	// Register anndata_scan_obsp function
 	TableFunction obsp_func("anndata_scan_obsp", {LogicalType::VARCHAR, LogicalType::VARCHAR}, AnndataScanner::ObspScan,
 	                        AnndataScanner::ObspBind, AnndataInitGlobal, AnndataInitLocal);
 	obsp_func.name = "anndata_scan_obsp";
-	ExtensionUtil::RegisterFunction(db, obsp_func);
+	loader.RegisterFunction(obsp_func);
 
 	// Register anndata_scan_varp function
 	TableFunction varp_func("anndata_scan_varp", {LogicalType::VARCHAR, LogicalType::VARCHAR}, AnndataScanner::VarpScan,
 	                        AnndataScanner::VarpBind, AnndataInitGlobal, AnndataInitLocal);
 	varp_func.name = "anndata_scan_varp";
-	ExtensionUtil::RegisterFunction(db, varp_func);
+	loader.RegisterFunction(varp_func);
 
 	// Register anndata_info function (table function)
 	TableFunction info_func("anndata_info", {LogicalType::VARCHAR}, AnndataScanner::InfoScan, AnndataScanner::InfoBind,
 	                        AnndataInitGlobal, AnndataInitLocal);
 	info_func.name = "anndata_info";
-	ExtensionUtil::RegisterFunction(db, info_func);
+	loader.RegisterFunction(info_func);
 }
 
 } // namespace duckdb

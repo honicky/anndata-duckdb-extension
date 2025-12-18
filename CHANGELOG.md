@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2025-12-18
+
+### Changed
+- **BREAKING**: Updated to DuckDB 1.4.x API compatibility
+- Extension now uses `ExtensionLoader` instead of deprecated `DuckDB` parameter
+- Removed dependency on deprecated `ExtensionUtil` class
+- Updated storage extension callbacks to use `optional_ptr<StorageExtensionInfo>` and `AttachOptions`
+- CI/CD pipeline now targets DuckDB v1.4.3
+
 ## [0.8.3] - 2025-12-17
 
 ### Fixed

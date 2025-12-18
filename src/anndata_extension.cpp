@@ -1,5 +1,3 @@
-#define DUCKDB_EXTENSION_MAIN
-
 #include "include/anndata_extension.hpp"
 #include "include/anndata_storage.hpp"
 #include "anndata_version.hpp"
@@ -7,7 +5,6 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/scalar_function.hpp"
-#include "duckdb/main/extension_util.hpp"
 #include "duckdb/main/config.hpp"
 
 #include <iostream>
@@ -25,28 +22,36 @@ static void AnndataHelloFunction(DataChunk &args, ExpressionState &state, Vector
 }
 
 // Forward declaration
-void RegisterAnndataTableFunctions(DatabaseInstance &db);
+void RegisterAnndataTableFunctions(ExtensionLoader &loader);
 
-void AnndataExtension::Load(DuckDB &db) {
+// Internal load function
+static void LoadInternal(ExtensionLoader &loader) {
+	// Get the database instance
+	auto &db = loader.GetDatabaseInstance();
+
 	// Register the version function
 	auto version_fun = ScalarFunction("anndata_version", {}, LogicalType::VARCHAR, AnndataVersionFunction);
 	version_fun.null_handling = FunctionNullHandling::DEFAULT_NULL_HANDLING;
-	ExtensionUtil::RegisterFunction(*db.instance, version_fun);
+	loader.RegisterFunction(version_fun);
 
 	// Register the hello function
 	auto hello_fun = ScalarFunction("anndata_hello", {}, LogicalType::VARCHAR, AnndataHelloFunction);
 	hello_fun.null_handling = FunctionNullHandling::DEFAULT_NULL_HANDLING;
-	ExtensionUtil::RegisterFunction(*db.instance, hello_fun);
+	loader.RegisterFunction(hello_fun);
 
 	// Register the AnnData table functions
-	RegisterAnndataTableFunctions(*db.instance);
+	RegisterAnndataTableFunctions(loader);
 
 	// Register the AnnData storage extension for ATTACH support
-	auto &config = DBConfig::GetConfig(*db.instance);
+	auto &config = DBConfig::GetConfig(db);
 	config.storage_extensions["anndata"] = CreateAnndataStorageExtension();
 
 	// Log that the extension is loaded
 	std::cout << "AnnData DuckDB Extension loaded successfully!" << std::endl;
+}
+
+void AnndataExtension::Load(ExtensionLoader &loader) {
+	LoadInternal(loader);
 }
 
 std::string AnndataExtension::Name() {
@@ -59,13 +64,11 @@ std::string AnndataExtension::Version() const {
 
 } // namespace duckdb
 
-// Export the version function for compatibility
 extern "C" {
 
-DUCKDB_EXTENSION_API void anndata_init(duckdb::DatabaseInstance &db) {
-	duckdb::DuckDB db_wrapper(db);
-	duckdb::AnndataExtension ext;
-	ext.Load(db_wrapper);
+// DuckDB 1.4.x uses the DUCKDB_CPP_EXTENSION_ENTRY macro for extension entry points
+DUCKDB_CPP_EXTENSION_ENTRY(anndata, loader) {
+	duckdb::LoadInternal(loader);
 }
 
 DUCKDB_EXTENSION_API const char *anndata_version() {

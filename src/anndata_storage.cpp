@@ -182,9 +182,9 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path) {
 // Storage Extension Callbacks
 //===--------------------------------------------------------------------===//
 
-static unique_ptr<Catalog> AnndataStorageAttach(StorageExtensionInfo *storage_info, ClientContext &context,
+static unique_ptr<Catalog> AnndataStorageAttach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
                                                 AttachedDatabase &db, const string &name, AttachInfo &info,
-                                                AccessMode access_mode) {
+                                                AttachOptions &options) {
 	// Get the file path
 	auto file_path = info.path;
 
@@ -209,7 +209,7 @@ static unique_ptr<Catalog> AnndataStorageAttach(StorageExtensionInfo *storage_in
 	return std::move(catalog);
 }
 
-static unique_ptr<TransactionManager> AnndataStorageTransactionManager(StorageExtensionInfo *storage_info,
+static unique_ptr<TransactionManager> AnndataStorageTransactionManager(optional_ptr<StorageExtensionInfo> storage_info,
                                                                        AttachedDatabase &db, Catalog &catalog) {
 	return make_uniq<DuckTransactionManager>(db);
 }

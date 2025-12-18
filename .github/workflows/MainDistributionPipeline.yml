@@ -17,7 +17,7 @@ jobs:
     name: Build extension binaries
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
-      duckdb_version: v1.3.2
+      duckdb_version: v1.4.3
       ci_tools_version: main
       extension_name: anndata
 
@@ -25,7 +25,7 @@ jobs:
     name: Code Quality Check
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
     with:
-      duckdb_version: v1.3.2
+      duckdb_version: v1.4.3
       ci_tools_version: main
       extension_name: anndata
       format_checks: 'format;tidy'
@@ -89,11 +89,11 @@ jobs:
       - name: Checkout DuckDB to version
         run: |
           cd duckdb
-          git checkout v1.3.2
-          
+          git checkout v1.4.3
+
       - uses: actions/download-artifact@v4
         with:
-          name: anndata-v1.3.2-extension-${{matrix.duckdb_arch}}
+          name: anndata-v1.4.3-extension-${{matrix.duckdb_arch}}
           path: /tmp/extension
           
       - name: Deploy
