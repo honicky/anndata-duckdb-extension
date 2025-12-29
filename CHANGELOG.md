@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2025-12-29
+
+### Added
+- LZF compression filter support for reading h5ad files with LZF-compressed datasets (common in AnnData files created by h5py/scanpy)
+
+### Fixed
+- AnnData file validation now checks HDF5 content structure instead of requiring `.h5ad` file extension, allowing UUID-named files to be attached correctly
+
 ## [0.9.0] - 2025-12-18
 
 ### Changed
