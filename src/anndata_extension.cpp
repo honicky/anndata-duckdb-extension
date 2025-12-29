@@ -7,6 +7,9 @@
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/main/config.hpp"
 
+// LZF filter for reading LZF-compressed HDF5 datasets (common in h5ad files)
+#include "lzf_filter.h"
+
 #include <iostream>
 
 namespace duckdb {
@@ -26,6 +29,12 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader);
 
 // Internal load function
 static void LoadInternal(ExtensionLoader &loader) {
+	// Register LZF filter for reading LZF-compressed h5ad files
+	// This must be done before any HDF5 file access
+	if (register_lzf() < 0) {
+		std::cerr << "Warning: Failed to register LZF HDF5 filter" << std::endl;
+	}
+
 	// Get the database instance
 	auto &db = loader.GetDatabaseInstance();
 

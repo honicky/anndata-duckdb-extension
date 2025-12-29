@@ -21,6 +21,7 @@ configure_file(
 )
 
 include_directories(src/include)
+include_directories(src/lzf)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/src/include)
 
 # Option to use HDF5 C API instead of C++ API
@@ -82,11 +83,19 @@ else()
     endif()
 endif()
 
+# LZF filter sources for reading LZF-compressed HDF5 datasets
+set(LZF_SOURCES
+    src/lzf/lzf_filter.c
+    src/lzf/lzf_c.c
+    src/lzf/lzf_d.c
+)
+
 set(EXTENSION_SOURCES
     src/anndata_extension.cpp
     src/anndata_scanner.cpp
     src/anndata_storage.cpp
     src/h5_reader_multithreaded.cpp
+    ${LZF_SOURCES}
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
