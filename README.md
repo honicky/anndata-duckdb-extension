@@ -38,6 +38,13 @@ The ATTACH syntax provides a the most intuitive way to work with AnnData files, 
 -- Attach an AnnData file
 ATTACH 'data.h5ad' AS scdata (TYPE ANNDATA);
 
+-- Specify which var columns to use for gene names and IDs
+ATTACH 'data.h5ad' AS scdata (
+    TYPE ANNDATA,
+    VAR_NAME_COLUMN 'gene_symbols',
+    VAR_ID_COLUMN 'ensembl_id'
+);
+
 -- Query using schema-qualified table names
 SELECT * FROM scdata.obs WHERE cell_type = 'T cell';
 SELECT * FROM scdata.var WHERE highly_variable = true;
@@ -85,6 +92,7 @@ SELECT * FROM anndata_scan_x('data.h5ad');
 - Query alternative expression matrices from `.layers`
 - Query unstructured metadata from `.uns`
 - Configurable gene name columns for expression matrix
+- **Auto-detection of gene name columns** with manual override options
 - Efficient HDF5 data reading with proper memory management
 - Thread-safe operation on all platforms
 
@@ -161,6 +169,31 @@ SELECT key, dtype, value
 FROM anndata_scan_uns('data.h5ad')
 WHERE type = 'scalar';
 ```
+
+### Gene Name Column Configuration
+
+When attaching an AnnData file, the extension automatically detects which `var` columns contain gene names and IDs using heuristics. You can override this with explicit options:
+
+```sql
+-- Auto-detection (default behavior)
+-- Prints: "Note: Using var_name='gene_symbols', var_id='ensembl_id'. Override with VAR_NAME_COLUMN/VAR_ID_COLUMN options."
+ATTACH 'data.h5ad' AS scdata (TYPE ANNDATA);
+
+-- Explicit specification
+ATTACH 'data.h5ad' AS scdata (
+    TYPE ANNDATA,
+    VAR_NAME_COLUMN 'gene_symbols',  -- Column for gene names (used as X matrix column names)
+    VAR_ID_COLUMN 'ensembl_id'       -- Column for gene IDs
+);
+
+-- Override just one column (other is auto-detected)
+ATTACH 'data.h5ad' AS scdata (TYPE ANNDATA, VAR_NAME_COLUMN 'gene_symbols');
+```
+
+**Auto-detection priority:**
+- For gene names: `gene_symbols`, `gene_symbol`, `gene_names`, `gene_name`, `symbol`, `symbols`, `feature_name`, `name`, `names`
+- For gene IDs: `gene_ids`, `gene_id`, `ensembl_id`, `ensembl`, `feature_id`, `id`, `ids`
+- Falls back to `_index` if no suitable column is found
 
 ### Common Patterns
 

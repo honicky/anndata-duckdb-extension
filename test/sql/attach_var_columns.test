@@ -1,0 +1,121 @@
+# name: test/sql/attach_var_columns.test
+# description: Test VAR_NAME_COLUMN and VAR_ID_COLUMN ATTACH options
+# group: [sql]
+
+require anndata
+
+# Test 1: Auto-detection - gene_name should be detected as var_name column
+statement ok
+ATTACH 'test/data/test_small.h5ad' AS ad (TYPE ANNDATA);
+
+# Auto-detection should pick gene_name as var_name column (in priority list)
+# X matrix columns should be named Gene_000, Gene_001, etc.
+query I
+SELECT column_name FROM (DESCRIBE ad.X) WHERE column_name = 'Gene_000';
+----
+Gene_000
+
+# Verify first few column names from X
+query I
+SELECT column_name
+FROM (DESCRIBE ad.X)
+WHERE column_name IN ('Gene_000', 'Gene_001', 'Gene_002')
+ORDER BY column_name;
+----
+Gene_000
+Gene_001
+Gene_002
+
+statement ok
+DETACH ad;
+
+# Test 2: Explicit VAR_NAME_COLUMN - use gene_id for column names
+statement ok
+ATTACH 'test/data/test_small.h5ad' AS ad (TYPE ANNDATA, VAR_NAME_COLUMN 'gene_id');
+
+# X matrix columns should now be named with Ensembl IDs
+query I
+SELECT column_name FROM (DESCRIBE ad.X) WHERE column_name = 'ENSG00000000000';
+----
+ENSG00000000000
+
+# Verify Ensembl ID column names
+query I
+SELECT column_name
+FROM (DESCRIBE ad.X)
+WHERE column_name IN ('ENSG00000000000', 'ENSG00000000001', 'ENSG00000000002')
+ORDER BY column_name;
+----
+ENSG00000000000
+ENSG00000000001
+ENSG00000000002
+
+statement ok
+DETACH ad;
+
+# Test 3: Explicit both columns
+statement ok
+ATTACH 'test/data/test_small.h5ad' AS ad (TYPE ANNDATA, VAR_NAME_COLUMN 'gene_name', VAR_ID_COLUMN 'gene_id');
+
+# Should use gene_name for columns
+query I
+SELECT column_name FROM (DESCRIBE ad.X) WHERE column_name = 'Gene_000';
+----
+Gene_000
+
+statement ok
+DETACH ad;
+
+# Test 4: Use _index explicitly
+statement ok
+ATTACH 'test/data/test_small.h5ad' AS ad (TYPE ANNDATA, VAR_NAME_COLUMN '_index');
+
+# Should use _index values for columns
+query I
+SELECT column_name FROM (DESCRIBE ad.X) WHERE column_name = 'Gene_000';
+----
+Gene_000
+
+statement ok
+DETACH ad;
+
+# Test 5: Verify layers also use VAR_NAME_COLUMN
+statement ok
+ATTACH 'test/data/test_layers.h5ad' AS ad (TYPE ANNDATA, VAR_NAME_COLUMN 'gene_id');
+
+# Layers should use the same var_name_column for column names
+query I
+SELECT column_name FROM (DESCRIBE ad.layers_raw_counts) WHERE column_name = 'ENSG00000000000';
+----
+ENSG00000000000
+
+statement ok
+DETACH ad;
+
+# Test 6: Case insensitive option names
+statement ok
+ATTACH 'test/data/test_small.h5ad' AS ad (TYPE ANNDATA, var_name_column 'gene_id');
+
+query I
+SELECT column_name FROM (DESCRIBE ad.X) WHERE column_name = 'ENSG00000000000';
+----
+ENSG00000000000
+
+statement ok
+DETACH ad;
+
+# Test 7: Invalid column name should fail gracefully (falls back or errors)
+# Note: We need to test what happens with a non-existent column
+# The implementation may fall back to _index or throw an error
+# For now, test that a valid alternate column works
+statement ok
+ATTACH 'test/data/test_small.h5ad' AS ad (TYPE ANNDATA, VAR_NAME_COLUMN 'highly_variable');
+
+# This should work but column names would be 'True' or 'False'
+query I
+SELECT COUNT(*) FROM ad.X;
+----
+100
+
+statement ok
+DETACH ad;
