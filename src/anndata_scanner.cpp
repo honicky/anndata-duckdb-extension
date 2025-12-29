@@ -7,19 +7,21 @@
 namespace duckdb {
 
 bool AnndataScanner::IsAnndataFile(const string &path) {
-	// Check if file exists and has .h5ad extension
+	// Check if file exists and can be opened
 	std::ifstream file(path);
 	if (!file.good()) {
 		return false;
 	}
+	file.close();
 
-	// Check extension
-	if (path.size() < 5) {
+	// Try to open as HDF5 and validate it's an AnnData file
+	// This allows files without .h5ad extension to work (e.g., UUID-named files)
+	try {
+		H5ReaderMultithreaded reader(path);
+		return reader.IsValidAnnData();
+	} catch (...) {
 		return false;
 	}
-
-	string ext = path.substr(path.size() - 5);
-	return ext == ".h5ad";
 }
 
 string AnndataScanner::GetAnndataInfo(const string &path) {

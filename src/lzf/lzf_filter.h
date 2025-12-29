@@ -1,15 +1,14 @@
 /***** Preamble block *********************************************************
-*
-* This file is part of h5py, a low-level Python interface to the HDF5 library.
-*
-* Copyright (C) 2008 Andrew Collette
-* http://h5py.org
-* License: BSD  (See LICENSE.txt for full license)
-*
-* $Date$
-*
-****** End preamble block ****************************************************/
-
+ *
+ * This file is part of h5py, a low-level Python interface to the HDF5 library.
+ *
+ * Copyright (C) 2008 Andrew Collette
+ * http://h5py.org
+ * License: BSD  (See LICENSE.txt for full license)
+ *
+ * $Date$
+ *
+ ****** End preamble block ****************************************************/
 
 #ifndef H5PY_LZF_H
 #define H5PY_LZF_H

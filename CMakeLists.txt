@@ -84,11 +84,16 @@ else()
 endif()
 
 # LZF filter sources for reading LZF-compressed HDF5 datasets
-set(LZF_SOURCES
-    src/lzf/lzf_filter.c
-    src/lzf/lzf_c.c
-    src/lzf/lzf_d.c
-)
+# Excluded from tidy builds since it's third-party code
+if(NOT CLANG_TIDY)
+    set(LZF_SOURCES
+        src/lzf/lzf_filter.c
+        src/lzf/lzf_c.c
+        src/lzf/lzf_d.c
+    )
+else()
+    set(LZF_SOURCES "")
+endif()
 
 set(EXTENSION_SOURCES
     src/anndata_extension.cpp
