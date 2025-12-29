@@ -67,6 +67,13 @@ public:
 	// Read gene names from var
 	std::vector<std::string> GetVarNames(const std::string &column_name = "_index");
 
+	// Auto-detect var columns for gene names and IDs
+	struct VarColumnDetection {
+		std::string name_column; // Column for gene symbols (e.g., "gene_symbols")
+		std::string id_column;   // Column for gene IDs (e.g., "ensembl_id")
+	};
+	VarColumnDetection DetectVarColumns();
+
 	// Read X matrix values for a row range and column range (legacy - returns vector)
 	void ReadXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count, std::vector<double> &values);
 

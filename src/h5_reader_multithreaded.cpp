@@ -1131,6 +1131,151 @@ std::vector<std::string> H5ReaderMultithreaded::GetVarNames(const std::string &c
 	return names;
 }
 
+H5ReaderMultithreaded::VarColumnDetection H5ReaderMultithreaded::DetectVarColumns() {
+	VarColumnDetection result;
+
+	// Get list of var column names
+	auto columns = GetVarColumns();
+	std::vector<std::string> column_names;
+	for (const auto &col : columns) {
+		column_names.push_back(col.name);
+	}
+
+	// Phase 1: Check known column names (case-insensitive)
+	// Priority order from spec (user modified)
+	std::vector<std::string> name_preferred = {"gene_symbols", "gene_symbol",  "gene_names", "gene_name", "symbol",
+	                                           "symbols",      "feature_name", "name",       "names"};
+	std::vector<std::string> id_preferred = {"gene_ids", "gene_id", "ensembl_id", "ensembl", "feature_id", "id", "ids"};
+
+	// Find by known names first
+	for (const auto &preferred : name_preferred) {
+		for (const auto &col : column_names) {
+			if (StringUtil::CIEquals(col, preferred)) {
+				result.name_column = col;
+				break;
+			}
+		}
+		if (!result.name_column.empty()) {
+			break;
+		}
+	}
+
+	for (const auto &preferred : id_preferred) {
+		for (const auto &col : column_names) {
+			if (StringUtil::CIEquals(col, preferred)) {
+				result.id_column = col;
+				break;
+			}
+		}
+		if (!result.id_column.empty()) {
+			break;
+		}
+	}
+
+	// Phase 2: If not found, score columns by content sampling
+	if (result.name_column.empty() || result.id_column.empty()) {
+		// Sample up to 100 values from each string column and score them
+		int best_name_score = 0;
+		int best_id_score = 0;
+		std::string best_name_col;
+		std::string best_id_col;
+
+		for (const auto &col : columns) {
+			// Only check string columns
+			if (col.type != LogicalType::VARCHAR) {
+				continue;
+			}
+
+			// Sample values from this column
+			int gene_symbol_count = 0;
+			int ensembl_count = 0;
+			int numeric_count = 0;
+
+			try {
+				auto sample_size = std::min(static_cast<size_t>(100), GetVarCount());
+				for (size_t i = 0; i < sample_size; i++) {
+					auto value = ReadVarColumnString(col.original_name, i);
+					if (value.empty()) {
+						continue;
+					}
+
+					// Check if looks like Ensembl ID (starts with ENS)
+					if (value.size() >= 4 && value.substr(0, 3) == "ENS") {
+						ensembl_count++;
+					}
+					// Check if looks like gene symbol (uppercase, 2-12 chars, alphanumeric with hyphens)
+					else if (value.size() >= 2 && value.size() <= 12) {
+						bool is_gene_symbol = true;
+						bool has_letter = false;
+						for (char c : value) {
+							if (std::isalpha(c)) {
+								has_letter = true;
+								if (!std::isupper(c)) {
+									is_gene_symbol = false;
+									break;
+								}
+							} else if (!std::isdigit(c) && c != '-') {
+								is_gene_symbol = false;
+								break;
+							}
+						}
+						if (is_gene_symbol && has_letter) {
+							gene_symbol_count++;
+						}
+					}
+					// Check if purely numeric
+					bool is_numeric = true;
+					for (char c : value) {
+						if (!std::isdigit(c)) {
+							is_numeric = false;
+							break;
+						}
+					}
+					if (is_numeric) {
+						numeric_count++;
+					}
+				}
+
+				// Score: gene symbols get 2 points, ensembl gets 1 point
+				// Avoid columns that are mostly numeric
+				if (numeric_count < static_cast<int>(sample_size) / 2) {
+					int name_score = gene_symbol_count * 2;
+					int id_score = ensembl_count;
+
+					if (result.name_column.empty() && name_score > best_name_score) {
+						best_name_score = name_score;
+						best_name_col = col.name;
+					}
+					if (result.id_column.empty() && id_score > best_id_score) {
+						best_id_score = id_score;
+						best_id_col = col.name;
+					}
+				}
+			} catch (...) {
+				// Skip columns that can't be read
+				continue;
+			}
+		}
+
+		if (result.name_column.empty() && !best_name_col.empty()) {
+			result.name_column = best_name_col;
+		}
+		if (result.id_column.empty() && !best_id_col.empty()) {
+			result.id_column = best_id_col;
+		}
+	}
+
+	// Phase 3: Fallback to _index
+	if (result.name_column.empty()) {
+		result.name_column = "_index";
+	}
+	if (result.id_column.empty()) {
+		result.id_column = "_index";
+	}
+
+	return result;
+}
+
 void H5ReaderMultithreaded::ReadXMatrix(idx_t obs_start, idx_t obs_count, idx_t var_start, idx_t var_count,
                                         std::vector<double> &values) {
 	// TODO: Implement in Phase 4

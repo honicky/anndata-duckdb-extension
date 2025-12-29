@@ -7,6 +7,7 @@
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/common/string_util.hpp"
+#include <iostream>
 
 namespace duckdb {
 
@@ -29,7 +30,9 @@ string AnndataDefaultGenerator::GenerateViewSQL(const TableViewInfo &info) const
 	} else if (info.table_type == "var") {
 		return StringUtil::Format("SELECT * FROM anndata_scan_var(%s)", SQLString(file_path));
 	} else if (info.table_type == "X") {
-		return StringUtil::Format("SELECT * FROM anndata_scan_x(%s)", SQLString(file_path));
+		// Pass var_name_column to anndata_scan_x
+		return StringUtil::Format("SELECT * FROM anndata_scan_x(%s, %s)", SQLString(file_path),
+		                          SQLString(info.var_name_column));
 	} else if (info.table_type == "obsm") {
 		return StringUtil::Format("SELECT * FROM anndata_scan_obsm(%s, %s)", SQLString(file_path),
 		                          SQLString(info.param));
@@ -37,8 +40,9 @@ string AnndataDefaultGenerator::GenerateViewSQL(const TableViewInfo &info) const
 		return StringUtil::Format("SELECT * FROM anndata_scan_varm(%s, %s)", SQLString(file_path),
 		                          SQLString(info.param));
 	} else if (info.table_type == "layers") {
-		return StringUtil::Format("SELECT * FROM anndata_scan_layers(%s, %s)", SQLString(file_path),
-		                          SQLString(info.param));
+		// Pass var_name_column to anndata_scan_layers
+		return StringUtil::Format("SELECT * FROM anndata_scan_layers(%s, %s, %s)", SQLString(file_path),
+		                          SQLString(info.param), SQLString(info.var_name_column));
 	} else if (info.table_type == "obsp") {
 		return StringUtil::Format("SELECT * FROM anndata_scan_obsp(%s, %s)", SQLString(file_path),
 		                          SQLString(info.param));
@@ -92,7 +96,8 @@ vector<string> AnndataDefaultGenerator::GetDefaultEntries() {
 // Table Discovery
 //===--------------------------------------------------------------------===//
 
-vector<TableViewInfo> DiscoverAnndataTables(const string &file_path) {
+vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const string &var_name_column,
+                                            const string &var_id_column) {
 	vector<TableViewInfo> tables;
 
 	H5ReaderMultithreaded reader(file_path);
@@ -102,14 +107,14 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path) {
 	}
 
 	// Always add obs and var
-	tables.push_back({"obs", "obs", ""});
-	tables.push_back({"var", "var", ""});
+	tables.push_back({"obs", "obs", "", var_name_column, var_id_column});
+	tables.push_back({"var", "var", "", var_name_column, var_id_column});
 
 	// Check for X matrix
 	try {
 		auto x_info = reader.GetXMatrixInfo();
 		if (x_info.n_obs > 0 && x_info.n_var > 0) {
-			tables.push_back({"X", "X", ""});
+			tables.push_back({"X", "X", "", var_name_column, var_id_column});
 		}
 	} catch (...) {
 		// X matrix may not exist, that's ok
@@ -119,7 +124,7 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path) {
 	try {
 		auto obsm_matrices = reader.GetObsmMatrices();
 		for (const auto &m : obsm_matrices) {
-			tables.push_back({"obsm_" + m.name, "obsm", m.name});
+			tables.push_back({"obsm_" + m.name, "obsm", m.name, var_name_column, var_id_column});
 		}
 	} catch (...) {
 		// obsm may not exist
@@ -129,7 +134,7 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path) {
 	try {
 		auto varm_matrices = reader.GetVarmMatrices();
 		for (const auto &m : varm_matrices) {
-			tables.push_back({"varm_" + m.name, "varm", m.name});
+			tables.push_back({"varm_" + m.name, "varm", m.name, var_name_column, var_id_column});
 		}
 	} catch (...) {
 		// varm may not exist
@@ -139,7 +144,7 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path) {
 	try {
 		auto layers = reader.GetLayers();
 		for (const auto &l : layers) {
-			tables.push_back({"layers_" + l.name, "layers", l.name});
+			tables.push_back({"layers_" + l.name, "layers", l.name, var_name_column, var_id_column});
 		}
 	} catch (...) {
 		// layers may not exist
@@ -149,7 +154,7 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path) {
 	try {
 		auto obsp_keys = reader.GetObspKeys();
 		for (const auto &k : obsp_keys) {
-			tables.push_back({"obsp_" + k, "obsp", k});
+			tables.push_back({"obsp_" + k, "obsp", k, var_name_column, var_id_column});
 		}
 	} catch (...) {
 		// obsp may not exist
@@ -159,7 +164,7 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path) {
 	try {
 		auto varp_keys = reader.GetVarpKeys();
 		for (const auto &k : varp_keys) {
-			tables.push_back({"varp_" + k, "varp", k});
+			tables.push_back({"varp_" + k, "varp", k, var_name_column, var_id_column});
 		}
 	} catch (...) {
 		// varp may not exist
@@ -169,7 +174,7 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path) {
 	try {
 		auto uns_keys = reader.GetUnsKeys();
 		if (!uns_keys.empty()) {
-			tables.push_back({"uns", "uns", ""});
+			tables.push_back({"uns", "uns", "", var_name_column, var_id_column});
 		}
 	} catch (...) {
 		// uns may not exist
@@ -188,8 +193,48 @@ static unique_ptr<Catalog> AnndataStorageAttach(optional_ptr<StorageExtensionInf
 	// Get the file path
 	auto file_path = info.path;
 
+	// Parse VAR_NAME_COLUMN and VAR_ID_COLUMN options
+	string var_name_column;
+	string var_id_column;
+
+	for (auto &entry : options.options) {
+		auto key = StringUtil::Lower(entry.first);
+		if (key == "var_name_column") {
+			var_name_column = entry.second.GetValue<string>();
+		} else if (key == "var_id_column") {
+			var_id_column = entry.second.GetValue<string>();
+		}
+	}
+
+	// Remove our custom options so DuckDB doesn't complain about unrecognized options
+	options.options.erase("var_name_column");
+	options.options.erase("var_id_column");
+	options.options.erase("VAR_NAME_COLUMN");
+	options.options.erase("VAR_ID_COLUMN");
+
+	// Auto-detect var columns if not specified
+	bool auto_detected = false;
+	if (var_name_column.empty() || var_id_column.empty()) {
+		H5ReaderMultithreaded reader(file_path);
+		auto detection = reader.DetectVarColumns();
+		if (var_name_column.empty()) {
+			var_name_column = detection.name_column;
+			auto_detected = true;
+		}
+		if (var_id_column.empty()) {
+			var_id_column = detection.id_column;
+			auto_detected = true;
+		}
+	}
+
+	// Print informational message if auto-detected
+	if (auto_detected) {
+		std::cerr << "Note: Using var_name='" << var_name_column << "', var_id='" << var_id_column
+		          << "'. Override with VAR_NAME_COLUMN/VAR_ID_COLUMN options." << std::endl;
+	}
+
 	// Verify file exists and is valid AnnData
-	auto tables = DiscoverAnndataTables(file_path);
+	auto tables = DiscoverAnndataTables(file_path, var_name_column, var_id_column);
 
 	// Create an in-memory catalog for the attached database
 	info.path = ":memory:";

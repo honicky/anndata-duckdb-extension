@@ -9,9 +9,11 @@ namespace duckdb {
 
 //! TableViewInfo holds information about a table/view to be created
 struct TableViewInfo {
-	string name;       //! Table name (e.g., "obs", "obsm_pca")
-	string table_type; //! Table type (e.g., "obs", "obsm", "layers")
-	string param;      //! Additional parameter (e.g., matrix name for obsm)
+	string name;            //! Table name (e.g., "obs", "obsm_pca")
+	string table_type;      //! Table type (e.g., "obs", "obsm", "layers")
+	string param;           //! Additional parameter (e.g., matrix name for obsm)
+	string var_name_column; //! Column for gene names (e.g., "gene_symbols")
+	string var_id_column;   //! Column for gene IDs (e.g., "ensembl_id")
 };
 
 //! AnndataDefaultGenerator creates virtual views for AnnData tables
@@ -37,6 +39,7 @@ private:
 unique_ptr<StorageExtension> CreateAnndataStorageExtension();
 
 //! Discover available tables from an AnnData file
-vector<TableViewInfo> DiscoverAnndataTables(const string &file_path);
+vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const string &var_name_column,
+                                            const string &var_id_column);
 
 } // namespace duckdb

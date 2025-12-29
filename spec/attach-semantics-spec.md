@@ -51,6 +51,39 @@ ATTACH 'data.h5ad' AS pbmc (
 );
 ```
 
+### Configuration and Metadata (`_info` table)
+
+Each attached AnnData database includes a special `_info` table that displays file metadata and configuration options. This leverages the existing `anndata_info()` function and adds configuration details.
+
+```sql
+ATTACH 'data.h5ad' AS pbmc (TYPE ANNDATA, VAR_NAME_COLUMN = 'gene_symbols');
+
+SELECT * FROM pbmc._info;
+```
+
+Returns:
+| property        | value                     |
+|-----------------|---------------------------|
+| file_path       | data.h5ad                 |
+| n_obs           | 2700                      |
+| n_vars          | 32738                     |
+| x_shape         | 2700 x 32738              |
+| x_sparse        | true                      |
+| x_sparse_format | csr                       |
+| var_name_column | gene_symbols              |
+| var_id_column   | _index                    |
+| obsm_keys       | X_pca, X_umap             |
+| varm_keys       | PCs                       |
+| layers_keys     | raw, normalized           |
+| obsp_keys       | distances, connectivities |
+| varp_keys       |                           |
+| has_uns         | true                      |
+
+This provides:
+- **Discoverability**: Users can see configuration at any time
+- **Debugging**: Easy to verify which columns are being used for gene names
+- **Consistency**: Uses the same underlying logic as `anndata_info()`
+
 ### Cross-Database Queries
 ```sql
 -- Attach multiple datasets
@@ -179,6 +212,7 @@ Minimal read-only transaction manager:
 Tables are discovered dynamically by scanning the HDF5 structure:
 
 ### Always Present
+- `_info` - File metadata and configuration (see Configuration and Metadata section)
 - `obs` - Cell/observation metadata
 - `var` - Gene/variable metadata
 
@@ -194,7 +228,7 @@ Tables are discovered dynamically by scanning the HDF5 structure:
 ### Discovery Algorithm
 ```python
 def discover_tables(h5ad_file):
-    tables = ['obs', 'var']  # Always present
+    tables = ['_info', 'obs', 'var']  # Always present
 
     if 'X' in h5ad_file:
         tables.append('X')
