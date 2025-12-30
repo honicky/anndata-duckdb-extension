@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2025-12-29
+
+### Added
+- `VAR_NAME_COLUMN` and `VAR_ID_COLUMN` ATTACH options to specify which var columns contain gene names and IDs
+- Auto-detection of gene name/ID columns using heuristics when options not specified
+- Informational message printed to stderr when auto-detecting var columns
+
 ## [0.10.0] - 2025-12-29
 
 ### Added
