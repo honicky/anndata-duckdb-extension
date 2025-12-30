@@ -20,13 +20,10 @@ LOAD anndata;
 -- Allow unsigned extensions (required for non-community extensions)
 SET allow_unsigned_extensions = true;
 
--- Set the extension repository -- first time you use it, or updating to a new version
-SET custom_extension_repository = 'https://software-releasers.s3.us-west-2.amazonaws.com';
+-- Install from the custom repository (first time or updating)
+FORCE INSTALL anndata FROM 'https://software-releasers.s3.us-west-2.amazonaws.com';
 
--- Install the first time you use it or update to the latest version
-FORCE INSTALL anndata; 
-
--- Load the extension before using 
+-- Load the extension before using
 LOAD anndata;
 ```
 
