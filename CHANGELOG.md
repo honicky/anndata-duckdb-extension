@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.4] - 2025-12-30
+
+### Fixed
+- Categorical columns with int16/int32 codes are now properly decoded (fixes NULL values for columns like `feature_name` with >127 categories)
+- Integer and float categorical columns (e.g., `feature_length`) are now properly decoded in obs/var tables
+
 ## [0.11.3] - 2025-12-29
 
 ### Fixed

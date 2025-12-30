@@ -499,12 +499,13 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 				hsize_t cat_dims[1];
 				H5Sget_simple_extent_dims(cat_space.get(), cat_dims, nullptr);
 
-				// Read all categories first
+				// Read all categories first (as strings for output)
 				std::vector<std::string> categories;
 				categories.reserve(cat_dims[0]);
 
 				H5TypeHandle cat_dtype(cat_dataset.get(), H5TypeHandle::TypeClass::DATASET);
-				if (H5Tget_class(cat_dtype.get()) == H5T_STRING) {
+				H5T_class_t cat_class = H5Tget_class(cat_dtype.get());
+				if (cat_class == H5T_STRING) {
 					if (H5Tis_variable_str(cat_dtype.get())) {
 						// Variable-length strings
 						std::vector<char *> str_buffer(cat_dims[0]);
@@ -532,23 +533,76 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 							categories.emplace_back(str_ptr, len);
 						}
 					}
+				} else if (cat_class == H5T_INTEGER) {
+					// Integer categories
+					size_t int_size = H5Tget_size(cat_dtype.get());
+					if (int_size <= 4) {
+						std::vector<int32_t> int_cats(cat_dims[0]);
+						H5Dread(cat_dataset.get(), H5T_NATIVE_INT32, H5S_ALL, H5S_ALL, H5P_DEFAULT, int_cats.data());
+						for (size_t i = 0; i < cat_dims[0]; i++) {
+							categories.emplace_back(std::to_string(int_cats[i]));
+						}
+					} else {
+						std::vector<int64_t> int_cats(cat_dims[0]);
+						H5Dread(cat_dataset.get(), H5T_NATIVE_INT64, H5S_ALL, H5S_ALL, H5P_DEFAULT, int_cats.data());
+						for (size_t i = 0; i < cat_dims[0]; i++) {
+							categories.emplace_back(std::to_string(int_cats[i]));
+						}
+					}
+				} else if (cat_class == H5T_FLOAT) {
+					// Float categories
+					size_t float_size = H5Tget_size(cat_dtype.get());
+					if (float_size <= 4) {
+						std::vector<float> float_cats(cat_dims[0]);
+						H5Dread(cat_dataset.get(), H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, float_cats.data());
+						for (size_t i = 0; i < cat_dims[0]; i++) {
+							categories.emplace_back(std::to_string(float_cats[i]));
+						}
+					} else {
+						std::vector<double> double_cats(cat_dims[0]);
+						H5Dread(cat_dataset.get(), H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT,
+						        double_cats.data());
+						for (size_t i = 0; i < cat_dims[0]; i++) {
+							categories.emplace_back(std::to_string(double_cats[i]));
+						}
+					}
 				}
 
-				// Now read the codes for the requested range
-				std::vector<int8_t> codes(count);
+				// Now read the codes for the requested range - detect code dtype
 				hsize_t h_offset[1] = {static_cast<hsize_t>(offset)};
 				hsize_t h_count[1] = {static_cast<hsize_t>(count)};
 
 				H5Sselect_hyperslab(codes_space.get(), H5S_SELECT_SET, h_offset, nullptr, h_count, nullptr);
 				H5DataspaceHandle mem_space(1, h_count);
 
-				H5Dread(codes_dataset.get(), H5T_NATIVE_INT8, mem_space.get(), codes_space.get(), H5P_DEFAULT,
-				        codes.data());
+				H5TypeHandle codes_dtype(codes_dataset.get(), H5TypeHandle::TypeClass::DATASET);
+				size_t code_size = H5Tget_size(codes_dtype.get());
+
+				// Read codes with appropriate size
+				std::vector<int32_t> codes_i32(count);
+				if (code_size == 1) {
+					std::vector<int8_t> codes_i8(count);
+					H5Dread(codes_dataset.get(), H5T_NATIVE_INT8, mem_space.get(), codes_space.get(), H5P_DEFAULT,
+					        codes_i8.data());
+					for (idx_t i = 0; i < count; i++) {
+						codes_i32[i] = codes_i8[i];
+					}
+				} else if (code_size == 2) {
+					std::vector<int16_t> codes_i16(count);
+					H5Dread(codes_dataset.get(), H5T_NATIVE_INT16, mem_space.get(), codes_space.get(), H5P_DEFAULT,
+					        codes_i16.data());
+					for (idx_t i = 0; i < count; i++) {
+						codes_i32[i] = codes_i16[i];
+					}
+				} else {
+					H5Dread(codes_dataset.get(), H5T_NATIVE_INT32, mem_space.get(), codes_space.get(), H5P_DEFAULT,
+					        codes_i32.data());
+				}
 
 				// Map codes to categories and set in result vector
 				for (idx_t i = 0; i < count; i++) {
-					int8_t code = codes[i];
-					if (code >= 0 && code < static_cast<int8_t>(categories.size())) {
+					int32_t code = codes_i32[i];
+					if (code >= 0 && static_cast<size_t>(code) < categories.size()) {
 						result.SetValue(i, Value(categories[code]));
 					} else {
 						result.SetValue(i, Value()); // NULL for invalid codes
@@ -737,12 +791,13 @@ void H5ReaderMultithreaded::ReadVarColumn(const std::string &column_name, Vector
 				hsize_t cat_dims[1];
 				H5Sget_simple_extent_dims(cat_space.get(), cat_dims, nullptr);
 
-				// Read all categories first
+				// Read all categories first (as strings for output)
 				std::vector<std::string> categories;
 				categories.reserve(cat_dims[0]);
 
 				H5TypeHandle cat_dtype(cat_dataset.get(), H5TypeHandle::TypeClass::DATASET);
-				if (H5Tget_class(cat_dtype.get()) == H5T_STRING) {
+				H5T_class_t cat_class = H5Tget_class(cat_dtype.get());
+				if (cat_class == H5T_STRING) {
 					if (H5Tis_variable_str(cat_dtype.get())) {
 						// Variable-length strings
 						std::vector<char *> str_buffer(cat_dims[0]);
@@ -769,23 +824,76 @@ void H5ReaderMultithreaded::ReadVarColumn(const std::string &column_name, Vector
 							categories.emplace_back(str_ptr, len);
 						}
 					}
+				} else if (cat_class == H5T_INTEGER) {
+					// Integer categories (e.g., feature_length)
+					size_t int_size = H5Tget_size(cat_dtype.get());
+					if (int_size <= 4) {
+						std::vector<int32_t> int_cats(cat_dims[0]);
+						H5Dread(cat_dataset.get(), H5T_NATIVE_INT32, H5S_ALL, H5S_ALL, H5P_DEFAULT, int_cats.data());
+						for (size_t i = 0; i < cat_dims[0]; i++) {
+							categories.emplace_back(std::to_string(int_cats[i]));
+						}
+					} else {
+						std::vector<int64_t> int_cats(cat_dims[0]);
+						H5Dread(cat_dataset.get(), H5T_NATIVE_INT64, H5S_ALL, H5S_ALL, H5P_DEFAULT, int_cats.data());
+						for (size_t i = 0; i < cat_dims[0]; i++) {
+							categories.emplace_back(std::to_string(int_cats[i]));
+						}
+					}
+				} else if (cat_class == H5T_FLOAT) {
+					// Float categories
+					size_t float_size = H5Tget_size(cat_dtype.get());
+					if (float_size <= 4) {
+						std::vector<float> float_cats(cat_dims[0]);
+						H5Dread(cat_dataset.get(), H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, float_cats.data());
+						for (size_t i = 0; i < cat_dims[0]; i++) {
+							categories.emplace_back(std::to_string(float_cats[i]));
+						}
+					} else {
+						std::vector<double> double_cats(cat_dims[0]);
+						H5Dread(cat_dataset.get(), H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT,
+						        double_cats.data());
+						for (size_t i = 0; i < cat_dims[0]; i++) {
+							categories.emplace_back(std::to_string(double_cats[i]));
+						}
+					}
 				}
 
-				// Now read the codes for the requested range
-				std::vector<int8_t> codes(count);
+				// Now read the codes for the requested range - detect code dtype
 				hsize_t h_offset[1] = {static_cast<hsize_t>(offset)};
 				hsize_t h_count[1] = {static_cast<hsize_t>(count)};
 
 				H5Sselect_hyperslab(codes_space.get(), H5S_SELECT_SET, h_offset, nullptr, h_count, nullptr);
 				H5DataspaceHandle mem_space(1, h_count);
 
-				H5Dread(codes_dataset.get(), H5T_NATIVE_INT8, mem_space.get(), codes_space.get(), H5P_DEFAULT,
-				        codes.data());
+				H5TypeHandle codes_dtype(codes_dataset.get(), H5TypeHandle::TypeClass::DATASET);
+				size_t code_size = H5Tget_size(codes_dtype.get());
+
+				// Read codes with appropriate size
+				std::vector<int32_t> codes_i32(count);
+				if (code_size == 1) {
+					std::vector<int8_t> codes_i8(count);
+					H5Dread(codes_dataset.get(), H5T_NATIVE_INT8, mem_space.get(), codes_space.get(), H5P_DEFAULT,
+					        codes_i8.data());
+					for (idx_t i = 0; i < count; i++) {
+						codes_i32[i] = codes_i8[i];
+					}
+				} else if (code_size == 2) {
+					std::vector<int16_t> codes_i16(count);
+					H5Dread(codes_dataset.get(), H5T_NATIVE_INT16, mem_space.get(), codes_space.get(), H5P_DEFAULT,
+					        codes_i16.data());
+					for (idx_t i = 0; i < count; i++) {
+						codes_i32[i] = codes_i16[i];
+					}
+				} else {
+					H5Dread(codes_dataset.get(), H5T_NATIVE_INT32, mem_space.get(), codes_space.get(), H5P_DEFAULT,
+					        codes_i32.data());
+				}
 
 				// Map codes to categories
 				for (idx_t i = 0; i < count; i++) {
-					int8_t code = codes[i];
-					if (code >= 0 && code < static_cast<int8_t>(categories.size())) {
+					int32_t code = codes_i32[i];
+					if (code >= 0 && static_cast<size_t>(code) < categories.size()) {
 						result.SetValue(i, Value(categories[code]));
 					} else {
 						result.SetValue(i, Value()); // NULL for invalid codes

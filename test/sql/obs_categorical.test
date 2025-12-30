@@ -1,0 +1,66 @@
+# name: test/sql/obs_categorical.test
+# description: Test categorical columns in obs with int8/int16/int32 codes
+# group: [sql]
+
+require anndata
+
+# Test file has obs categorical columns:
+# - cell_type: int16 codes, 200 string categories
+# - cell_size: int32 codes, int64 categories
+# - cluster_id: int8 codes, 10 string categories (repeating)
+
+statement ok
+ATTACH 'test/data/test_obs_categorical.h5ad' AS ad (TYPE ANNDATA);
+
+# Test 1: Verify cell_type column is not NULL (int16 codes)
+query I
+SELECT COUNT(*) FROM ad.obs WHERE cell_type IS NOT NULL;
+----
+200
+
+# Test 2: Verify cell_size column is not NULL (int32 codes + int64 categories)
+query I
+SELECT COUNT(*) FROM ad.obs WHERE cell_size IS NOT NULL;
+----
+200
+
+# Test 3: Verify cluster_id column is not NULL (int8 codes)
+query I
+SELECT COUNT(*) FROM ad.obs WHERE cluster_id IS NOT NULL;
+----
+200
+
+# Test 4: Check cell_type values at different positions (int16 codes)
+query II
+SELECT obs_idx, cell_type FROM ad.obs WHERE obs_idx IN (0, 50, 100, 150, 199) ORDER BY obs_idx;
+----
+0	CellType_0
+50	CellType_50
+100	CellType_100
+150	CellType_150
+199	CellType_199
+
+# Test 5: Check cell_size values (int32 codes + int64 categories)
+# cell_size = 100 + obs_idx * 5
+query II
+SELECT obs_idx, cell_size FROM ad.obs WHERE obs_idx IN (0, 50, 100, 150, 199) ORDER BY obs_idx;
+----
+0	100
+50	350
+100	600
+150	850
+199	1095
+
+# Test 6: Check cluster_id values (int8 codes, repeating pattern)
+# cluster_id = obs_idx % 10
+query II
+SELECT obs_idx, cluster_id FROM ad.obs WHERE obs_idx IN (0, 5, 10, 15, 199) ORDER BY obs_idx;
+----
+0	Cluster_0
+5	Cluster_5
+10	Cluster_0
+15	Cluster_5
+199	Cluster_9
+
+statement ok
+DETACH ad;

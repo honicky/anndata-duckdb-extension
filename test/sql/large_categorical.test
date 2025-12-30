@@ -1,0 +1,55 @@
+# name: test/sql/large_categorical.test
+# description: Test categorical columns with int16 codes and integer categories
+# group: [sql]
+
+require anndata
+
+# Test file has:
+# - feature_name: 200 categories requiring int16 codes
+# - feature_length: integer categories (stored as int64)
+
+statement ok
+ATTACH 'test/data/test_large_categorical.h5ad' AS ad (TYPE ANNDATA);
+
+# Test 1: Verify feature_name column is not NULL (int16 codes decoded correctly)
+query I
+SELECT COUNT(*) FROM ad.var WHERE feature_name IS NOT NULL;
+----
+200
+
+# Test 2: Verify feature_length column is not NULL (integer categories decoded correctly)
+query I
+SELECT COUNT(*) FROM ad.var WHERE feature_length IS NOT NULL;
+----
+200
+
+# Test 3: Check specific feature_name values at different positions
+# This tests that int16 codes are read correctly across the full range
+query II
+SELECT var_idx, feature_name FROM ad.var WHERE var_idx IN (0, 50, 100, 150, 199) ORDER BY var_idx;
+----
+0	Gene_0
+50	Gene_50
+100	Gene_100
+150	Gene_150
+199	Gene_199
+
+# Test 4: Check that integer categories are decoded correctly
+# feature_length values should be 1000 + var_idx * 10
+query II
+SELECT var_idx, feature_length FROM ad.var WHERE var_idx IN (0, 50, 100, 150, 199) ORDER BY var_idx;
+----
+0	1000
+50	1500
+100	2000
+150	2500
+199	2990
+
+# Test 5: X matrix should use feature_name for column names
+query I
+SELECT column_name FROM (DESCRIBE ad.X) WHERE column_name = 'Gene_150';
+----
+Gene_150
+
+statement ok
+DETACH ad;

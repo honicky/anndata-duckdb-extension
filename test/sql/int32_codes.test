@@ -1,0 +1,45 @@
+# name: test/sql/int32_codes.test
+# description: Test categorical columns with int32 codes
+# group: [sql]
+
+require anndata
+
+# Test file has int32 codes (forced) to verify the int32 code path works
+
+statement ok
+ATTACH 'test/data/test_int32_codes.h5ad' AS ad (TYPE ANNDATA);
+
+# Test 1: Verify gene_name column is not NULL (int32 codes decoded correctly)
+query I
+SELECT COUNT(*) FROM ad.var WHERE gene_name IS NOT NULL;
+----
+5
+
+# Test 2: Verify gene_length column is not NULL (int32 codes + int64 categories)
+query I
+SELECT COUNT(*) FROM ad.var WHERE gene_length IS NOT NULL;
+----
+5
+
+# Test 3: Check all gene_name values
+query II
+SELECT var_idx, gene_name FROM ad.var ORDER BY var_idx;
+----
+0	Gene_0
+1	Gene_1
+2	Gene_2
+3	Gene_3
+4	Gene_4
+
+# Test 4: Check all gene_length values (should be 1000, 1100, 1200, 1300, 1400)
+query II
+SELECT var_idx, gene_length FROM ad.var ORDER BY var_idx;
+----
+0	1000
+1	1100
+2	1200
+3	1300
+4	1400
+
+statement ok
+DETACH ad;
