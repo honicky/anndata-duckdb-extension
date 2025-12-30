@@ -1114,6 +1114,100 @@ std::vector<std::string> H5ReaderMultithreaded::GetVarNames(const std::string &c
 						return names;
 					}
 				}
+			} else {
+				// Check if it's a categorical column (Group with codes/categories)
+				std::string group_path = "/var/" + column_name;
+				std::string codes_path = group_path + "/codes";
+				std::string categories_path = group_path + "/categories";
+
+				// Check if codes dataset exists
+				htri_t codes_exists = H5Lexists(*file_handle, codes_path.c_str(), H5P_DEFAULT);
+				htri_t categories_exists = H5Lexists(*file_handle, categories_path.c_str(), H5P_DEFAULT);
+
+				if (codes_exists > 0 && categories_exists > 0) {
+					// Read categories first
+					H5DatasetHandle cat_dataset(*file_handle, categories_path);
+					H5DataspaceHandle cat_space(cat_dataset.get());
+					hsize_t cat_dims[1];
+					H5Sget_simple_extent_dims(cat_space.get(), cat_dims, nullptr);
+
+					std::vector<std::string> categories;
+					categories.reserve(cat_dims[0]);
+
+					H5TypeHandle cat_dtype(cat_dataset.get(), H5TypeHandle::TypeClass::DATASET);
+					if (H5Tget_class(cat_dtype.get()) == H5T_STRING) {
+						if (H5Tis_variable_str(cat_dtype.get())) {
+							std::vector<char *> str_buffer(cat_dims[0]);
+							H5Dread(cat_dataset.get(), cat_dtype.get(), H5S_ALL, H5S_ALL, H5P_DEFAULT,
+							        str_buffer.data());
+							for (hsize_t i = 0; i < cat_dims[0]; i++) {
+								if (str_buffer[i]) {
+									categories.emplace_back(str_buffer[i]);
+								} else {
+									categories.emplace_back("");
+								}
+							}
+							H5Dvlen_reclaim(cat_dtype.get(), cat_space.get(), H5P_DEFAULT, str_buffer.data());
+						} else {
+							size_t str_size = H5Tget_size(cat_dtype.get());
+							std::vector<char> buffer(cat_dims[0] * str_size);
+							H5Dread(cat_dataset.get(), cat_dtype.get(), H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
+							for (hsize_t i = 0; i < cat_dims[0]; i++) {
+								char *str_ptr = buffer.data() + i * str_size;
+								size_t len = strnlen(str_ptr, str_size);
+								categories.emplace_back(str_ptr, len);
+							}
+						}
+					}
+
+					// Read codes and map to categories
+					H5DatasetHandle codes_dataset(*file_handle, codes_path);
+					H5DataspaceHandle codes_space(codes_dataset.get());
+					hsize_t codes_dims[1];
+					H5Sget_simple_extent_dims(codes_space.get(), codes_dims, nullptr);
+
+					if (codes_dims[0] == var_count && !categories.empty()) {
+						// Determine code type and read
+						H5TypeHandle codes_dtype(codes_dataset.get(), H5TypeHandle::TypeClass::DATASET);
+						size_t code_size = H5Tget_size(codes_dtype.get());
+
+						if (code_size == 1) {
+							std::vector<int8_t> codes(var_count);
+							H5Dread(codes_dataset.get(), H5T_NATIVE_INT8, H5S_ALL, H5S_ALL, H5P_DEFAULT, codes.data());
+							for (idx_t i = 0; i < var_count; i++) {
+								int8_t code = codes[i];
+								if (code >= 0 && static_cast<size_t>(code) < categories.size()) {
+									names.push_back(categories[code]);
+								} else {
+									names.push_back("var_" + std::to_string(i));
+								}
+							}
+						} else if (code_size == 2) {
+							std::vector<int16_t> codes(var_count);
+							H5Dread(codes_dataset.get(), H5T_NATIVE_INT16, H5S_ALL, H5S_ALL, H5P_DEFAULT, codes.data());
+							for (idx_t i = 0; i < var_count; i++) {
+								int16_t code = codes[i];
+								if (code >= 0 && static_cast<size_t>(code) < categories.size()) {
+									names.push_back(categories[code]);
+								} else {
+									names.push_back("var_" + std::to_string(i));
+								}
+							}
+						} else {
+							std::vector<int32_t> codes(var_count);
+							H5Dread(codes_dataset.get(), H5T_NATIVE_INT32, H5S_ALL, H5S_ALL, H5P_DEFAULT, codes.data());
+							for (idx_t i = 0; i < var_count; i++) {
+								int32_t code = codes[i];
+								if (code >= 0 && static_cast<size_t>(code) < categories.size()) {
+									names.push_back(categories[code]);
+								} else {
+									names.push_back("var_" + std::to_string(i));
+								}
+							}
+						}
+						return names;
+					}
+				}
 			}
 		}
 

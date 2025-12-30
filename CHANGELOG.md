@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2] - 2025-12-29
+
+### Fixed
+- Categorical var columns (e.g., `feature_name` stored as pandas categoricals) are now properly decoded when used for gene names
+
 ## [0.11.1] - 2025-12-29
 
 ### Fixed

@@ -119,3 +119,40 @@ SELECT COUNT(*) FROM ad.X;
 
 statement ok
 DETACH ad;
+
+# Test 8: Categorical var column (stored as Group with codes/categories)
+statement ok
+ATTACH 'test/data/test_categorical_var.h5ad' AS ad (TYPE ANNDATA);
+
+# gene_name is stored as a categorical but should be decoded properly
+# Auto-detection should pick gene_name
+query I
+SELECT column_name FROM (DESCRIBE ad.X) WHERE column_name = 'Gene_0';
+----
+Gene_0
+
+# Verify categorical column values are decoded
+query I
+SELECT column_name
+FROM (DESCRIBE ad.X)
+WHERE column_name IN ('Gene_0', 'Gene_1', 'Gene_2')
+ORDER BY column_name;
+----
+Gene_0
+Gene_1
+Gene_2
+
+statement ok
+DETACH ad;
+
+# Test 9: Explicit categorical column selection
+statement ok
+ATTACH 'test/data/test_categorical_var.h5ad' AS ad (TYPE ANNDATA, VAR_NAME_COLUMN 'gene_name');
+
+query I
+SELECT column_name FROM (DESCRIBE ad.X) WHERE column_name = 'Gene_0';
+----
+Gene_0
+
+statement ok
+DETACH ad;
