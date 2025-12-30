@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2025-12-29
+
+### Fixed
+- LZF compression code now builds on Windows MinGW by using portable 64-bit integer type
+
 ## [0.11.0] - 2025-12-29
 
 ### Added
