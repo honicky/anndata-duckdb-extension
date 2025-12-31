@@ -1,6 +1,6 @@
 # name: test/sql/no_index.test
 # description: Test reading h5ad files without _index datasets (relies on X shape attribute)
-# group: [anndata]
+# group: [sql]
 
 require anndata
 
