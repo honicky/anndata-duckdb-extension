@@ -199,21 +199,29 @@ size_t H5ReaderMultithreaded::GetObsCount() {
 					return dims[0];
 				}
 			} else if (H5GetObjectType(*file_handle, "/X") == H5O_TYPE_GROUP) {
-				// Sparse matrix - check indptr for CSR or shape attribute
+				// Sparse matrix - check shape attribute on /X group first
+				hid_t x_group = H5Gopen(*file_handle, "/X", H5P_DEFAULT);
+				if (x_group >= 0) {
+					if (H5Aexists(x_group, "shape") > 0) {
+						hid_t shape_attr = H5Aopen(x_group, "shape", H5P_DEFAULT);
+						if (shape_attr >= 0) {
+							hsize_t shape[2];
+							H5Aread(shape_attr, H5T_NATIVE_HSIZE, shape);
+							H5Aclose(shape_attr);
+							H5Gclose(x_group);
+							return shape[0];
+						}
+					}
+					H5Gclose(x_group);
+				}
+
+				// Fallback: check indptr for CSR format
 				if (IsDatasetPresent("/X", "indptr")) {
 					H5DatasetHandle indptr(*file_handle, "/X/indptr");
 					H5DataspaceHandle indptr_space(indptr.get());
 					hsize_t indptr_dims[1];
 					H5Sget_simple_extent_dims(indptr_space.get(), indptr_dims, nullptr);
 
-					// For CSR format, n_obs = len(indptr) - 1
-					// Check if there's a shape attribute to be sure
-					if (H5Aexists(*file_handle, "shape")) {
-						H5AttributeHandle shape_attr(*file_handle, "shape");
-						hsize_t shape[2];
-						H5Aread(shape_attr.get(), H5T_NATIVE_HSIZE, shape);
-						return shape[0];
-					}
 					// Assume CSR if we can't determine
 					if (indptr_dims[0] > 0) {
 						return indptr_dims[0] - 1;
@@ -264,12 +272,20 @@ size_t H5ReaderMultithreaded::GetVarCount() {
 					return dims[1];
 				}
 			} else if (H5GetObjectType(*file_handle, "/X") == H5O_TYPE_GROUP) {
-				// Sparse matrix - check shape attribute or indptr for CSC
-				if (H5Aexists(*file_handle, "shape")) {
-					H5AttributeHandle shape_attr(*file_handle, "shape");
-					hsize_t shape[2];
-					H5Aread(shape_attr.get(), H5T_NATIVE_HSIZE, shape);
-					return shape[1];
+				// Sparse matrix - check shape attribute on /X group
+				hid_t x_group = H5Gopen(*file_handle, "/X", H5P_DEFAULT);
+				if (x_group >= 0) {
+					if (H5Aexists(x_group, "shape") > 0) {
+						hid_t shape_attr = H5Aopen(x_group, "shape", H5P_DEFAULT);
+						if (shape_attr >= 0) {
+							hsize_t shape[2];
+							H5Aread(shape_attr, H5T_NATIVE_HSIZE, shape);
+							H5Aclose(shape_attr);
+							H5Gclose(x_group);
+							return shape[1];
+						}
+					}
+					H5Gclose(x_group);
 				}
 
 				// Check indptr for CSC format

@@ -1,0 +1,43 @@
+# name: test/sql/no_index.test
+# description: Test reading h5ad files without _index datasets (relies on X shape attribute)
+# group: [anndata]
+
+require anndata
+
+# Test that we can attach the file (validates obs/var counts from X shape attribute)
+statement ok
+ATTACH 'test/data/test_no_index.h5ad' AS no_idx (TYPE ANNDATA);
+
+# Test obs count (should be 50 from X shape[0])
+query I
+SELECT COUNT(*) FROM no_idx.obs;
+----
+50
+
+# Test var count (should be 100 from X shape[1])
+query I
+SELECT COUNT(*) FROM no_idx.var;
+----
+100
+
+# Test that categorical columns in obs are decoded
+query I
+SELECT COUNT(DISTINCT cell_type) FROM no_idx.obs;
+----
+3
+
+# Test that categorical columns in var are decoded
+query I
+SELECT COUNT(DISTINCT gene_name) FROM no_idx.var;
+----
+100
+
+# Test X matrix has correct dimensions
+query II
+SELECT COUNT(*), COUNT(DISTINCT obs_idx) FROM no_idx.X;
+----
+50	50
+
+# Clean up
+statement ok
+DETACH no_idx;

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.5] - 2025-12-30
+
+### Fixed
+- Read obs/var counts from X matrix shape attribute when var/_index or obs/_index datasets don't exist
+- Fixed bug where shape attribute was incorrectly read from file root instead of /X group for sparse matrices
+
 ## [0.11.4] - 2025-12-30
 
 ### Fixed
