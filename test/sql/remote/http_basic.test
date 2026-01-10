@@ -1,0 +1,41 @@
+# name: test/sql/remote/http_basic.test
+# description: Test HTTP remote access
+# group: [remote]
+
+require anndata
+
+# These tests require an HTTP server with test data
+# Set environment variable before running:
+#   ANNDATA_TEST_HTTP_ENDPOINT=http://localhost:9000/data
+
+require-env ANNDATA_TEST_HTTP_ENDPOINT
+
+# Test attaching HTTP file (MinIO serves files over HTTP too)
+statement ok
+ATTACH '${ANNDATA_TEST_HTTP_ENDPOINT}/test_small.h5ad' AS httpdata (TYPE ANNDATA);
+
+# Verify obs table
+query I
+SELECT COUNT(*) FROM httpdata.obs;
+----
+100
+
+# Verify var table
+query I
+SELECT COUNT(*) FROM httpdata.var;
+----
+50
+
+# Test querying specific data
+query II
+SELECT obs_idx, cell_type
+FROM httpdata.obs
+WHERE obs_idx < 2
+ORDER BY obs_idx;
+----
+0	T cell
+1	Monocyte
+
+# Clean up
+statement ok
+DETACH httpdata;

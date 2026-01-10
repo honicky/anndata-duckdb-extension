@@ -22,6 +22,7 @@ configure_file(
 
 include_directories(src/include)
 include_directories(src/lzf)
+include_directories(src/vfd)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/src/include)
 
 # Option to use HDF5 C API instead of C++ API
@@ -83,6 +84,29 @@ else()
     endif()
 endif()
 
+# Find libcurl for remote file access (not available on WASM)
+if(NOT EMSCRIPTEN AND NOT CLANG_TIDY)
+    find_package(CURL CONFIG QUIET)
+    if(CURL_FOUND)
+        message(STATUS "Found CURL via CONFIG mode (VCPKG)")
+        set(CURL_LIBRARIES CURL::libcurl)
+    else()
+        find_package(CURL REQUIRED)
+        if(CURL_FOUND)
+            message(STATUS "Found CURL via MODULE mode: ${CURL_VERSION_STRING}")
+            include_directories(${CURL_INCLUDE_DIRS})
+        endif()
+    endif()
+    # Also need OpenSSL for S3 signature
+    find_package(OpenSSL QUIET)
+    if(OPENSSL_FOUND)
+        message(STATUS "Found OpenSSL: ${OPENSSL_VERSION}")
+    endif()
+else()
+    set(CURL_LIBRARIES "")
+    set(OPENSSL_LIBRARIES "")
+endif()
+
 # LZF filter sources for reading LZF-compressed HDF5 datasets
 # Excluded from tidy builds since it's third-party code
 if(NOT CLANG_TIDY)
@@ -95,12 +119,24 @@ else()
     set(LZF_SOURCES "")
 endif()
 
+# HTTP VFD sources for remote file access (S3, HTTP)
+# Not available on WASM or tidy builds
+if(NOT EMSCRIPTEN AND NOT CLANG_TIDY)
+    set(VFD_SOURCES
+        src/vfd/h5fd_http.cpp
+    )
+else()
+    set(VFD_SOURCES "")
+    add_compile_definitions(DUCKDB_NO_REMOTE_VFD)
+endif()
+
 set(EXTENSION_SOURCES
     src/anndata_extension.cpp
     src/anndata_scanner.cpp
     src/anndata_storage.cpp
     src/h5_reader_multithreaded.cpp
     ${LZF_SOURCES}
+    ${VFD_SOURCES}
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
@@ -109,6 +145,16 @@ build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 # Link HDF5 libraries using modern CMake
 target_link_libraries(${EXTENSION_NAME} ${HDF5_LIBRARIES})
 target_link_libraries(${LOADABLE_EXTENSION_NAME} ${HDF5_LIBRARIES})
+
+# Link CURL and OpenSSL for remote file access
+if(NOT EMSCRIPTEN AND NOT CLANG_TIDY AND CURL_LIBRARIES)
+    target_link_libraries(${EXTENSION_NAME} ${CURL_LIBRARIES})
+    target_link_libraries(${LOADABLE_EXTENSION_NAME} ${CURL_LIBRARIES})
+    if(OPENSSL_FOUND)
+        target_link_libraries(${EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto)
+        target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto)
+    endif()
+endif()
 
 install(
   TARGETS ${EXTENSION_NAME}

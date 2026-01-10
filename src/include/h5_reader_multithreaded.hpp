@@ -14,7 +14,8 @@ namespace duckdb {
 // New H5Reader implementation using HDF5 C API with thread-safe support
 class H5ReaderMultithreaded {
 public:
-	H5ReaderMultithreaded(const std::string &file_path);
+	// Constructor with optional remote config for S3/HTTP access
+	H5ReaderMultithreaded(const std::string &file_path, const H5FileCache::RemoteConfig *remote_config = nullptr);
 	~H5ReaderMultithreaded();
 
 	// Delete copy constructor and copy assignment to make class move-only

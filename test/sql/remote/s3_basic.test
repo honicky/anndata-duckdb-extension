@@ -1,0 +1,63 @@
+# name: test/sql/remote/s3_basic.test
+# description: Test S3 remote access using MinIO
+# group: [remote]
+
+require anndata
+
+require httpfs
+
+# These tests require MinIO to be running with test data
+# Set environment variables before running:
+#   ANNDATA_TEST_S3_ENDPOINT=localhost:9000
+#   ANNDATA_TEST_S3_ACCESS_KEY=minioadmin
+#   ANNDATA_TEST_S3_SECRET_KEY=minioadmin
+
+require-env ANNDATA_TEST_S3_ENDPOINT
+
+require-env ANNDATA_TEST_S3_ACCESS_KEY
+
+require-env ANNDATA_TEST_S3_SECRET_KEY
+
+# Create S3 secret for MinIO
+statement ok
+CREATE SECRET minio_secret (
+    TYPE S3,
+    KEY_ID '${ANNDATA_TEST_S3_ACCESS_KEY}',
+    SECRET '${ANNDATA_TEST_S3_SECRET_KEY}',
+    ENDPOINT '${ANNDATA_TEST_S3_ENDPOINT}',
+    URL_STYLE 'path',
+    USE_SSL false
+);
+
+# Test attaching S3 file
+statement ok
+ATTACH 's3://data/test_small.h5ad' AS s3data (TYPE ANNDATA);
+
+# Verify obs table
+query I
+SELECT COUNT(*) FROM s3data.obs;
+----
+100
+
+# Verify var table
+query I
+SELECT COUNT(*) FROM s3data.var;
+----
+50
+
+# Test querying specific data
+query II
+SELECT obs_idx, cell_type
+FROM s3data.obs
+WHERE obs_idx < 2
+ORDER BY obs_idx;
+----
+0	T cell
+1	Monocyte
+
+# Clean up
+statement ok
+DETACH s3data;
+
+statement ok
+DROP SECRET minio_secret;

@@ -1,4 +1,5 @@
 #include "include/anndata_scanner.hpp"
+#include "include/s3_credentials.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 #include <fstream>
@@ -6,17 +7,61 @@
 
 namespace duckdb {
 
-bool AnndataScanner::IsAnndataFile(const string &path) {
-	// Check if file exists and can be opened
-	std::ifstream file(path);
-	if (!file.good()) {
-		return false;
+// Helper function to create H5ReaderMultithreaded with S3 credentials if available
+static unique_ptr<H5ReaderMultithreaded> CreateH5Reader(ClientContext &context, const string &file_path) {
+	H5FileCache::RemoteConfig config;
+	if (GetS3ConfigFromSecrets(context, file_path, config)) {
+		return make_uniq<H5ReaderMultithreaded>(file_path, &config);
 	}
-	file.close();
+	return make_uniq<H5ReaderMultithreaded>(file_path);
+}
+
+bool AnndataScanner::IsAnndataFile(const string &path) {
+	// Check if this is a remote URL
+	bool is_remote = (path.rfind("http://", 0) == 0 || path.rfind("https://", 0) == 0 || path.rfind("s3://", 0) == 0 ||
+	                  path.rfind("s3a://", 0) == 0 || path.rfind("gs://", 0) == 0);
+
+	// For local files, check if file exists and can be opened
+	if (!is_remote) {
+		std::ifstream file(path);
+		if (!file.good()) {
+			return false;
+		}
+		file.close();
+	}
 
 	// Try to open as HDF5 and validate it's an AnnData file
 	// This allows files without .h5ad extension to work (e.g., UUID-named files)
 	try {
+		H5ReaderMultithreaded reader(path);
+		return reader.IsValidAnnData();
+	} catch (...) {
+		return false;
+	}
+}
+
+bool AnndataScanner::IsAnndataFile(ClientContext &context, const string &path) {
+	// Check if this is a remote URL
+	bool is_remote = (path.rfind("http://", 0) == 0 || path.rfind("https://", 0) == 0 || path.rfind("s3://", 0) == 0 ||
+	                  path.rfind("s3a://", 0) == 0 || path.rfind("gs://", 0) == 0);
+
+	// For local files, check if file exists and can be opened
+	if (!is_remote) {
+		std::ifstream file(path);
+		if (!file.good()) {
+			return false;
+		}
+		file.close();
+	}
+
+	// Try to open as HDF5 and validate it's an AnnData file
+	// For S3 URLs, get credentials from DuckDB's secret manager
+	try {
+		H5FileCache::RemoteConfig config;
+		if (GetS3ConfigFromSecrets(context, path, config)) {
+			H5ReaderMultithreaded reader(path, &config);
+			return reader.IsValidAnnData();
+		}
 		H5ReaderMultithreaded reader(path);
 		return reader.IsValidAnnData();
 	} catch (...) {
@@ -83,12 +128,13 @@ unique_ptr<FunctionData> AnndataScanner::ObsBind(ClientContext &context, TableFu
                                                  vector<LogicalType> &return_types, vector<string> &names) {
 	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
 
-	if (!IsAnndataFile(bind_data->file_path)) {
+	if (!IsAnndataFile(context, bind_data->file_path)) {
 		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
 	}
 
 	// Open the HDF5 file to get schema
-	H5ReaderMultithreaded reader(bind_data->file_path);
+	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
+	auto &reader = *reader_ptr;
 
 	if (!reader.IsValidAnnData()) {
 		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
@@ -120,7 +166,7 @@ void AnndataScanner::ObsScan(ClientContext &context, TableFunctionInput &data, D
 
 	// Open file on first scan
 	if (!gstate.h5_reader) {
-		gstate.h5_reader = make_uniq<H5ReaderMultithreaded>(bind_data.file_path);
+		gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
 	}
 
 	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
@@ -144,12 +190,13 @@ unique_ptr<FunctionData> AnndataScanner::VarBind(ClientContext &context, TableFu
                                                  vector<LogicalType> &return_types, vector<string> &names) {
 	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
 
-	if (!IsAnndataFile(bind_data->file_path)) {
+	if (!IsAnndataFile(context, bind_data->file_path)) {
 		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
 	}
 
 	// Open the HDF5 file to get schema
-	H5ReaderMultithreaded reader(bind_data->file_path);
+	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
+	auto &reader = *reader_ptr;
 
 	if (!reader.IsValidAnnData()) {
 		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
@@ -181,7 +228,7 @@ void AnndataScanner::VarScan(ClientContext &context, TableFunctionInput &data, D
 
 	// Open file on first scan
 	if (!gstate.h5_reader) {
-		gstate.h5_reader = make_uniq<H5ReaderMultithreaded>(bind_data.file_path);
+		gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
 	}
 
 	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
@@ -230,12 +277,13 @@ unique_ptr<FunctionData> AnndataScanner::XBind(ClientContext &context, TableFunc
 		bind_data->var_name_column = input.inputs[1].GetValue<string>();
 	}
 
-	if (!IsAnndataFile(bind_data->file_path)) {
+	if (!IsAnndataFile(context, bind_data->file_path)) {
 		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
 	}
 
 	// Open the HDF5 file to get schema
-	H5ReaderMultithreaded reader(bind_data->file_path);
+	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
+	auto &reader = *reader_ptr;
 
 	if (!reader.IsValidAnnData()) {
 		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
@@ -275,7 +323,7 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 
 	// Open file on first scan
 	if (!gstate.h5_reader) {
-		gstate.h5_reader = make_uniq<H5ReaderMultithreaded>(bind_data.file_path);
+		gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
 	}
 
 	// Calculate how many observations to read
@@ -385,12 +433,13 @@ unique_ptr<FunctionData> AnndataScanner::ObsmBind(ClientContext &context, TableF
 	bind_data->obsm_varm_matrix_name = input.inputs[1].GetValue<string>();
 	bind_data->is_obsm_scan = true;
 
-	if (!IsAnndataFile(bind_data->file_path)) {
+	if (!IsAnndataFile(context, bind_data->file_path)) {
 		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
 	}
 
 	// Open the HDF5 file to get schema
-	H5ReaderMultithreaded reader(bind_data->file_path);
+	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
+	auto &reader = *reader_ptr;
 
 	if (!reader.IsValidAnnData()) {
 		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
@@ -438,7 +487,7 @@ void AnndataScanner::ObsmScan(ClientContext &context, TableFunctionInput &data, 
 
 	// Open file on first scan
 	if (!gstate.h5_reader) {
-		gstate.h5_reader = make_uniq<H5ReaderMultithreaded>(bind_data.file_path);
+		gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
 	}
 
 	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
@@ -474,12 +523,13 @@ unique_ptr<FunctionData> AnndataScanner::VarmBind(ClientContext &context, TableF
 	bind_data->obsm_varm_matrix_name = input.inputs[1].GetValue<string>();
 	bind_data->is_varm_scan = true;
 
-	if (!IsAnndataFile(bind_data->file_path)) {
+	if (!IsAnndataFile(context, bind_data->file_path)) {
 		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
 	}
 
 	// Open the HDF5 file to get schema
-	H5ReaderMultithreaded reader(bind_data->file_path);
+	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
+	auto &reader = *reader_ptr;
 
 	if (!reader.IsValidAnnData()) {
 		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
@@ -527,7 +577,7 @@ void AnndataScanner::VarmScan(ClientContext &context, TableFunctionInput &data, 
 
 	// Open file on first scan
 	if (!gstate.h5_reader) {
-		gstate.h5_reader = make_uniq<H5ReaderMultithreaded>(bind_data.file_path);
+		gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
 	}
 
 	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
@@ -570,7 +620,8 @@ unique_ptr<FunctionData> AnndataScanner::LayerBind(ClientContext &context, Table
 	result->layer_name = input.inputs[1].GetValue<string>();
 
 	// Open file to get layer information
-	H5ReaderMultithreaded reader(result->file_path);
+	auto reader_ptr = CreateH5Reader(context, result->file_path);
+	auto &reader = *reader_ptr;
 	auto layers = reader.GetLayers();
 
 	// Find the requested layer
@@ -631,7 +682,7 @@ void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data,
 
 	// Initialize h5_reader if not already done
 	if (!state.h5_reader) {
-		state.h5_reader = make_uniq<H5ReaderMultithreaded>(bind_data.file_path);
+		state.h5_reader = CreateH5Reader(context, bind_data.file_path);
 	}
 
 	// Calculate how many rows to read
@@ -723,12 +774,13 @@ unique_ptr<FunctionData> AnndataScanner::UnsBind(ClientContext &context, TableFu
 	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
 	bind_data->is_uns_scan = true;
 
-	if (!IsAnndataFile(bind_data->file_path)) {
+	if (!IsAnndataFile(context, bind_data->file_path)) {
 		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
 	}
 
 	// Open the HDF5 file to get uns keys
-	H5ReaderMultithreaded reader(bind_data->file_path);
+	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
+	auto &reader = *reader_ptr;
 
 	if (!reader.IsValidAnnData()) {
 		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
@@ -779,7 +831,7 @@ void AnndataScanner::UnsScan(ClientContext &context, TableFunctionInput &data, D
 
 	// Open file on first scan
 	if (!gstate.h5_reader) {
-		gstate.h5_reader = make_uniq<H5ReaderMultithreaded>(bind_data.file_path);
+		gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
 	}
 
 	if (bind_data.uns_keys.empty()) {
@@ -901,12 +953,13 @@ unique_ptr<FunctionData> AnndataScanner::ObspBind(ClientContext &context, TableF
 	bind_data->is_obsp_scan = true;
 	bind_data->pairwise_matrix_name = input.inputs[1].GetValue<string>();
 
-	if (!IsAnndataFile(bind_data->file_path)) {
+	if (!IsAnndataFile(context, bind_data->file_path)) {
 		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
 	}
 
 	// Open the HDF5 file to get matrix info
-	H5ReaderMultithreaded reader(bind_data->file_path);
+	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
+	auto &reader = *reader_ptr;
 
 	if (!reader.IsValidAnnData()) {
 		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
@@ -946,7 +999,7 @@ void AnndataScanner::ObspScan(ClientContext &context, TableFunctionInput &data, 
 
 	// Open file on first scan
 	if (!gstate.h5_reader) {
-		gstate.h5_reader = make_uniq<H5ReaderMultithreaded>(bind_data.file_path);
+		gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
 	}
 
 	if (bind_data.nnz == 0) {
@@ -983,12 +1036,13 @@ unique_ptr<FunctionData> AnndataScanner::VarpBind(ClientContext &context, TableF
 	bind_data->is_varp_scan = true;
 	bind_data->pairwise_matrix_name = input.inputs[1].GetValue<string>();
 
-	if (!IsAnndataFile(bind_data->file_path)) {
+	if (!IsAnndataFile(context, bind_data->file_path)) {
 		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
 	}
 
 	// Open the HDF5 file to get matrix info
-	H5ReaderMultithreaded reader(bind_data->file_path);
+	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
+	auto &reader = *reader_ptr;
 
 	if (!reader.IsValidAnnData()) {
 		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
@@ -1028,7 +1082,7 @@ void AnndataScanner::VarpScan(ClientContext &context, TableFunctionInput &data, 
 
 	// Open file on first scan
 	if (!gstate.h5_reader) {
-		gstate.h5_reader = make_uniq<H5ReaderMultithreaded>(bind_data.file_path);
+		gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
 	}
 
 	if (bind_data.nnz == 0) {
@@ -1064,7 +1118,7 @@ unique_ptr<FunctionData> AnndataScanner::InfoBind(ClientContext &context, TableF
 	auto bind_data = make_uniq<AnndataBindData>(file_path);
 
 	// Basic file extension check
-	if (!IsAnndataFile(bind_data->file_path)) {
+	if (!IsAnndataFile(context, bind_data->file_path)) {
 		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
 	}
 
@@ -1091,7 +1145,7 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 	// Initialize H5Reader if not already done
 	if (!gstate.h5_reader) {
 		try {
-			gstate.h5_reader = make_uniq<H5ReaderMultithreaded>(bind_data.file_path);
+			gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
 		} catch (const std::exception &e) {
 			throw InvalidInputException("Failed to open AnnData file '%s': %s", bind_data.file_path.c_str(), e.what());
 		} catch (...) {

@@ -14,7 +14,9 @@ namespace duckdb {
 // Phase 2: Core Infrastructure - Constructor/Destructor and Helper Methods
 // ============================================================================
 
-H5ReaderMultithreaded::H5ReaderMultithreaded(const std::string &file_path) : file_path(file_path) {
+H5ReaderMultithreaded::H5ReaderMultithreaded(const std::string &file_path,
+                                             const H5FileCache::RemoteConfig *remote_config)
+    : file_path(file_path) {
 	// Initialize HDF5 library and set up thread safety
 	// Use a function-level static to ensure thread-safe initialization (C++11 guarantees this)
 	static std::once_flag hdf5_init_flag;
@@ -41,7 +43,7 @@ H5ReaderMultithreaded::H5ReaderMultithreaded(const std::string &file_path) : fil
 
 	// Get shared file handle from cache
 	try {
-		file_handle = H5FileCache::Open(file_path);
+		file_handle = H5FileCache::Open(file_path, remote_config);
 		if (!file_handle || *file_handle < 0) {
 			throw IOException("Failed to get valid file handle from cache");
 		}

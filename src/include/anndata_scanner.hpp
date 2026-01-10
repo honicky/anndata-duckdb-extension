@@ -65,6 +65,7 @@ public:
 
 	// Utility functions
 	static bool IsAnndataFile(const string &path);
+	static bool IsAnndataFile(ClientContext &context, const string &path);
 	static string GetAnndataInfo(const string &path);
 };
 

@@ -1,5 +1,6 @@
 #include "include/anndata_storage.hpp"
 #include "include/h5_reader_multithreaded.hpp"
+#include "include/s3_credentials.hpp"
 #include "duckdb/storage/storage_extension.hpp"
 #include "duckdb/catalog/duck_catalog.hpp"
 #include "duckdb/transaction/duck_transaction_manager.hpp"
@@ -7,6 +8,7 @@
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/enums/access_mode.hpp"
 #include <iostream>
 
 namespace duckdb {
@@ -97,10 +99,22 @@ vector<string> AnndataDefaultGenerator::GetDefaultEntries() {
 //===--------------------------------------------------------------------===//
 
 vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const string &var_name_column,
-                                            const string &var_id_column) {
+                                            const string &var_id_column, ClientContext *context = nullptr) {
 	vector<TableViewInfo> tables;
 
-	H5ReaderMultithreaded reader(file_path);
+	// Create reader with S3 credentials if available
+	unique_ptr<H5ReaderMultithreaded> reader_ptr;
+	if (context) {
+		H5FileCache::RemoteConfig config;
+		if (GetS3ConfigFromSecrets(*context, file_path, config)) {
+			reader_ptr = make_uniq<H5ReaderMultithreaded>(file_path, &config);
+		} else {
+			reader_ptr = make_uniq<H5ReaderMultithreaded>(file_path);
+		}
+	} else {
+		reader_ptr = make_uniq<H5ReaderMultithreaded>(file_path);
+	}
+	auto &reader = *reader_ptr;
 
 	if (!reader.IsValidAnnData()) {
 		throw IOException("File is not a valid AnnData file: " + file_path);
@@ -215,8 +229,15 @@ static unique_ptr<Catalog> AnndataStorageAttach(optional_ptr<StorageExtensionInf
 	// Auto-detect var columns if not specified
 	bool auto_detected = false;
 	if (var_name_column.empty() || var_id_column.empty()) {
-		H5ReaderMultithreaded reader(file_path);
-		auto detection = reader.DetectVarColumns();
+		// Create reader with S3 credentials if available
+		H5FileCache::RemoteConfig config;
+		unique_ptr<H5ReaderMultithreaded> reader_ptr;
+		if (GetS3ConfigFromSecrets(context, file_path, config)) {
+			reader_ptr = make_uniq<H5ReaderMultithreaded>(file_path, &config);
+		} else {
+			reader_ptr = make_uniq<H5ReaderMultithreaded>(file_path);
+		}
+		auto detection = reader_ptr->DetectVarColumns();
 		if (var_name_column.empty()) {
 			var_name_column = detection.name_column;
 			auto_detected = true;
@@ -233,8 +254,12 @@ static unique_ptr<Catalog> AnndataStorageAttach(optional_ptr<StorageExtensionInf
 		          << "'. Override with VAR_NAME_COLUMN/VAR_ID_COLUMN options." << std::endl;
 	}
 
-	// Verify file exists and is valid AnnData
-	auto tables = DiscoverAnndataTables(file_path, var_name_column, var_id_column);
+	// Verify file exists and is valid AnnData (pass context for S3 credentials)
+	auto tables = DiscoverAnndataTables(file_path, var_name_column, var_id_column, &context);
+
+	// Force READ_WRITE access mode since we're using an in-memory catalog
+	// (in-memory databases cannot be opened in read-only mode)
+	options.access_mode = AccessMode::READ_WRITE;
 
 	// Create an in-memory catalog for the attached database
 	info.path = ":memory:";

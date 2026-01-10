@@ -29,7 +29,107 @@ jobs:
       ci_tools_version: main
       extension_name: anndata
       format_checks: 'format;tidy'
-  
+
+  # Test remote file access (S3 and HTTP) using MinIO
+  remote-access-test:
+    name: Remote Access Tests
+    needs: duckdb-stable-build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'recursive'
+
+      - name: Start MinIO server
+        run: |
+          docker run -d --name minio-server \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio server /data
+
+          # Wait for MinIO to be ready
+          for i in {1..30}; do
+            if curl -sf http://localhost:9000/minio/health/live; then
+              echo "MinIO is ready"
+              break
+            fi
+            echo "Waiting for MinIO..."
+            sleep 1
+          done
+
+      - name: Setup bucket and upload test files
+        run: |
+          # Create bucket, set policy, and upload files
+          docker run --rm --network host --entrypoint sh \
+            -v "${{ github.workspace }}/test/data:/testdata:ro" \
+            minio/mc -c "
+              mc alias set local http://localhost:9000 minioadmin minioadmin
+              mc mb local/data
+              mc anonymous set download local/data
+              mc cp --recursive /testdata/*.h5ad local/data/
+            "
+
+          # Verify files are accessible
+          echo "Files available:"
+          docker run --rm --network host --entrypoint sh minio/mc -c "mc alias set local http://localhost:9000 minioadmin minioadmin && mc ls local/data/"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: anndata-v1.4.3-extension-linux_amd64
+          path: /tmp/extension
+
+      - name: Setup DuckDB with extension
+        run: |
+          # Download DuckDB CLI
+          wget -q https://github.com/duckdb/duckdb/releases/download/v1.4.3/duckdb_cli-linux-amd64.zip
+          unzip -q duckdb_cli-linux-amd64.zip
+          chmod +x duckdb
+
+          # Setup extension directory
+          mkdir -p ~/.duckdb/extensions/v1.4.3/linux_amd64
+          gunzip -c /tmp/extension/anndata.duckdb_extension.gz > ~/.duckdb/extensions/v1.4.3/linux_amd64/anndata.duckdb_extension
+
+      - name: Run remote access tests
+        env:
+          ANNDATA_TEST_S3_ENDPOINT: localhost:9000
+          ANNDATA_TEST_S3_ACCESS_KEY: minioadmin
+          ANNDATA_TEST_S3_SECRET_KEY: minioadmin
+          ANNDATA_TEST_HTTP_ENDPOINT: http://localhost:9000/data
+        run: |
+          # Run S3 tests
+          echo "=== Running S3 Tests ==="
+          ./duckdb -unsigned -c "
+            LOAD anndata;
+            LOAD httpfs;
+            CREATE SECRET minio_secret (
+              TYPE S3,
+              KEY_ID 'minioadmin',
+              SECRET 'minioadmin',
+              ENDPOINT 'localhost:9000',
+              URL_STYLE 'path',
+              USE_SSL false
+            );
+            ATTACH 's3://data/test_small.h5ad' AS s3data (TYPE ANNDATA);
+            SELECT COUNT(*) FROM s3data.obs;
+            SELECT COUNT(*) FROM s3data.var;
+            DETACH s3data;
+          "
+
+          # Run HTTP tests
+          echo "=== Running HTTP Tests ==="
+          ./duckdb -unsigned -c "
+            LOAD anndata;
+            ATTACH 'http://localhost:9000/data/test_small.h5ad' AS httpdata (TYPE ANNDATA);
+            SELECT COUNT(*) FROM httpdata.obs;
+            SELECT COUNT(*) FROM httpdata.var;
+            DETACH httpdata;
+          "
+
+          echo "=== All remote access tests passed ==="
+
   # Auto-tag when version changes and deploy if tagged
   auto-tag:
     name: Create Version Tag
