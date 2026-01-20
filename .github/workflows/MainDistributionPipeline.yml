@@ -83,10 +83,12 @@ jobs:
 
       - name: Setup DuckDB with extension
         run: |
-          # Download DuckDB CLI
-          wget -q https://github.com/duckdb/duckdb/releases/download/v1.4.3/duckdb_cli-linux-amd64.zip
-          unzip -o -q duckdb_cli-linux-amd64.zip
-          chmod +x duckdb
+          # Download DuckDB CLI if not already installed
+          if ! command -v duckdb &> /dev/null && [ ! -x ./duckdb ]; then
+            wget -q https://github.com/duckdb/duckdb/releases/download/v1.4.3/duckdb_cli-linux-amd64.zip
+            unzip -q duckdb_cli-linux-amd64.zip
+            chmod +x duckdb
+          fi
 
           # Setup extension directory
           mkdir -p ~/.duckdb/extensions/v1.4.3/linux_amd64
