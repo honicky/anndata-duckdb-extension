@@ -96,9 +96,8 @@ HarmonizedSchema SchemaHarmonizer::ComputeObsVarSchema(const vector<FileSchema> 
 		}
 
 		if (common_cols.empty()) {
-			throw InvalidInputException(
-			    "No common columns found across files in intersection mode. "
-			    "Hint: Use schema_mode := 'union' to include all columns.");
+			throw InvalidInputException("No common columns found across files in intersection mode. "
+			                            "Hint: Use schema_mode := 'union' to include all columns.");
 		}
 
 		// Build result schema in order of first file's columns
@@ -230,9 +229,10 @@ HarmonizedSchema SchemaHarmonizer::ComputeXSchema(const vector<FileSchema> &file
 				if (found_in_all) {
 					result.common_var_names.push_back(var);
 				} else if (mode == SchemaMode::INTERSECTION) {
-					throw InvalidInputException("Gene '" + var + "' not found in file '" + missing_file +
-					                            "' (intersection mode). "
-					                            "Hint: Use schema_mode := 'union' or remove this gene from the filter.");
+					throw InvalidInputException(
+					    "Gene '" + var + "' not found in file '" + missing_file +
+					    "' (intersection mode). "
+					    "Hint: Use schema_mode := 'union' or remove this gene from the filter.");
 				}
 			}
 		} else {
@@ -265,7 +265,7 @@ HarmonizedSchema SchemaHarmonizer::ComputeXSchema(const vector<FileSchema> &file
 }
 
 HarmonizedSchema SchemaHarmonizer::ComputeObsmVarmSchema(const vector<FileSchema> &file_schemas, SchemaMode mode,
-                                                        idx_t expected_cols) {
+                                                         idx_t expected_cols) {
 	HarmonizedSchema result;
 
 	if (file_schemas.empty()) {
@@ -378,8 +378,7 @@ FileSchema SchemaHarmonizer::GetLayerSchema(ClientContext &context, const string
 	return schema;
 }
 
-FileSchema SchemaHarmonizer::GetObsmSchema(ClientContext &context, const string &file_path,
-                                           const string &matrix_name) {
+FileSchema SchemaHarmonizer::GetObsmSchema(ClientContext &context, const string &file_path, const string &matrix_name) {
 	FileSchema schema(file_path);
 	auto reader = CreateReader(context, file_path);
 
@@ -394,8 +393,7 @@ FileSchema SchemaHarmonizer::GetObsmSchema(ClientContext &context, const string 
 	return schema;
 }
 
-FileSchema SchemaHarmonizer::GetVarmSchema(ClientContext &context, const string &file_path,
-                                           const string &matrix_name) {
+FileSchema SchemaHarmonizer::GetVarmSchema(ClientContext &context, const string &file_path, const string &matrix_name) {
 	FileSchema schema(file_path);
 	auto reader = CreateReader(context, file_path);
 
@@ -410,8 +408,7 @@ FileSchema SchemaHarmonizer::GetVarmSchema(ClientContext &context, const string 
 	return schema;
 }
 
-FileSchema SchemaHarmonizer::GetObspSchema(ClientContext &context, const string &file_path,
-                                           const string &matrix_name) {
+FileSchema SchemaHarmonizer::GetObspSchema(ClientContext &context, const string &file_path, const string &matrix_name) {
 	FileSchema schema(file_path);
 	auto reader = CreateReader(context, file_path);
 
@@ -426,8 +423,7 @@ FileSchema SchemaHarmonizer::GetObspSchema(ClientContext &context, const string 
 	return schema;
 }
 
-FileSchema SchemaHarmonizer::GetVarpSchema(ClientContext &context, const string &file_path,
-                                           const string &matrix_name) {
+FileSchema SchemaHarmonizer::GetVarpSchema(ClientContext &context, const string &file_path, const string &matrix_name) {
 	FileSchema schema(file_path);
 	auto reader = CreateReader(context, file_path);
 

@@ -10,8 +10,8 @@ namespace duckdb {
 // Result of glob pattern expansion
 struct GlobResult {
 	vector<string> matched_files;
-	bool is_pattern;      // True if input contained glob characters
-	bool is_remote;       // True if any file is remote (S3, HTTP, etc.)
+	bool is_pattern; // True if input contained glob characters
+	bool is_remote;  // True if any file is remote (S3, HTTP, etc.)
 	string original_pattern;
 
 	GlobResult() : is_pattern(false), is_remote(false) {

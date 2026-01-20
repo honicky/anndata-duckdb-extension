@@ -94,8 +94,8 @@ struct AnndataBindData : public TableFunctionData {
 
 	// Multi-file support
 	bool is_multi_file = false;
-	vector<string> file_paths;        // All files to scan (from glob expansion)
-	string original_pattern;          // Original glob pattern
+	vector<string> file_paths; // All files to scan (from glob expansion)
+	string original_pattern;   // Original glob pattern
 	SchemaMode schema_mode = SchemaMode::INTERSECTION;
 	HarmonizedSchema harmonized_schema;
 
@@ -156,8 +156,8 @@ struct AnndataGlobalState : public GlobalTableFunctionState {
 	idx_t current_file_idx = 0;
 	idx_t current_row_in_file = 0;
 	string current_file_name;
-	vector<int> current_column_mapping;   // Maps result columns to file columns
-	vector<idx_t> current_var_mapping;    // Maps result var indices to file var indices (for X/layers)
+	vector<int> current_column_mapping; // Maps result columns to file columns
+	vector<idx_t> current_var_mapping;  // Maps result var indices to file var indices (for X/layers)
 
 	AnndataGlobalState() : current_row(0) {
 	}
