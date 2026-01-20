@@ -1,5 +1,7 @@
 #include "include/anndata_scanner.hpp"
 #include "include/s3_credentials.hpp"
+#include "include/glob_handler.hpp"
+#include "include/schema_harmonizer.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 #include <fstream>
@@ -15,6 +17,69 @@ static unique_ptr<H5ReaderMultithreaded> CreateH5Reader(ClientContext &context, 
 		return make_uniq<H5ReaderMultithreaded>(file_path, &config);
 	}
 	return make_uniq<H5ReaderMultithreaded>(file_path);
+}
+
+// Helper to parse schema_mode from named parameters
+static SchemaMode ParseSchemaMode(TableFunctionBindInput &input) {
+	auto it = input.named_parameters.find("schema_mode");
+	if (it != input.named_parameters.end()) {
+		string mode_str = StringUtil::Lower(it->second.GetValue<string>());
+		if (mode_str == "union") {
+			return SchemaMode::UNION;
+		} else if (mode_str == "intersection") {
+			return SchemaMode::INTERSECTION;
+		} else {
+			throw InvalidInputException("Invalid schema_mode: '" + mode_str +
+			                            "'. Use 'intersection' or 'union'.");
+		}
+	}
+	return SchemaMode::INTERSECTION; // Default
+}
+
+// Implementation of AnndataGlobalState methods for multi-file support
+bool AnndataGlobalState::AdvanceToNextFile(ClientContext &context, const AnndataBindData &bind_data) {
+	if (!bind_data.is_multi_file) {
+		return false;
+	}
+
+	current_file_idx++;
+	if (current_file_idx >= bind_data.file_paths.size()) {
+		return false;
+	}
+
+	// Reset file-specific state
+	current_row_in_file = 0;
+	h5_reader.reset();
+
+	// Open the new file
+	OpenCurrentFile(context, bind_data);
+	return true;
+}
+
+void AnndataGlobalState::OpenCurrentFile(ClientContext &context, const AnndataBindData &bind_data) {
+	if (!bind_data.is_multi_file) {
+		current_file_name = GlobHandler::GetBaseName(bind_data.file_path);
+		h5_reader = CreateH5Reader(context, bind_data.file_path);
+		return;
+	}
+
+	if (current_file_idx >= bind_data.file_paths.size()) {
+		return;
+	}
+
+	const string &file_path = bind_data.file_paths[current_file_idx];
+	current_file_name = GlobHandler::GetBaseName(file_path);
+	h5_reader = CreateH5Reader(context, file_path);
+
+	// Set up column mapping for this file
+	if (current_file_idx < bind_data.harmonized_schema.file_column_mappings.size()) {
+		current_column_mapping = bind_data.harmonized_schema.file_column_mappings[current_file_idx];
+	}
+
+	// Set up var mapping for this file (for X/layers)
+	if (current_file_idx < bind_data.harmonized_schema.file_var_mappings.size()) {
+		current_var_mapping = bind_data.harmonized_schema.file_var_mappings[current_file_idx];
+	}
 }
 
 bool AnndataScanner::IsAnndataFile(const string &path) {
@@ -160,36 +225,82 @@ string AnndataScanner::GetAnndataInfo(const string &path) {
 // Table function implementations for .obs table
 unique_ptr<FunctionData> AnndataScanner::ObsBind(ClientContext &context, TableFunctionBindInput &input,
                                                  vector<LogicalType> &return_types, vector<string> &names) {
-	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
+	string file_pattern = input.inputs[0].GetValue<string>();
+	SchemaMode schema_mode = ParseSchemaMode(input);
 
-	if (!IsAnndataFile(context, bind_data->file_path)) {
-		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
+	// Expand glob pattern
+	auto glob_result = GlobHandler::ExpandGlobPattern(context, file_pattern);
+
+	// Validate files
+	for (const auto &file_path : glob_result.matched_files) {
+		if (!IsAnndataFile(context, file_path)) {
+			throw InvalidInputException("File is not a valid AnnData file: " + file_path);
+		}
 	}
 
-	// Open the HDF5 file to get schema
-	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
-	auto &reader = *reader_ptr;
+	auto bind_data = make_uniq<AnndataBindData>(glob_result.matched_files, file_pattern);
+	bind_data->schema_mode = schema_mode;
 
-	if (!reader.HasObs()) {
-		throw InvalidInputException("AnnData file '%s' has no /obs group", bind_data->file_path.c_str());
+	if (glob_result.matched_files.size() == 1 && !glob_result.is_pattern) {
+		// Single file mode - use original logic for backward compatibility
+		bind_data->is_multi_file = false;
+
+		auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
+		auto &reader = *reader_ptr;
+
+		if (!reader.IsValidAnnData()) {
+			throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
+		}
+
+		if (!reader.HasObs()) {
+			throw InvalidInputException("AnnData file '%s' has no /obs group", bind_data->file_path.c_str());
+		}
+
+		auto columns = reader.GetObsColumns();
+		vector<string> original_names_vec;
+		for (const auto &col : columns) {
+			names.push_back(col.name);
+			original_names_vec.push_back(col.original_name);
+			return_types.push_back(col.type);
+		}
+
+		bind_data->row_count = reader.GetObsCount();
+		bind_data->column_count = names.size();
+		bind_data->column_names = names;
+		bind_data->original_names = original_names_vec;
+		bind_data->column_types = return_types;
+	} else {
+		// Multi-file mode
+		bind_data->is_multi_file = true;
+
+		// Collect schemas from all files
+		vector<FileSchema> file_schemas;
+		for (const auto &file_path : glob_result.matched_files) {
+			file_schemas.push_back(SchemaHarmonizer::GetObsSchema(context, file_path));
+		}
+
+		// Compute harmonized schema
+		bind_data->harmonized_schema = SchemaHarmonizer::ComputeObsVarSchema(file_schemas, schema_mode);
+
+		// Add _file_name column first
+		names.push_back("_file_name");
+		return_types.push_back(LogicalType::VARCHAR);
+
+		// Add harmonized columns
+		vector<string> original_names_vec;
+		original_names_vec.push_back("_file_name"); // Pseudo-column
+		for (const auto &col : bind_data->harmonized_schema.columns) {
+			names.push_back(col.name);
+			original_names_vec.push_back(col.original_name);
+			return_types.push_back(col.type);
+		}
+
+		bind_data->row_count = bind_data->harmonized_schema.total_row_count;
+		bind_data->column_count = names.size();
+		bind_data->column_names = names;
+		bind_data->original_names = original_names_vec;
+		bind_data->column_types = return_types;
 	}
-
-	// Get actual columns from HDF5 (already includes obs_idx)
-	auto columns = reader.GetObsColumns();
-
-	vector<string> original_names;
-	for (const auto &col : columns) {
-		names.push_back(col.name);
-		original_names.push_back(col.original_name);
-		return_types.push_back(col.type);
-	}
-
-	// Get actual row count
-	bind_data->row_count = reader.GetObsCount();
-	bind_data->column_count = names.size();
-	bind_data->column_names = names;
-	bind_data->original_names = original_names;
-	bind_data->column_types = return_types;
 
 	return std::move(bind_data);
 }
@@ -198,60 +309,163 @@ void AnndataScanner::ObsScan(ClientContext &context, TableFunctionInput &data, D
 	auto &bind_data = (AnndataBindData &)*data.bind_data;
 	auto &gstate = (AnndataGlobalState &)*data.global_state;
 
-	// Open file on first scan
-	if (!gstate.h5_reader) {
-		gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
-	}
+	if (!bind_data.is_multi_file) {
+		// Single file mode - original logic
+		if (!gstate.h5_reader) {
+			gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
+		}
 
-	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
-	if (count == 0) {
+		idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
+		if (count == 0) {
+			return;
+		}
+
+		for (idx_t col = 0; col < bind_data.column_count; col++) {
+			auto &vec = output.data[col];
+			gstate.h5_reader->ReadObsColumn(bind_data.original_names[col], vec, gstate.current_row, count);
+		}
+
+		gstate.current_row += count;
+		output.SetCardinality(count);
 		return;
 	}
 
-	// Read actual data from HDF5 (obs_idx handling is in ReadObsColumn)
-	for (idx_t col = 0; col < bind_data.column_count; col++) {
-		auto &vec = output.data[col];
-		// Use original_name for reading from HDF5 (handles mangled names)
-		gstate.h5_reader->ReadObsColumn(bind_data.original_names[col], vec, gstate.current_row, count);
+	// Multi-file mode
+	if (!gstate.h5_reader) {
+		gstate.OpenCurrentFile(context, bind_data);
 	}
 
-	gstate.current_row += count;
-	output.SetCardinality(count);
+	// Check if we've exhausted all files
+	if (gstate.current_file_idx >= bind_data.file_paths.size()) {
+		output.SetCardinality(0);
+		return;
+	}
+
+	// Get rows remaining in current file
+	idx_t file_row_count = bind_data.harmonized_schema.file_row_counts[gstate.current_file_idx];
+	idx_t rows_remaining_in_file = file_row_count - gstate.current_row_in_file;
+
+	// If current file is exhausted, move to next
+	while (rows_remaining_in_file == 0) {
+		if (!gstate.AdvanceToNextFile(context, bind_data)) {
+			output.SetCardinality(0);
+			return;
+		}
+		file_row_count = bind_data.harmonized_schema.file_row_counts[gstate.current_file_idx];
+		rows_remaining_in_file = file_row_count - gstate.current_row_in_file;
+	}
+
+	idx_t rows_to_read = MinValue<idx_t>(STANDARD_VECTOR_SIZE, rows_remaining_in_file);
+
+	// Read _file_name column (column 0 in multi-file mode)
+	auto &file_name_vec = output.data[0];
+	for (idx_t i = 0; i < rows_to_read; i++) {
+		FlatVector::GetData<string_t>(file_name_vec)[i] = StringVector::AddString(file_name_vec, gstate.current_file_name);
+	}
+
+	// Read data columns with mapping
+	for (idx_t col = 0; col < bind_data.harmonized_schema.columns.size(); col++) {
+		idx_t output_col = col + 1; // +1 for _file_name
+		auto &vec = output.data[output_col];
+
+		int file_col_idx = gstate.current_column_mapping[col];
+		if (file_col_idx >= 0) {
+			// Column exists in this file - read it
+			gstate.h5_reader->ReadObsColumn(bind_data.harmonized_schema.columns[col].original_name, vec,
+			                                gstate.current_row_in_file, rows_to_read);
+		} else {
+			// Column doesn't exist - fill with NULL (union mode)
+			auto &validity = FlatVector::Validity(vec);
+			for (idx_t i = 0; i < rows_to_read; i++) {
+				validity.SetInvalid(i);
+			}
+		}
+	}
+
+	gstate.current_row_in_file += rows_to_read;
+	gstate.current_row += rows_to_read;
+	output.SetCardinality(rows_to_read);
 }
 
 // Table function implementations for .var table
 unique_ptr<FunctionData> AnndataScanner::VarBind(ClientContext &context, TableFunctionBindInput &input,
                                                  vector<LogicalType> &return_types, vector<string> &names) {
-	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
+	string file_pattern = input.inputs[0].GetValue<string>();
+	SchemaMode schema_mode = ParseSchemaMode(input);
 
-	if (!IsAnndataFile(context, bind_data->file_path)) {
-		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
+	// Expand glob pattern
+	auto glob_result = GlobHandler::ExpandGlobPattern(context, file_pattern);
+
+	// Validate files
+	for (const auto &file_path : glob_result.matched_files) {
+		if (!IsAnndataFile(context, file_path)) {
+			throw InvalidInputException("File is not a valid AnnData file: " + file_path);
+		}
 	}
 
-	// Open the HDF5 file to get schema
-	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
-	auto &reader = *reader_ptr;
+	auto bind_data = make_uniq<AnndataBindData>(glob_result.matched_files, file_pattern);
+	bind_data->schema_mode = schema_mode;
 
-	if (!reader.HasVar()) {
-		throw InvalidInputException("AnnData file '%s' has no /var group", bind_data->file_path.c_str());
+	if (glob_result.matched_files.size() == 1 && !glob_result.is_pattern) {
+		// Single file mode
+		bind_data->is_multi_file = false;
+
+		auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
+		auto &reader = *reader_ptr;
+
+		if (!reader.IsValidAnnData()) {
+			throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
+		}
+
+		if (!reader.HasVar()) {
+			throw InvalidInputException("AnnData file '%s' has no /var group", bind_data->file_path.c_str());
+		}
+
+		auto columns = reader.GetVarColumns();
+		vector<string> original_names_vec;
+		for (const auto &col : columns) {
+			names.push_back(col.name);
+			original_names_vec.push_back(col.original_name);
+			return_types.push_back(col.type);
+		}
+
+		bind_data->row_count = reader.GetVarCount();
+		bind_data->column_count = names.size();
+		bind_data->column_names = names;
+		bind_data->original_names = original_names_vec;
+		bind_data->column_types = return_types;
+	} else {
+		// Multi-file mode
+		bind_data->is_multi_file = true;
+
+		// Collect schemas from all files
+		vector<FileSchema> file_schemas;
+		for (const auto &file_path : glob_result.matched_files) {
+			file_schemas.push_back(SchemaHarmonizer::GetVarSchema(context, file_path));
+		}
+
+		// Compute harmonized schema
+		bind_data->harmonized_schema = SchemaHarmonizer::ComputeObsVarSchema(file_schemas, schema_mode);
+
+		// Add _file_name column first
+		names.push_back("_file_name");
+		return_types.push_back(LogicalType::VARCHAR);
+
+		// Add harmonized columns
+		vector<string> original_names_vec;
+		original_names_vec.push_back("_file_name");
+		for (const auto &col : bind_data->harmonized_schema.columns) {
+			names.push_back(col.name);
+			original_names_vec.push_back(col.original_name);
+			return_types.push_back(col.type);
+		}
+
+		bind_data->row_count = bind_data->harmonized_schema.total_row_count;
+		bind_data->column_count = names.size();
+		bind_data->column_names = names;
+		bind_data->original_names = original_names_vec;
+		bind_data->column_types = return_types;
 	}
-
-	// Get actual columns from HDF5 (already includes var_idx)
-	auto columns = reader.GetVarColumns();
-
-	vector<string> original_names;
-	for (const auto &col : columns) {
-		names.push_back(col.name);
-		original_names.push_back(col.original_name);
-		return_types.push_back(col.type);
-	}
-
-	// Get actual row count
-	bind_data->row_count = reader.GetVarCount();
-	bind_data->column_count = names.size();
-	bind_data->column_names = names;
-	bind_data->original_names = original_names;
-	bind_data->column_types = return_types;
 
 	return std::move(bind_data);
 }
@@ -260,25 +474,82 @@ void AnndataScanner::VarScan(ClientContext &context, TableFunctionInput &data, D
 	auto &bind_data = (AnndataBindData &)*data.bind_data;
 	auto &gstate = (AnndataGlobalState &)*data.global_state;
 
-	// Open file on first scan
-	if (!gstate.h5_reader) {
-		gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
-	}
+	if (!bind_data.is_multi_file) {
+		// Single file mode - original logic
+		if (!gstate.h5_reader) {
+			gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
+		}
 
-	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
-	if (count == 0) {
+		idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
+		if (count == 0) {
+			return;
+		}
+
+		for (idx_t col = 0; col < bind_data.column_count; col++) {
+			auto &vec = output.data[col];
+			gstate.h5_reader->ReadVarColumn(bind_data.original_names[col], vec, gstate.current_row, count);
+		}
+
+		gstate.current_row += count;
+		output.SetCardinality(count);
 		return;
 	}
 
-	// Read actual data from HDF5 (var_idx handling is in ReadVarColumn)
-	for (idx_t col = 0; col < bind_data.column_count; col++) {
-		auto &vec = output.data[col];
-		// Use original_name for reading from HDF5 (handles mangled names)
-		gstate.h5_reader->ReadVarColumn(bind_data.original_names[col], vec, gstate.current_row, count);
+	// Multi-file mode
+	if (!gstate.h5_reader) {
+		gstate.OpenCurrentFile(context, bind_data);
 	}
 
-	gstate.current_row += count;
-	output.SetCardinality(count);
+	// Check if we've exhausted all files
+	if (gstate.current_file_idx >= bind_data.file_paths.size()) {
+		output.SetCardinality(0);
+		return;
+	}
+
+	// Get rows remaining in current file
+	idx_t file_row_count = bind_data.harmonized_schema.file_row_counts[gstate.current_file_idx];
+	idx_t rows_remaining_in_file = file_row_count - gstate.current_row_in_file;
+
+	// If current file is exhausted, move to next
+	while (rows_remaining_in_file == 0) {
+		if (!gstate.AdvanceToNextFile(context, bind_data)) {
+			output.SetCardinality(0);
+			return;
+		}
+		file_row_count = bind_data.harmonized_schema.file_row_counts[gstate.current_file_idx];
+		rows_remaining_in_file = file_row_count - gstate.current_row_in_file;
+	}
+
+	idx_t rows_to_read = MinValue<idx_t>(STANDARD_VECTOR_SIZE, rows_remaining_in_file);
+
+	// Read _file_name column (column 0)
+	auto &file_name_vec = output.data[0];
+	for (idx_t i = 0; i < rows_to_read; i++) {
+		FlatVector::GetData<string_t>(file_name_vec)[i] = StringVector::AddString(file_name_vec, gstate.current_file_name);
+	}
+
+	// Read data columns with mapping
+	for (idx_t col = 0; col < bind_data.harmonized_schema.columns.size(); col++) {
+		idx_t output_col = col + 1; // +1 for _file_name
+		auto &vec = output.data[output_col];
+
+		int file_col_idx = gstate.current_column_mapping[col];
+		if (file_col_idx >= 0) {
+			// Column exists in this file - read it
+			gstate.h5_reader->ReadVarColumn(bind_data.harmonized_schema.columns[col].original_name, vec,
+			                                gstate.current_row_in_file, rows_to_read);
+		} else {
+			// Column doesn't exist - fill with NULL (union mode)
+			auto &validity = FlatVector::Validity(vec);
+			for (idx_t i = 0; i < rows_to_read; i++) {
+				validity.SetInvalid(i);
+			}
+		}
+	}
+
+	gstate.current_row_in_file += rows_to_read;
+	gstate.current_row += rows_to_read;
+	output.SetCardinality(rows_to_read);
 }
 
 // Global state initialization
@@ -1764,16 +2035,18 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 
 // Register the table functions
 void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
-	// Register anndata_scan_obs function
+	// Register anndata_scan_obs function with schema_mode named parameter for multi-file support
 	TableFunction obs_func("anndata_scan_obs", {LogicalType::VARCHAR}, AnndataScanner::ObsScan, AnndataScanner::ObsBind,
 	                       AnndataInitGlobal, AnndataInitLocal);
 	obs_func.name = "anndata_scan_obs";
+	obs_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
 	loader.RegisterFunction(obs_func);
 
-	// Register anndata_scan_var function
+	// Register anndata_scan_var function with schema_mode named parameter for multi-file support
 	TableFunction var_func("anndata_scan_var", {LogicalType::VARCHAR}, AnndataScanner::VarScan, AnndataScanner::VarBind,
 	                       AnndataInitGlobal, AnndataInitLocal);
 	var_func.name = "anndata_scan_var";
+	var_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
 	loader.RegisterFunction(var_func);
 
 	// Register anndata_scan_x function with projection pushdown enabled
