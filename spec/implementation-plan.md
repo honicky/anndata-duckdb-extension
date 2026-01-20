@@ -19,7 +19,7 @@ This document outlines the implementation plan for the AnnData DuckDB extension 
 - **HDF5 C API Migration**: Switched from C++ to C API for thread-safe builds ✅
 
 ### 🔄 In Progress
-- None currently
+- **Phase 13**: Wildcard Query Support - Multi-file glob patterns with schema harmonization
 
 ### 📋 Pending
 - **Phase 3**: ATTACH/DETACH - Deferred in favor of table functions
@@ -222,6 +222,46 @@ WHERE value < 0.5;
 1. ✅ Converted from scalar function to table function (v0.5.0)
 2. ✅ Returns key-value pairs: (property VARCHAR, value VARCHAR)
 3. ✅ Properties include: n_obs, n_vars, obsm_keys, varm_keys, layers, uns_keys, obsp_keys, varp_keys
+
+### Phase 13: Wildcard Query Support 🔄
+**Goal**: Enable glob pattern support for querying multiple AnnData files
+**Spec**: See `spec/wildcard-query-spec.md` for full details
+
+**Implementation Approach**:
+```sql
+-- Query all .h5ad files with union schema (default)
+SELECT * FROM anndata_scan_obs('data/*.h5ad');
+
+-- Intersection mode - only common columns
+SELECT * FROM anndata_scan_obs('data/*.h5ad', schema_mode := 'intersection');
+
+-- Remote files (S3)
+SELECT * FROM anndata_scan_obs('s3://bucket/project/*.h5ad');
+```
+
+**Key Components**:
+
+1. **Glob Handler** (`src/glob_handler.cpp`)
+   - Pattern expansion for local and remote files
+   - Use DuckDB's FileSystem::Glob() for local
+   - S3 ListObjectsV2 for remote patterns
+
+2. **Schema Harmonizer** (`src/schema_harmonizer.cpp`)
+   - Union mode: all columns, NULL for missing
+   - Intersection mode: only common columns
+   - Type coercion for mismatched column types
+
+3. **Multi-File Scanner State**
+   - Track current file index
+   - Per-file column mapping to union schema
+   - `_file_name` column for source tracking
+
+**Implementation Phases**:
+- Phase 13.1: Local glob support with union schema
+- Phase 13.2: Schema harmonization (union/intersection modes)
+- Phase 13.3: Remote (S3) glob support
+- Phase 13.4: Performance optimization (parallel discovery)
+- Phase 13.5: Testing and documentation
 
 ### Phase 12: ATTACH/DETACH Interface 📋
 **Goal**: Provide standard DuckDB attachment semantics
