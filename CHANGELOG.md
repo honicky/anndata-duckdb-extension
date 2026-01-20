@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-01-20
+
+### Added
+- S3 remote file access with AWS SigV4 authentication
+- HTTP/HTTPS remote file access for publicly accessible .h5ad files
+- LRU block cache (64MB, 1MB blocks) for improved remote file performance
+- Custom HTTP VFD (Virtual File Driver) for HDF5 remote access
+
+### Changed
+- Replaced HDF5's built-in ROS3 VFD with custom HTTP VFD for all remote access
+- Use OpenSSL directly for HMAC-SHA256 signing instead of HDF5 ROS3
+
 ## [0.11.5] - 2025-12-30
 
 ### Fixed
