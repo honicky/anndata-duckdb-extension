@@ -6,6 +6,10 @@
 #include <sstream>
 #include <iomanip>
 #include <ctime>
+#include <list>
+#include <unordered_map>
+#include <openssl/hmac.h>
+#include <openssl/sha.h>
 
 // C++11 compatibility: make_unique not available until C++14
 #if __cplusplus < 201402L
@@ -18,6 +22,115 @@ std::unique_ptr<T> make_unique(Args &&...args) {
 #endif
 
 namespace duckdb {
+
+//===--------------------------------------------------------------------===//
+// AWS SigV4 Signing Helpers
+//===--------------------------------------------------------------------===//
+
+// Convert bytes to lowercase hex string
+static std::string ToHex(const unsigned char *data, size_t len) {
+	std::ostringstream ss;
+	ss << std::hex << std::setfill('0');
+	for (size_t i = 0; i < len; ++i) {
+		ss << std::setw(2) << static_cast<int>(data[i]);
+	}
+	return ss.str();
+}
+
+// SHA256 hash of a string, returned as lowercase hex
+static std::string SHA256Hash(const std::string &data) {
+	unsigned char hash[SHA256_DIGEST_LENGTH];
+	SHA256(reinterpret_cast<const unsigned char *>(data.c_str()), data.size(), hash);
+	return ToHex(hash, SHA256_DIGEST_LENGTH);
+}
+
+// HMAC-SHA256, returns raw bytes
+static std::vector<unsigned char> HMAC_SHA256(const std::vector<unsigned char> &key, const std::string &data) {
+	std::vector<unsigned char> result(SHA256_DIGEST_LENGTH);
+	unsigned int len = SHA256_DIGEST_LENGTH;
+	HMAC(EVP_sha256(), key.data(), static_cast<int>(key.size()), reinterpret_cast<const unsigned char *>(data.c_str()),
+	     data.size(), result.data(), &len);
+	return result;
+}
+
+// HMAC-SHA256 with string key
+static std::vector<unsigned char> HMAC_SHA256(const std::string &key, const std::string &data) {
+	std::vector<unsigned char> key_bytes(key.begin(), key.end());
+	return HMAC_SHA256(key_bytes, data);
+}
+
+// URL-encode a string (for canonical URI/query)
+static std::string URIEncode(const std::string &str, bool encode_slash = true) {
+	std::ostringstream encoded;
+	encoded << std::hex << std::uppercase << std::setfill('0');
+	for (unsigned char c : str) {
+		if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-' ||
+		    c == '~' || c == '.') {
+			encoded << c;
+		} else if (c == '/' && !encode_slash) {
+			encoded << c;
+		} else {
+			encoded << '%' << std::setw(2) << static_cast<int>(c);
+		}
+	}
+	return encoded.str();
+}
+
+// Get current UTC time in ISO8601 format (YYYYMMDD'T'HHMMSS'Z')
+static std::string GetISO8601Time() {
+	std::time_t now = std::time(nullptr);
+	std::tm *utc = std::gmtime(&now);
+	char buf[32];
+	std::strftime(buf, sizeof(buf), "%Y%m%dT%H%M%SZ", utc);
+	return buf;
+}
+
+// Get current UTC date (YYYYMMDD)
+static std::string GetDateStamp() {
+	std::time_t now = std::time(nullptr);
+	std::tm *utc = std::gmtime(&now);
+	char buf[16];
+	std::strftime(buf, sizeof(buf), "%Y%m%d", utc);
+	return buf;
+}
+
+// Parse host and path from URL
+struct ParsedUrl {
+	std::string host;
+	std::string path;
+	std::string query;
+};
+
+static ParsedUrl ParseUrl(const std::string &url) {
+	ParsedUrl result;
+
+	// Find protocol end
+	size_t proto_end = url.find("://");
+	size_t host_start = (proto_end != std::string::npos) ? proto_end + 3 : 0;
+
+	// Find path start
+	size_t path_start = url.find('/', host_start);
+	if (path_start == std::string::npos) {
+		result.host = url.substr(host_start);
+		result.path = "/";
+	} else {
+		result.host = url.substr(host_start, path_start - host_start);
+		// Find query string
+		size_t query_start = url.find('?', path_start);
+		if (query_start != std::string::npos) {
+			result.path = url.substr(path_start, query_start - path_start);
+			result.query = url.substr(query_start + 1);
+		} else {
+			result.path = url.substr(path_start);
+		}
+	}
+
+	if (result.path.empty()) {
+		result.path = "/";
+	}
+
+	return result;
+}
 
 //===--------------------------------------------------------------------===//
 // URL Scheme Detection
@@ -44,12 +157,145 @@ RemoteFileConfig ParseRemoteUrl(const std::string &path) {
 }
 
 //===--------------------------------------------------------------------===//
+// LRU Block Cache
+//===--------------------------------------------------------------------===//
+
+class BlockCache {
+public:
+	static constexpr size_t DEFAULT_BLOCK_SIZE = 1024 * 1024; // 1MB blocks
+	static constexpr size_t DEFAULT_MAX_BLOCKS = 64;          // 64MB max cache
+
+	BlockCache(size_t block_size = DEFAULT_BLOCK_SIZE, size_t max_blocks = DEFAULT_MAX_BLOCKS)
+	    : block_size_(block_size), max_blocks_(max_blocks), hits_(0), misses_(0) {
+	}
+
+	// Try to read from cache, returns true if fully satisfied from cache
+	bool TryRead(void *buf, size_t offset, size_t size) {
+		if (size == 0) {
+			return true;
+		}
+
+		// Calculate which blocks we need
+		size_t start_block = offset / block_size_;
+		size_t end_block = (offset + size - 1) / block_size_;
+
+		// Check if all blocks are in cache
+		for (size_t block = start_block; block <= end_block; ++block) {
+			if (blocks_.find(block) == blocks_.end()) {
+				return false;
+			}
+		}
+
+		// All blocks in cache - copy data to output buffer
+		hits_++;
+		uint8_t *out = static_cast<uint8_t *>(buf);
+		size_t remaining = size;
+		size_t current_offset = offset;
+
+		for (size_t block = start_block; block <= end_block; ++block) {
+			// Move block to front of LRU list
+			TouchBlock(block);
+
+			const auto &block_data = blocks_[block];
+			size_t block_start = block * block_size_;
+			size_t offset_in_block = current_offset - block_start;
+			size_t bytes_from_block = std::min(remaining, block_data.size() - offset_in_block);
+
+			memcpy(out, block_data.data() + offset_in_block, bytes_from_block);
+			out += bytes_from_block;
+			remaining -= bytes_from_block;
+			current_offset += bytes_from_block;
+		}
+
+		return true;
+	}
+
+	// Store a block in the cache
+	void StoreBlock(size_t block_num, std::vector<uint8_t> data) {
+		// Evict if at capacity
+		while (lru_list_.size() >= max_blocks_ && !lru_list_.empty()) {
+			size_t evict_block = lru_list_.back();
+			lru_list_.pop_back();
+			lru_map_.erase(evict_block);
+			blocks_.erase(evict_block);
+		}
+
+		// Store the block
+		blocks_[block_num] = std::move(data);
+		lru_list_.push_front(block_num);
+		lru_map_[block_num] = lru_list_.begin();
+	}
+
+	// Get blocks that need to be fetched for a read
+	std::vector<std::pair<size_t, size_t>> GetMissingRanges(size_t offset, size_t size, size_t file_size) {
+		std::vector<std::pair<size_t, size_t>> ranges;
+
+		size_t start_block = offset / block_size_;
+		size_t end_block = (offset + size - 1) / block_size_;
+
+		for (size_t block = start_block; block <= end_block; ++block) {
+			if (blocks_.find(block) == blocks_.end()) {
+				misses_++;
+				size_t block_start = block * block_size_;
+				size_t block_end = std::min(block_start + block_size_, file_size);
+				ranges.emplace_back(block_start, block_end - block_start);
+			}
+		}
+
+		return ranges;
+	}
+
+	size_t GetBlockSize() const {
+		return block_size_;
+	}
+
+	// Cache statistics
+	size_t GetHits() const {
+		return hits_;
+	}
+	size_t GetMisses() const {
+		return misses_;
+	}
+
+	void Clear() {
+		blocks_.clear();
+		lru_list_.clear();
+		lru_map_.clear();
+		hits_ = 0;
+		misses_ = 0;
+	}
+
+private:
+	void TouchBlock(size_t block_num) {
+		auto it = lru_map_.find(block_num);
+		if (it != lru_map_.end()) {
+			lru_list_.erase(it->second);
+			lru_list_.push_front(block_num);
+			lru_map_[block_num] = lru_list_.begin();
+		}
+	}
+
+	size_t block_size_;
+	size_t max_blocks_;
+	size_t hits_;
+	size_t misses_;
+
+	// Block storage: block_number -> data
+	std::unordered_map<size_t, std::vector<uint8_t>> blocks_;
+
+	// LRU tracking
+	std::list<size_t> lru_list_;
+	std::unordered_map<size_t, std::list<size_t>::iterator> lru_map_;
+};
+
+//===--------------------------------------------------------------------===//
 // HTTP Client Implementation
 //===--------------------------------------------------------------------===//
 
 class HttpClient {
 public:
-	HttpClient() : curl_(nullptr), file_size_(0) {
+	HttpClient()
+	    : curl_(nullptr), file_size_(0), cache_(BlockCache::DEFAULT_BLOCK_SIZE, BlockCache::DEFAULT_MAX_BLOCKS) {
 		curl_ = curl_easy_init();
 		if (!curl_) {
 			throw std::runtime_error("Failed to initialize CURL");
@@ -81,8 +327,21 @@ public:
 		curl_easy_setopt(curl_, CURLOPT_SSL_VERIFYPEER, 1L);
 		curl_easy_setopt(curl_, CURLOPT_SSL_VERIFYHOST, 2L);
 
+		// For S3 with credentials, we need to add auth headers to HEAD request too
+		struct curl_slist *headers = nullptr;
+		if (config_.s3_access_key[0] != '\0') {
+			headers = CreateS3AuthHeaders(url_, "", "HEAD");
+			curl_easy_setopt(curl_, CURLOPT_HTTPHEADER, headers);
+		}
+
 		// Perform HEAD request to get file size
 		CURLcode res = curl_easy_perform(curl_);
+
+		if (headers) {
+			curl_slist_free_all(headers);
+			curl_easy_setopt(curl_, CURLOPT_HTTPHEADER, nullptr);
+		}
+
 		if (res != CURLE_OK) {
 			return false;
 		}
@@ -105,13 +364,28 @@ public:
 			return true;
 		}
 
-		// Check cache first
-		if (TryReadFromCache(buf, offset, size)) {
+		// Check block cache first
+		if (cache_.TryRead(buf, offset, size)) {
 			return true;
 		}
 
-		// Fetch from remote
-		return FetchRange(buf, offset, size);
+		// Get missing blocks and fetch them
+		auto missing = cache_.GetMissingRanges(offset, size, file_size_);
+		for (const auto &range : missing) {
+			size_t block_offset = range.first;
+			size_t block_size = range.second;
+			size_t block_num = block_offset / cache_.GetBlockSize();
+
+			std::vector<uint8_t> block_data(block_size);
+			if (!FetchRangeIntoBuffer(block_data.data(), block_offset, block_size)) {
+				return false;
+			}
+			block_data.resize(block_size); // Ensure correct size
+			cache_.StoreBlock(block_num, std::move(block_data));
+		}
+
+		// Now read from cache (should always succeed)
+		return cache_.TryRead(buf, offset, size);
 	}
 
 	uint64_t GetFileSize() const {
@@ -128,11 +402,10 @@ public:
 			return true;
 		}
 
+		// Prefetch by reading the first N bytes, which populates the block cache
 		size_t fetch_size = std::min(size, static_cast<size_t>(file_size_));
-		cache_.resize(fetch_size);
-		cache_offset_ = 0;
-
-		return FetchRangeIntoBuffer(cache_.data(), 0, fetch_size);
+		std::vector<uint8_t> temp(fetch_size);
+		return Read(temp.data(), 0, fetch_size);
 	}
 
 private:
@@ -142,10 +415,11 @@ private:
 
 		std::string header(buffer, total);
 
-		// Parse Content-Length
+		// Parse Content-Length - only set file_size_ if not already set
+		// (During range requests, Content-Length is the chunk size, not total file size)
 		if (header.rfind("Content-Length:", 0) == 0 || header.rfind("content-length:", 0) == 0) {
 			size_t pos = header.find(':');
-			if (pos != std::string::npos) {
+			if (pos != std::string::npos && client->file_size_ == 0) {
 				client->file_size_ = std::stoull(header.substr(pos + 1));
 			}
 		}
@@ -169,60 +443,29 @@ private:
 		return total;
 	}
 
-	bool TryReadFromCache(void *buf, size_t offset, size_t size) {
-		if (cache_.empty()) {
-			return false;
-		}
-
-		// Check if the requested range is within our cache
-		if (offset >= cache_offset_ && offset + size <= cache_offset_ + cache_.size()) {
-			memcpy(buf, cache_.data() + (offset - cache_offset_), size);
-			return true;
-		}
-
-		return false;
-	}
-
-	bool FetchRange(void *buf, size_t offset, size_t size) {
-		// For small reads, fetch a larger chunk to benefit from caching
-		size_t chunk_size = std::max(size, static_cast<size_t>(1024 * 1024)); // At least 1MB
-		size_t fetch_offset = offset;
-		size_t fetch_size = std::min(chunk_size, static_cast<size_t>(file_size_ - offset));
-
-		std::vector<uint8_t> temp_buffer;
-		temp_buffer.reserve(fetch_size);
-
-		if (!FetchRangeIntoBuffer(temp_buffer.data(), fetch_offset, fetch_size)) {
-			return false;
-		}
-
-		// Update cache
-		cache_ = std::move(temp_buffer);
-		cache_.resize(fetch_size);
-		cache_offset_ = fetch_offset;
-
-		// Copy requested portion to output buffer
-		memcpy(buf, cache_.data() + (offset - cache_offset_), size);
-		return true;
-	}
-
 	bool FetchRangeIntoBuffer(void *buf, size_t offset, size_t size) {
 		std::vector<uint8_t> response_buffer;
 		response_buffer.reserve(size);
 
-		// Set range header
-		std::ostringstream range;
-		range << offset << "-" << (offset + size - 1);
+		// Build range header value
+		std::ostringstream range_stream;
+		range_stream << "bytes=" << offset << "-" << (offset + size - 1);
+		std::string range_header = range_stream.str();
 
-		curl_easy_setopt(curl_, CURLOPT_RANGE, range.str().c_str());
 		curl_easy_setopt(curl_, CURLOPT_WRITEFUNCTION, WriteCallback);
 		curl_easy_setopt(curl_, CURLOPT_WRITEDATA, &response_buffer);
 
 		// Add S3 authentication headers if needed
 		struct curl_slist *headers = nullptr;
-		if (IsS3Url() && config_.s3_access_key[0] != '\0') {
-			headers = CreateS3AuthHeaders(offset, size);
+		if (config_.s3_access_key[0] != '\0') {
+			// Use SigV4 signing - pass URL and range header
+			headers = CreateS3AuthHeaders(url_, range_header);
 			curl_easy_setopt(curl_, CURLOPT_HTTPHEADER, headers);
+		} else {
+			// Anonymous access - just set range header directly
+			std::ostringstream range_curl;
+			range_curl << offset << "-" << (offset + size - 1);
+			curl_easy_setopt(curl_, CURLOPT_RANGE, range_curl.str().c_str());
 		}
 
 		CURLcode res = curl_easy_perform(curl_);
@@ -230,10 +473,10 @@ private:
 		if (headers) {
 			curl_slist_free_all(headers);
 			curl_easy_setopt(curl_, CURLOPT_HTTPHEADER, nullptr);
+		} else {
+			// Clear range for next request (only if we used CURLOPT_RANGE)
+			curl_easy_setopt(curl_, CURLOPT_RANGE, nullptr);
 		}
-
-		// Clear range for next request
-		curl_easy_setopt(curl_, CURLOPT_RANGE, nullptr);
 
 		if (res != CURLE_OK) {
 			return false;
@@ -282,22 +525,127 @@ private:
 		return protocol + "://" + endpoint + "/" + key;
 	}
 
-	struct curl_slist *CreateS3AuthHeaders(size_t offset, size_t size) {
-		// Simplified S3 signature - for production, use AWS SDK or full SigV4
-		// This is a placeholder that will work with public buckets
-		// For private buckets, implement full AWS Signature Version 4
-
+	struct curl_slist *CreateS3AuthHeaders(const std::string &https_url, const std::string &range_header,
+	                                       const std::string &method = "GET") {
+		// Full AWS SigV4 signing implementation
 		struct curl_slist *headers = nullptr;
 
-		// Add host header
-		std::string https_url = ConvertS3ToHttps();
-		size_t host_start = https_url.find("://") + 3;
-		size_t host_end = https_url.find('/', host_start);
-		std::string host = https_url.substr(host_start, host_end - host_start);
-		headers = curl_slist_append(headers, ("Host: " + host).c_str());
+		// Parse the URL
+		ParsedUrl parsed = ParseUrl(https_url);
 
-		// TODO: Implement full AWS SigV4 signing for private buckets
-		// For now, this works with public buckets or buckets allowing anonymous access
+		// Get timestamps
+		std::string amz_date = GetISO8601Time();
+		std::string date_stamp = GetDateStamp();
+
+		// Determine region
+		std::string region = config_.s3_region;
+		if (region[0] == '\0') {
+			region = "us-east-1";
+		}
+
+		// Build signed headers list and canonical headers
+		// Headers must be sorted alphabetically by lowercase name
+		std::string signed_headers;
+		std::string canonical_headers;
+
+		// Host header (always required)
+		canonical_headers += "host:" + parsed.host + "\n";
+
+		// Range header (if present)
+		if (!range_header.empty()) {
+			canonical_headers += "range:" + range_header + "\n";
+		}
+
+		// x-amz-content-sha256 (required for S3)
+		std::string payload_hash = SHA256Hash(""); // Empty payload for GET
+		canonical_headers += "x-amz-content-sha256:" + payload_hash + "\n";
+
+		// x-amz-date (required)
+		canonical_headers += "x-amz-date:" + amz_date + "\n";
+
+		// x-amz-security-token (if using session credentials)
+		std::string session_token = config_.s3_session_token;
+		if (session_token[0] != '\0') {
+			canonical_headers += "x-amz-security-token:" + std::string(session_token) + "\n";
+		}
+
+		// Build signed headers string (semicolon-separated, sorted)
+		signed_headers = "host";
+		if (!range_header.empty()) {
+			signed_headers += ";range";
+		}
+		signed_headers += ";x-amz-content-sha256;x-amz-date";
+		if (session_token[0] != '\0') {
+			signed_headers += ";x-amz-security-token";
+		}
+
+		// Create canonical request
+		// CanonicalRequest =
+		//   HTTPRequestMethod + '\n' +
+		//   CanonicalURI + '\n' +
+		//   CanonicalQueryString + '\n' +
+		//   CanonicalHeaders + '\n' +
+		//   SignedHeaders + '\n' +
+		//   HexEncode(Hash(RequestPayload))
+
+		std::string canonical_uri = URIEncode(parsed.path, false);
+		std::string canonical_query = parsed.query; // Already encoded in URL
+
+		// Canonical request format requires empty line between headers and signed_headers
+		// canonical_headers ends with \n, so we add one more \n for the empty line
+		std::string canonical_request = method + "\n" + canonical_uri + "\n" + canonical_query + "\n" +
+		                                canonical_headers + "\n" + signed_headers + "\n" + payload_hash;
+
+		// Create string to sign
+		// StringToSign =
+		//   Algorithm + '\n' +
+		//   RequestDateTime + '\n' +
+		//   CredentialScope + '\n' +
+		//   HexEncode(Hash(CanonicalRequest))
+
+		std::string algorithm = "AWS4-HMAC-SHA256";
+		std::string credential_scope = date_stamp + "/" + region + "/s3/aws4_request";
+		std::string canonical_request_hash = SHA256Hash(canonical_request);
+
+		std::string string_to_sign =
+		    algorithm + "\n" + amz_date + "\n" + credential_scope + "\n" + canonical_request_hash;
+
+		// Calculate signing key
+		// DateKey = HMAC-SHA256("AWS4" + SecretKey, DateStamp)
+		// DateRegionKey = HMAC-SHA256(DateKey, Region)
+		// DateRegionServiceKey = HMAC-SHA256(DateRegionKey, Service)
+		// SigningKey = HMAC-SHA256(DateRegionServiceKey, "aws4_request")
+
+		std::string secret_key = config_.s3_secret_key;
+		auto date_key = HMAC_SHA256("AWS4" + std::string(secret_key), date_stamp);
+		auto date_region_key = HMAC_SHA256(date_key, region);
+		auto date_region_service_key = HMAC_SHA256(date_region_key, "s3");
+		auto signing_key = HMAC_SHA256(date_region_service_key, "aws4_request");
+
+		// Calculate signature
+		auto signature_bytes = HMAC_SHA256(signing_key, string_to_sign);
+		std::string signature = ToHex(signature_bytes.data(), signature_bytes.size());
+
+		// Build Authorization header
+		std::string access_key = config_.s3_access_key;
+		std::string authorization = algorithm + " Credential=" + std::string(access_key) + "/" + credential_scope +
+		                            ", SignedHeaders=" + signed_headers + ", Signature=" + signature;
+
+		// Add all headers to curl list
+		// First, disable headers that CURL might add automatically
+		headers = curl_slist_append(headers, "Accept:"); // Disable Accept header
+		headers = curl_slist_append(headers, "Expect:"); // Disable Expect header
+
+		headers = curl_slist_append(headers, ("Host: " + parsed.host).c_str());
+		if (!range_header.empty()) {
+			headers = curl_slist_append(headers, ("Range: " + range_header).c_str());
+		}
+		headers = curl_slist_append(headers, ("x-amz-content-sha256: " + payload_hash).c_str());
+		headers = curl_slist_append(headers, ("x-amz-date: " + amz_date).c_str());
+		if (session_token[0] != '\0') {
+			headers = curl_slist_append(headers, ("x-amz-security-token: " + std::string(session_token)).c_str());
+		}
+		headers = curl_slist_append(headers, ("Authorization: " + authorization).c_str());
 
 		return headers;
 	}
@@ -308,9 +656,8 @@ private:
 	uint64_t file_size_;
 	bool supports_range_ = false;
 
-	// Simple cache
-	std::vector<uint8_t> cache_;
-	size_t cache_offset_ = 0;
+	// LRU block cache
+	BlockCache cache_;
 };
 
 //===--------------------------------------------------------------------===//
@@ -428,15 +775,19 @@ static H5FD_t *H5FD_http_open(const char *name, unsigned flags, hid_t fapl_id, h
 		std::string endpoint = config.s3_endpoint;
 		std::string protocol = config.s3_use_ssl ? "https" : "http";
 
-		if (endpoint[0] == '\0') {
-			// No custom endpoint - use AWS virtual-hosted style URL
+		// Check if endpoint is AWS default (treat as no custom endpoint)
+		bool is_aws_default_endpoint = (endpoint[0] == '\0') || (std::string(endpoint) == "s3.amazonaws.com") ||
+		                               (std::string(endpoint).find(".amazonaws.com") != std::string::npos &&
+		                                std::string(endpoint).find(bucket) == std::string::npos);
+
+		if (is_aws_default_endpoint) {
+			// AWS S3 - use virtual-hosted style URL
 			// s3://bucket/key -> https://bucket.s3.region.amazonaws.com/key
 			std::string region = config.s3_region;
 			if (region[0] == '\0') {
 				region = "us-east-1";
 			}
-			endpoint = bucket + ".s3." + region + ".amazonaws.com";
-			url = protocol + "://" + endpoint + "/" + key;
+			url = protocol + "://" + bucket + ".s3." + region + ".amazonaws.com/" + key;
 		} else {
 			// Custom endpoint (MinIO, etc.) - use path-style URL
 			// s3://bucket/key -> http://endpoint/bucket/key

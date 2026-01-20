@@ -8,17 +8,20 @@
   "dependencies": [
     {
       "name": "hdf5",
-      "features": ["threadsafe", "ros3"],
+      "features": ["threadsafe"],
       "platform": "!emscripten & !windows"
     },
     {
       "name": "hdf5",
-      "features": ["ros3"],
       "platform": "windows"
     },
     {
       "name": "curl",
       "features": ["ssl"],
+      "platform": "!emscripten"
+    },
+    {
+      "name": "openssl",
       "platform": "!emscripten"
     }
   ]

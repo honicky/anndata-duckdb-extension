@@ -32,6 +32,7 @@ inline bool GetS3ConfigFromSecrets(ClientContext &context, const string &path, H
 		// Note: TryGetValue returns Value with IsNull() for missing keys
 		auto key_id_val = kv_secret.TryGetValue("key_id");
 		auto secret_val = kv_secret.TryGetValue("secret");
+		// DuckDB S3 secrets use "session_token" for the token
 		auto session_token_val = kv_secret.TryGetValue("session_token");
 		auto region_val = kv_secret.TryGetValue("region");
 		auto endpoint_val = kv_secret.TryGetValue("endpoint");

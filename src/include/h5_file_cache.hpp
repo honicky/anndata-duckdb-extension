@@ -9,12 +9,7 @@
 #include "h5_handles.hpp"
 #include <hdf5.h>
 
-// Include ROS3 VFD header if available
-#ifdef H5_HAVE_ROS3_VFD
-#include <H5FDros3.h>
-#endif
-
-// Include our HTTP VFD for HTTP/HTTPS URLs
+// Include our HTTP VFD for HTTP/HTTPS/S3 URLs
 #ifndef DUCKDB_NO_REMOTE_VFD
 #include "h5fd_http.hpp"
 #endif
@@ -104,16 +99,10 @@ public:
 		bool is_s3 = (path.rfind("s3://", 0) == 0 || path.rfind("s3a://", 0) == 0);
 		bool is_http = (path.rfind("http://", 0) == 0 || path.rfind("https://", 0) == 0);
 
-#ifdef H5_HAVE_ROS3_VFD
-		// Use ROS3 VFD for all S3 URLs (both standard AWS and custom endpoints like MinIO)
-		// ROS3 handles SigV4 signing internally
-		if (is_s3) {
-			file = OpenWithROS3(path, remote_config);
-		} else
-#endif
 #ifndef DUCKDB_NO_REMOTE_VFD
-		    if (is_http || is_s3) {
-			// Use our HTTP VFD for HTTP/HTTPS URLs (and S3 if ROS3 not available)
+		if (is_http || is_s3) {
+			// Use our HTTP VFD for all remote URLs (HTTP/HTTPS/S3)
+			// Includes block caching and SigV4 signing for S3
 			RemoteFileConfig config = ParseRemoteUrl(path);
 			if (remote_config) {
 				config.s3_region = remote_config->s3_region;
@@ -174,91 +163,6 @@ private:
 		static H5FileCache instance;
 		return instance;
 	}
-
-#ifdef H5_HAVE_ROS3_VFD
-	static hid_t OpenWithROS3(const std::string &path, const RemoteConfig *remote_config) {
-		// Create file access property list
-		hid_t fapl = H5Pcreate(H5P_FILE_ACCESS);
-		if (fapl < 0) {
-			return H5I_INVALID_HID;
-		}
-
-		// Configure ROS3 VFD
-		H5FD_ros3_fapl_t ros3_config;
-		ros3_config.version = H5FD_CURR_ROS3_FAPL_T_VERSION;
-
-		// Set authentication if credentials provided
-		if (remote_config && !remote_config->s3_access_key.empty()) {
-			ros3_config.authenticate = true;
-
-			// Copy region
-			std::string region = remote_config->s3_region.empty() ? "us-east-1" : remote_config->s3_region;
-			std::strncpy(ros3_config.aws_region, region.c_str(), H5FD_ROS3_MAX_REGION_LEN);
-			ros3_config.aws_region[H5FD_ROS3_MAX_REGION_LEN] = '\0';
-
-			// Copy access key ID
-			std::strncpy(ros3_config.secret_id, remote_config->s3_access_key.c_str(), H5FD_ROS3_MAX_SECRET_ID_LEN);
-			ros3_config.secret_id[H5FD_ROS3_MAX_SECRET_ID_LEN] = '\0';
-
-			// Copy secret key
-			std::strncpy(ros3_config.secret_key, remote_config->s3_secret_key.c_str(), H5FD_ROS3_MAX_SECRET_KEY_LEN);
-			ros3_config.secret_key[H5FD_ROS3_MAX_SECRET_KEY_LEN] = '\0';
-
-		} else {
-			// Anonymous access (public buckets)
-			ros3_config.authenticate = false;
-			ros3_config.aws_region[0] = '\0';
-			ros3_config.secret_id[0] = '\0';
-			ros3_config.secret_key[0] = '\0';
-		}
-
-		// Set the ROS3 driver
-		if (H5Pset_fapl_ros3(fapl, &ros3_config) < 0) {
-			H5Pclose(fapl);
-			return H5I_INVALID_HID;
-		}
-
-		// Set session token if provided
-		if (remote_config && !remote_config->s3_session_token.empty()) {
-			if (H5Pset_fapl_ros3_token(fapl, remote_config->s3_session_token.c_str()) < 0) {
-				H5Pclose(fapl);
-				return H5I_INVALID_HID;
-			}
-		}
-
-		H5Pset_fclose_degree(fapl, H5F_CLOSE_SEMI);
-
-		// Convert s3:// URL to http(s):// URL for ROS3 VFD
-		std::string http_url = path;
-		if (path.rfind("s3://", 0) == 0 || path.rfind("s3a://", 0) == 0) {
-			size_t start = (path.rfind("s3://", 0) == 0) ? 5 : 6;
-			size_t slash = path.find('/', start);
-			std::string bucket = path.substr(start, slash - start);
-			std::string key = (slash != std::string::npos) ? path.substr(slash + 1) : "";
-
-			if (remote_config && !remote_config->s3_endpoint.empty()) {
-				// Custom endpoint (MinIO, etc.) - use path-style URL
-				// s3://bucket/key -> http(s)://endpoint/bucket/key
-				std::string protocol = remote_config->s3_use_ssl ? "https" : "http";
-				http_url = protocol + "://" + remote_config->s3_endpoint + "/" + bucket + "/" + key;
-			} else {
-				// Standard AWS S3 - use virtual-hosted style URL
-				// s3://bucket/key -> https://bucket.s3.region.amazonaws.com/key
-				std::string region = remote_config ? remote_config->s3_region : "us-east-1";
-				if (region.empty()) {
-					region = "us-east-1";
-				}
-				http_url = "https://" + bucket + ".s3." + region + ".amazonaws.com/" + key;
-			}
-		}
-
-		// Open file with ROS3 VFD
-		hid_t file = H5Fopen(http_url.c_str(), H5F_ACC_RDONLY, fapl);
-		H5Pclose(fapl);
-
-		return file;
-	}
-#endif
 
 	H5FileCache() = default;
 	~H5FileCache() = default;
