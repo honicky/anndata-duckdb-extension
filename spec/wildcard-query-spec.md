@@ -7,26 +7,26 @@ This specification outlines the implementation of wildcard (glob) pattern suppor
 ## Goals
 
 1. **Glob Pattern Support**: Enable wildcard patterns in file paths for all `anndata_scan_*` functions
-2. **Schema Harmonization**: Support both UNION (all columns) and INTERSECTION (common columns) modes
+2. **Schema Harmonization**: Support both INTERSECTION (default) and UNION modes
 3. **Source Tracking**: Add `_file_name` column to identify which file each row came from
 4. **Local & Remote Support**: Work with local files, S3, HTTP/HTTPS, and GCS paths
-5. **Performance**: Lazy file discovery and streaming reads to handle large file sets
+5. **Performance**: Projection pushdown critical for X/layers with tens of thousands of columns
 
 ## SQL Interface
 
 ### Basic Usage
 
 ```sql
--- Query all .h5ad files in a directory (union mode - default)
+-- Query all .h5ad files in a directory (intersection mode - default)
 SELECT * FROM anndata_scan_obs('data/*.h5ad');
 
--- Intersection mode - only columns present in ALL files
+-- Explicit intersection mode
 SELECT * FROM anndata_scan_obs('data/*.h5ad', schema_mode := 'intersection');
 
--- Explicit union mode
+-- Union mode - all columns, NULL for missing
 SELECT * FROM anndata_scan_obs('data/*.h5ad', schema_mode := 'union');
 
--- Multiple patterns with UNION
+-- Multiple patterns
 SELECT * FROM anndata_scan_obs(['samples_a/*.h5ad', 'samples_b/*.h5ad']);
 
 -- Remote files with wildcards (S3)
@@ -38,14 +38,14 @@ SELECT * FROM anndata_scan_obs('s3://bucket/project/*.h5ad');
 Support wildcards in all existing table functions:
 
 ```sql
-anndata_scan_obs(file_pattern, schema_mode := 'union')
-anndata_scan_var(file_pattern, schema_mode := 'union')
-anndata_scan_x(file_pattern, [var_name_column], schema_mode := 'union')
-anndata_scan_obsm(file_pattern, matrix_name, schema_mode := 'union')
-anndata_scan_varm(file_pattern, matrix_name, schema_mode := 'union')
-anndata_scan_obsp(file_pattern, matrix_name)
-anndata_scan_varp(file_pattern, matrix_name)
-anndata_scan_layers(file_pattern, layer_name, [var_name_column], schema_mode := 'union')
+anndata_scan_obs(file_pattern, schema_mode := 'intersection')
+anndata_scan_var(file_pattern, schema_mode := 'intersection')
+anndata_scan_x(file_pattern, [var_name_column], schema_mode := 'intersection')
+anndata_scan_obsm(file_pattern, matrix_name, schema_mode := 'intersection')
+anndata_scan_varm(file_pattern, matrix_name, schema_mode := 'intersection')
+anndata_scan_obsp(file_pattern, matrix_name)  -- Special handling required
+anndata_scan_varp(file_pattern, matrix_name)  -- Special handling required
+anndata_scan_layers(file_pattern, layer_name, [var_name_column], schema_mode := 'intersection')
 anndata_scan_uns(file_pattern)
 ```
 
@@ -64,7 +64,27 @@ SELECT * FROM anndata_scan_obs('data/*.h5ad') LIMIT 3;
 
 ## Schema Harmonization Modes
 
-### Union Mode (Default)
+### Intersection Mode (Default)
+
+- Include ONLY columns/genes present in ALL files
+- Ensures consistent schema across all results
+- Best for batch processing and reproducible analysis
+- Fails if no common columns exist
+
+```
+File A: obs_idx, cell_type, sample_id
+File B: obs_idx, cell_type, batch
+
+Intersection schema: _file_name, obs_idx, cell_type
+```
+
+**Rationale for Default**: Intersection is safer for analysis pipelines because:
+- Guarantees no NULL values from missing columns
+- Ensures consistent feature space for X matrix (critical for ML)
+- Matches typical scanpy/anndata concatenation behavior
+- Prevents silent data quality issues
+
+### Union Mode
 
 - Include ALL columns found across ALL files
 - Columns missing from a file are filled with NULL
@@ -79,17 +99,128 @@ Union schema: _file_name, obs_idx, cell_type, sample_id, batch
 (sample_id NULL for File B rows, batch NULL for File A rows)
 ```
 
-### Intersection Mode
+## Performance: Projection Pushdown for X and Layers
 
-- Include ONLY columns present in ALL files
-- Strict mode - fails if no common columns exist
-- Best for consistent batch processing
+### The Challenge
+
+X matrix and layers can have **tens of thousands of columns** (genes). Without projection pushdown:
+- Schema discovery would read all column metadata from all files
+- Scanning would read all genes even when query only needs a few
+- Memory usage would explode for multi-file queries
+
+### Solution: Lazy Schema + Projection Pushdown
+
+```cpp
+struct AnndataBindData {
+    // For X/layers: don't compute full intersection until we know projected columns
+    bool defer_schema_computation;
+
+    // Projected columns from query (set by DuckDB optimizer)
+    vector<column_t> projected_column_ids;
+
+    // Only compute intersection for projected columns
+    vector<string> projected_var_names;  // e.g., ["CD3D", "CD4", "CD8A"]
+};
+```
+
+### Implementation Strategy
+
+**Phase 1: Bind Time**
+1. Expand glob pattern to file list
+2. For obs/var: compute full intersection schema (small - hundreds of columns max)
+3. For X/layers: return placeholder schema with `_file_name`, `obs_idx`, `var_idx`, `var_name`, `value`
+4. Defer gene-level intersection until projection is known
+
+**Phase 2: Init Time (after projection pushdown)**
+1. Receive projected column IDs from DuckDB
+2. For X/layers with `var_name IN (...)` filter:
+   - Extract var_names from filter
+   - Compute intersection only for those genes
+   - Skip files missing any required genes (intersection mode)
+3. Build per-file var_idx mappings
+
+**Phase 3: Scan Time**
+1. Read only projected genes from each file
+2. Use existing sparse matrix optimizations
+3. Map var_idx to common intersection indices
+
+### Example: Efficient Gene Query
+
+```sql
+-- Only reads CD3D, CD4, CD8A from each file
+SELECT _file_name, obs_idx, var_name, value
+FROM anndata_scan_x('samples/*.h5ad', 'gene_symbols')
+WHERE var_name IN ('CD3D', 'CD4', 'CD8A');
+```
+
+**Execution Flow**:
+1. Bind: Glob expands to 10 files, defer X schema
+2. Optimizer: Pushes `var_name IN (...)` predicate
+3. Init: Check each file for CD3D, CD4, CD8A
+   - If intersection mode: skip files missing any gene
+   - Build var_idx mapping for each file
+4. Scan: Read only 3 genes per file using sparse optimization
+
+### Configuration
+
+```sql
+-- Force eager schema computation (useful for debugging)
+SET anndata_eager_schema = false;  -- default
+
+-- Maximum genes to include in automatic intersection
+SET anndata_max_intersection_genes = 50000;  -- default
+```
+
+## Pairwise Matrices (obsp/varp): Special Handling
+
+### The Problem
+
+obsp and varp store pairwise relationships between observations or variables:
+- `obsp['connectivities']` - cell-cell connectivity graph
+- `obsp['distances']` - cell-cell distance matrix
+
+When merging files:
+- **Cell IDs differ between files** - pairs are file-specific
+- **Cannot intersect pairs** - (cell_A_file1, cell_B_file1) ≠ (cell_A_file2, cell_B_file2)
+- **Union creates sparse chaos** - most pairs would be NULL
+
+### Solution: File-Scoped Pairs Only
+
+For obsp/varp, pairs are **always file-scoped**:
+
+```sql
+-- Each file's pairs returned separately, distinguished by _file_name
+SELECT * FROM anndata_scan_obsp('samples/*.h5ad', 'connectivities');
+-- Returns:
+-- _file_name    | obs_idx_i | obs_idx_j | value
+-- sample_a.h5ad | 0         | 5         | 0.95
+-- sample_a.h5ad | 0         | 12        | 0.87
+-- sample_b.h5ad | 0         | 3         | 0.92  -- Different cells!
+```
+
+### Behavior Specification
+
+1. **No schema_mode parameter** for obsp/varp - intersection/union doesn't apply
+2. **All files must have the named matrix** - error if missing
+3. **Pairs are file-local** - obs_idx/var_idx only meaningful within same _file_name
+4. **Joining requires file matching**:
+
+```sql
+-- Correct: join within same file
+SELECT p.*, o1.cell_type as type_i, o2.cell_type as type_j
+FROM anndata_scan_obsp('samples/*.h5ad', 'connectivities') p
+JOIN anndata_scan_obs('samples/*.h5ad') o1
+    ON p._file_name = o1._file_name AND p.obs_idx_i = o1.obs_idx
+JOIN anndata_scan_obs('samples/*.h5ad') o2
+    ON p._file_name = o2._file_name AND p.obs_idx_j = o2.obs_idx;
+```
+
+### Error Handling
 
 ```
-File A: obs_idx, cell_type, sample_id
-File B: obs_idx, cell_type, batch
-
-Intersection schema: _file_name, obs_idx, cell_type
+Error: Matrix 'connectivities' not found in file 'sample_c.h5ad'
+Files matched: sample_a.h5ad, sample_b.h5ad, sample_c.h5ad
+Hint: All files must contain the obsp matrix when using wildcards
 ```
 
 ## Implementation Architecture
@@ -137,25 +268,29 @@ struct AnndataBindData : public TableFunctionData {
     string original_pattern;            // Original glob pattern
     SchemaMode schema_mode;             // UNION or INTERSECTION
 
-    // Union schema (computed from all files)
-    vector<string> union_column_names;
-    vector<LogicalType> union_column_types;
+    // Schema (intersection or union)
+    vector<string> result_column_names;
+    vector<LogicalType> result_column_types;
 
-    // Per-file column mappings (union_col_idx -> file_col_idx, -1 if missing)
+    // Per-file column mappings (result_col_idx -> file_col_idx, -1 if missing)
     vector<vector<int>> file_column_mappings;
+
+    // For X/layers: deferred schema for projection pushdown
+    bool defer_var_intersection;
+    vector<string> projected_var_names;  // Set after filter pushdown
 
     // Other existing fields...
 };
 
 enum class SchemaMode {
-    UNION,
-    INTERSECTION
+    INTERSECTION,  // Default
+    UNION
 };
 ```
 
-### Phase 3: Schema Discovery
+### Phase 3: Schema Discovery with Projection Awareness
 
-**New Function**: `ComputeUnionSchema()`
+**New Function**: `ComputeSchema()`
 
 ```cpp
 struct SchemaInfo {
@@ -166,15 +301,23 @@ struct SchemaInfo {
 // Get schema from a single file
 SchemaInfo GetFileSchema(ClientContext &context, const string &path, ScanType type);
 
-// Compute union of schemas from multiple files
-SchemaInfo ComputeUnionSchema(const vector<SchemaInfo> &file_schemas);
-
-// Compute intersection of schemas
+// Compute intersection of schemas (default)
 SchemaInfo ComputeIntersectionSchema(const vector<SchemaInfo> &file_schemas);
 
-// Build column mapping for a file against union schema
-vector<int> BuildColumnMapping(const SchemaInfo &file_schema,
-                               const SchemaInfo &union_schema);
+// Compute union of schemas
+SchemaInfo ComputeUnionSchema(const vector<SchemaInfo> &file_schemas);
+
+// For X/layers: compute var intersection for specific genes only
+struct VarIntersection {
+    vector<string> common_var_names;
+    vector<vector<idx_t>> per_file_var_indices;  // Mapping to file-local indices
+};
+
+VarIntersection ComputeVarIntersection(
+    const vector<string> &file_paths,
+    const vector<string> &projected_var_names,  // Empty = all genes
+    SchemaMode mode
+);
 ```
 
 ### Phase 4: Multi-File Scanner State
@@ -195,6 +338,9 @@ struct AnndataGlobalState : public GlobalTableFunctionState {
     // Column mapping for current file
     vector<int> current_column_mapping;
 
+    // For X/layers: var_idx mapping for current file
+    vector<idx_t> current_var_mapping;  // result_var_idx -> file_var_idx
+
     // Source tracking
     string current_file_name;
 
@@ -205,39 +351,26 @@ struct AnndataGlobalState : public GlobalTableFunctionState {
 };
 ```
 
-### Phase 5: Scan Implementation Changes
+### Phase 5: Filter Pushdown for X/Layers
 
-**Modified Scan Loop**:
+**Hook into DuckDB's filter pushdown**:
 
 ```cpp
-void AnndataScanner::MultiFileScan(ClientContext &context,
-                                   TableFunctionInput &input,
-                                   DataChunk &output) {
-    auto &bind_data = input.bind_data->Cast<AnndataBindData>();
-    auto &global_state = input.global_state->Cast<AnndataGlobalState>();
+// In table function registration
+TableFunction x_func("anndata_scan_x", ...);
+x_func.filter_pushdown = true;
+x_func.filter_prune = true;
 
-    while (output.size() < STANDARD_VECTOR_SIZE) {
-        // Check if current file exhausted
-        if (global_state.current_row_in_file >= global_state.rows_in_current_file) {
-            if (!global_state.AdvanceToNextFile(bind_data, context)) {
-                break;  // No more files
-            }
+// Filter extraction in InitGlobal
+void ExtractVarNameFilter(TableFunctionInitInput &input,
+                          AnndataBindData &bind_data) {
+    // Look for: WHERE var_name IN ('gene1', 'gene2', ...)
+    // Or: WHERE var_name = 'gene1'
+    for (auto &filter : input.filters) {
+        if (filter.column_name == "var_name") {
+            // Extract literal values
+            bind_data.projected_var_names = ExtractStringLiterals(filter);
         }
-
-        // Read chunk from current file
-        idx_t rows_to_read = MinValue(
-            STANDARD_VECTOR_SIZE - output.size(),
-            global_state.rows_in_current_file - global_state.current_row_in_file
-        );
-
-        // Read into temporary chunk
-        DataChunk file_chunk;
-        ReadFromCurrentFile(global_state, file_chunk, rows_to_read);
-
-        // Map columns to union schema and append
-        MapAndAppendChunk(bind_data, global_state, file_chunk, output);
-
-        global_state.current_row_in_file += rows_to_read;
     }
 }
 ```
@@ -259,13 +392,13 @@ src/
 
 ```sql
 -- Set default schema mode
-SET anndata_multi_file_schema_mode = 'union';  -- or 'intersection'
+SET anndata_multi_file_schema_mode = 'intersection';  -- default
 
 -- Control parallel file processing (future)
 SET anndata_parallel_file_reads = 4;
 
--- Fail fast on schema mismatch (intersection mode)
-SET anndata_strict_schema = true;
+-- Force eager schema computation
+SET anndata_eager_schema = false;  -- default: lazy for X/layers
 ```
 
 ## Error Handling
@@ -282,6 +415,14 @@ Files checked: sample_a.h5ad, sample_b.h5ad
 Hint: Use schema_mode := 'union' to include all columns
 ```
 
+### No Common Genes (Intersection Mode for X)
+```
+Error: No common genes found across files for intersection.
+Gene 'CD3D' missing from: sample_c.h5ad
+Files checked: sample_a.h5ad, sample_b.h5ad, sample_c.h5ad
+Hint: Use schema_mode := 'union' or filter to genes present in all files
+```
+
 ### Type Mismatch for Same Column
 ```
 Warning: Column 'batch' has different types across files:
@@ -290,11 +431,11 @@ Warning: Column 'batch' has different types across files:
 Using VARCHAR as common type.
 ```
 
-### Missing Required Component
+### Missing obsp/varp Matrix
 ```
-Error: Matrix 'X_umap' not found in file 'sample_c.h5ad'
+Error: Matrix 'connectivities' not found in file 'sample_c.h5ad'
 Files matched: sample_a.h5ad, sample_b.h5ad, sample_c.h5ad
-Hint: Check that all files contain the required obsm matrix
+Hint: All files must contain the obsp/varp matrix when using wildcards
 ```
 
 ## Implementation Phases
@@ -302,32 +443,37 @@ Hint: Check that all files contain the required obsm matrix
 ### Phase 1: Local Glob Support (Core)
 1. Implement `GlobHandler` for local file pattern expansion
 2. Modify `AnndataBindData` to support file lists
-3. Add `schema_mode` parameter to all scan functions
-4. Implement basic union schema computation
+3. Add `schema_mode` parameter (default: intersection)
+4. Implement intersection schema computation for obs/var
 5. Add `_file_name` column to output
 
 ### Phase 2: Schema Harmonization
-1. Implement intersection mode
+1. Implement union mode as alternative
 2. Add type coercion for mismatched column types
 3. Build per-file column mapping
 4. Handle NULL filling for union mode
 
-### Phase 3: Remote Glob Support
+### Phase 3: X/Layers Projection Pushdown
+1. Defer var intersection until filter pushdown
+2. Extract var_name predicates from filters
+3. Compute var intersection for projected genes only
+4. Build per-file var_idx mappings
+
+### Phase 4: obsp/varp Handling
+1. Implement file-scoped pair semantics
+2. Require matrix presence in all files
+3. Document join patterns for cross-file analysis
+
+### Phase 5: Remote Glob Support
 1. Implement S3 prefix listing for glob patterns
 2. Handle S3 credentials for listing operations
 3. Add GCS support (if feasible)
 4. Document HTTP limitations (no glob support)
 
-### Phase 4: Performance Optimization
-1. Parallel schema discovery
-2. File handle pooling for multi-file access
-3. Statistics aggregation for query planning
-4. Lazy schema discovery option
-
-### Phase 5: Testing & Documentation
+### Phase 6: Testing & Documentation
 1. Unit tests for glob expansion
 2. Integration tests for schema modes
-3. Performance benchmarks with many files
+3. Performance benchmarks with many files/genes
 4. User documentation and examples
 
 ## Testing Strategy
@@ -344,10 +490,16 @@ TEST_CASE("Local glob expansion") {
 }
 
 TEST_CASE("Schema harmonization") {
-    // Test union of identical schemas
-    // Test union with different columns
-    // Test intersection mode
+    // Test intersection of identical schemas
+    // Test intersection with different columns
+    // Test union mode
     // Test type coercion
+}
+
+TEST_CASE("Var intersection with projection") {
+    // Test gene filter pushdown
+    // Test missing gene handling
+    // Test large gene list performance
 }
 ```
 
@@ -356,11 +508,19 @@ TEST_CASE("Schema harmonization") {
 ```sql
 -- test/sql/multi_file_scan.test
 
-# Basic wildcard query
+# Basic wildcard query (intersection default)
 query I
 SELECT COUNT(DISTINCT _file_name) FROM anndata_scan_obs('data/samples/*.h5ad');
 ----
 3
+
+# Intersection mode has common columns only
+query I
+SELECT COUNT(*) FROM (
+    DESCRIBE SELECT * FROM anndata_scan_obs('data/samples/*.h5ad')
+);
+----
+8
 
 # Union mode includes all columns
 query I
@@ -370,21 +530,18 @@ SELECT COUNT(*) FROM (
 ----
 15
 
-# Intersection mode has fewer columns
+# X query with gene filter - projection pushdown
 query I
-SELECT COUNT(*) FROM (
-    DESCRIBE SELECT * FROM anndata_scan_obs('data/samples/*.h5ad', schema_mode := 'intersection')
-);
+SELECT COUNT(*) FROM anndata_scan_x('data/samples/*.h5ad', 'gene_symbols')
+WHERE var_name IN ('CD3D', 'CD4', 'CD8A');
 ----
-8
+9000
 
-# _file_name is always first column
-query T
-SELECT column_name FROM (
-    DESCRIBE SELECT * FROM anndata_scan_obs('data/samples/*.h5ad')
-) LIMIT 1;
+# obsp returns file-scoped pairs
+query I
+SELECT COUNT(DISTINCT _file_name) FROM anndata_scan_obsp('data/samples/*.h5ad', 'connectivities');
 ----
-_file_name
+3
 ```
 
 ## Compatibility Notes
@@ -393,7 +550,7 @@ _file_name
 
 - Single file paths continue to work unchanged
 - No `_file_name` column added for single-file queries
-- Default schema_mode is 'union' for intuitive behavior
+- Default schema_mode is 'intersection' for safe batch processing
 
 ### Breaking Changes
 
@@ -444,10 +601,10 @@ GROUP BY _file_name, cell_type
 ORDER BY sample, n_cells DESC;
 ```
 
-### Batch Integration
+### Efficient Gene Query with Projection Pushdown
 
 ```sql
--- Combine expression data from multiple experiments
+-- Only reads 3 genes from each file (projection pushdown)
 SELECT
     _file_name as experiment,
     o.cell_type,
@@ -463,14 +620,33 @@ GROUP BY _file_name, o.cell_type, x.var_name;
 ### Quality Control Across Datasets
 
 ```sql
--- Check QC metrics across all files
+-- Check QC metrics across all files (intersection of common columns)
 SELECT
     _file_name,
     COUNT(*) as n_cells,
     AVG(n_genes_by_counts) as avg_genes,
-    AVG(total_counts) as avg_counts,
-    AVG(pct_counts_mt) as avg_mt_pct
+    AVG(total_counts) as avg_counts
 FROM anndata_scan_obs('project/**/*.h5ad')
 GROUP BY _file_name
 ORDER BY n_cells DESC;
+```
+
+### obsp Analysis Within Files
+
+```sql
+-- Analyze connectivity patterns per file
+SELECT
+    p._file_name,
+    o1.cell_type as type_i,
+    o2.cell_type as type_j,
+    AVG(p.value) as avg_connectivity,
+    COUNT(*) as n_connections
+FROM anndata_scan_obsp('samples/*.h5ad', 'connectivities') p
+JOIN anndata_scan_obs('samples/*.h5ad') o1
+    ON p._file_name = o1._file_name AND p.obs_idx_i = o1.obs_idx
+JOIN anndata_scan_obs('samples/*.h5ad') o2
+    ON p._file_name = o2._file_name AND p.obs_idx_j = o2.obs_idx
+WHERE p.value > 0.5
+GROUP BY p._file_name, o1.cell_type, o2.cell_type
+ORDER BY avg_connectivity DESC;
 ```
