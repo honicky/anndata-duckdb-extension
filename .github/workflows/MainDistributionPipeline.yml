@@ -87,12 +87,10 @@ jobs:
           echo "=== Contents of /tmp/extension ==="
           ls -la /tmp/extension/
 
-          # Download DuckDB CLI if not already installed
-          if ! command -v duckdb &> /dev/null && [ ! -x ./duckdb ]; then
-            wget -q https://github.com/duckdb/duckdb/releases/download/v1.4.3/duckdb_cli-linux-amd64.zip
-            unzip -o -q duckdb_cli-linux-amd64.zip
-            chmod +x duckdb
-          fi
+          # Download DuckDB CLI to /tmp to avoid conflict with duckdb/ submodule
+          wget -q https://github.com/duckdb/duckdb/releases/download/v1.4.3/duckdb_cli-linux-amd64.zip -O /tmp/duckdb_cli.zip
+          unzip -o -q /tmp/duckdb_cli.zip -d /tmp/duckdb-cli
+          chmod +x /tmp/duckdb-cli/duckdb
 
           # Setup extension directory (no gunzip needed - file is not compressed)
           mkdir -p ~/.duckdb/extensions/v1.4.3/linux_amd64
@@ -107,7 +105,7 @@ jobs:
         run: |
           # Run S3 tests
           echo "=== Running S3 Tests ==="
-          ./duckdb -unsigned -c "
+          /tmp/duckdb-cli/duckdb -unsigned -c "
             LOAD anndata;
             LOAD httpfs;
             CREATE SECRET minio_secret (
@@ -126,7 +124,7 @@ jobs:
 
           # Run HTTP tests
           echo "=== Running HTTP Tests ==="
-          ./duckdb -unsigned -c "
+          /tmp/duckdb-cli/duckdb -unsigned -c "
             LOAD anndata;
             ATTACH 'http://localhost:9000/data/test_small.h5ad' AS httpdata (TYPE ANNDATA);
             SELECT COUNT(*) FROM httpdata.obs;
