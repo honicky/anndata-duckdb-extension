@@ -1,26 +1,74 @@
-# Demo Video
+# Demo Videos
 
-This directory contains the VHS tape script for generating the demo video.
+This directory contains VHS tape scripts for generating demo videos showcasing the AnnData DuckDB extension.
 
 ## Prerequisites
 
 - [VHS](https://github.com/charmbracelet/vhs) installed (`brew install vhs`)
 - DuckDB installed and in PATH
-- The h5ad file at `/Users/rj/personal/GenePT-tools/data/5a6c74b9-da1c-4cef-8fdc-07c7a90089d7.h5ad`
 
-## Generate the Video
+## Available Demos
 
+### 1. Local File Demo (`demo-local.tape`)
+
+Demonstrates working with local AnnData files:
+- Installing the anndata extension
+- Attaching a local .h5ad file
+- Exploring tables and schemas
+- Querying cell metadata and gene expression
+- Joining with external CSV data from HTTP
+
+**Prerequisites:**
+- A local h5ad file at `/Users/rj/personal/GenePT-tools/data/5a6c74b9-da1c-4cef-8fdc-07c7a90089d7.h5ad`
+
+**Generate:**
 ```bash
 cd demo
-vhs demo.tape
+vhs demo-local.tape
 ```
 
-This will create `demo.mp4` in the current directory.
+This will create `demo-local.mp4`.
+
+### 2. Remote File Demo (`demo-remote.tape`)
+
+Demonstrates querying AnnData files directly from HTTP and S3:
+- Installing httpfs extension for remote file access
+- Using DuckDB's `.timer` to measure query performance
+- Attaching .h5ad files from HTTP URLs
+- Attaching .h5ad files from S3 buckets
+- Querying multiple remote datasets simultaneously
+- Comparing data across different sources
+
+**Prerequisites:**
+- Internet connection (no local files needed!)
+- Files used:
+  - HTTP: `minilung.h5ad` from CELLxGENE
+  - S3: `pancreas/dataset.h5ad` from OpenProblems test data
+
+**Generate:**
+```bash
+cd demo
+vhs demo-remote.tape
+```
+
+This will create `demo-remote.mp4`.
 
 ## Customization
 
-Edit `demo.tape` to adjust:
+Edit the `.tape` files to adjust:
 - `Set FontSize` - text size
 - `Set Width/Height` - video dimensions
 - `Sleep` durations - pause between commands
 - `Type@<speed>` - typing speed for specific commands
+
+## Remote File URLs Used
+
+The remote demo uses these publicly accessible files:
+
+**HTTP:**
+- CELLxGENE minilung: https://cellxgene-annotation-public.s3.us-west-2.amazonaws.com/cell_type/tutorial/minilung.h5ad (~20MB)
+
+**S3:**
+- OpenProblems pancreas test data: s3://openproblems-bio/resources_test/common/pancreas/dataset.h5ad (small test file)
+
+These files are intentionally small to keep the demo fast and accessible.
