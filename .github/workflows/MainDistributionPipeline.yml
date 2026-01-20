@@ -78,7 +78,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: linux_amd64
+          name: anndata-v1.4.3-extension-linux_amd64
           path: /tmp/extension
 
       - name: Setup DuckDB with extension
@@ -90,13 +90,13 @@ jobs:
           # Download DuckDB CLI if not already installed
           if ! command -v duckdb &> /dev/null && [ ! -x ./duckdb ]; then
             wget -q https://github.com/duckdb/duckdb/releases/download/v1.4.3/duckdb_cli-linux-amd64.zip
-            unzip -q duckdb_cli-linux-amd64.zip
+            unzip -o -q duckdb_cli-linux-amd64.zip
             chmod +x duckdb
           fi
 
-          # Setup extension directory
+          # Setup extension directory (no gunzip needed - file is not compressed)
           mkdir -p ~/.duckdb/extensions/v1.4.3/linux_amd64
-          gunzip -c /tmp/extension/anndata.duckdb_extension.gz > ~/.duckdb/extensions/v1.4.3/linux_amd64/anndata.duckdb_extension
+          cp /tmp/extension/anndata.duckdb_extension ~/.duckdb/extensions/v1.4.3/linux_amd64/
 
       - name: Run remote access tests
         env:
