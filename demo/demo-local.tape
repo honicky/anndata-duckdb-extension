@@ -1,7 +1,7 @@
-# AnnData DuckDB Extension Demo
-# Run with: vhs demo/demo.tape
+# AnnData DuckDB Extension Demo - Local Files
+# Run with: vhs demo/demo-local.tape
 
-Output demo.mp4
+Output demo-local.mp4
 
 # Settings for readability on LinkedIn
 Set Shell bash
@@ -27,9 +27,9 @@ Sleep 1s
 # Attach file
 Type "-- Attach an AnnData file like a database"
 Enter
-Type@5ms "ATTACH 'anndata:5a6c74b9-da1c-4cef-8fdc-07c7a90089d7.h5ad'"
+Type@5ms "ATTACH '5a6c74b9-da1c-4cef-8fdc-07c7a90089d7.h5ad'"
 Enter
-Type "  AS ad;"
+Type "  AS ad (TYPE ANNDATA);"
 Enter
 Sleep 3s
 
