@@ -107,6 +107,7 @@ jobs:
           echo "=== Running S3 Tests ==="
           /tmp/duckdb-cli/duckdb -unsigned -c "
             LOAD anndata;
+            INSTALL httpfs;
             LOAD httpfs;
             CREATE SECRET minio_secret (
               TYPE S3,
@@ -126,6 +127,8 @@ jobs:
           echo "=== Running HTTP Tests ==="
           /tmp/duckdb-cli/duckdb -unsigned -c "
             LOAD anndata;
+            INSTALL httpfs;
+            LOAD httpfs;
             ATTACH 'http://localhost:9000/data/test_small.h5ad' AS httpdata (TYPE ANNDATA);
             SELECT COUNT(*) FROM httpdata.obs;
             SELECT COUNT(*) FROM httpdata.var;
