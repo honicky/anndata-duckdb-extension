@@ -1,3 +1,10 @@
+// Prevent Windows min/max macros from conflicting with std::min/std::max
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#endif
+
 #include "h5fd_http.hpp"
 #include <curl/curl.h>
 #include <cstring>
@@ -12,7 +19,8 @@
 #include <openssl/sha.h>
 
 // C++11 compatibility: make_unique not available until C++14
-#if __cplusplus < 201402L
+// Check both __cplusplus and _MSVC_LANG (MSVC doesn't always set __cplusplus correctly)
+#if (__cplusplus < 201402L) && (!defined(_MSVC_LANG) || _MSVC_LANG < 201402L)
 namespace std {
 template <typename T, typename... Args>
 std::unique_ptr<T> make_unique(Args &&...args) {
