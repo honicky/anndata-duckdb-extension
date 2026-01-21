@@ -15,20 +15,24 @@ n_obs = 50
 n_vars = 20
 
 # Create compound dtype for obs
-obs_dtype = np.dtype([
-    ('_index', 'S32'),      # Cell ID (fixed-length string)
-    ('n_genes', '<i4'),     # Number of genes detected (int32)
-    ('total_counts', '<f8'), # Total UMI counts (float64)
-    ('pct_mito', '<f4'),    # Percent mitochondrial (float32)
-])
+obs_dtype = np.dtype(
+    [
+        ('_index', 'S32'),  # Cell ID (fixed-length string)
+        ('n_genes', '<i4'),  # Number of genes detected (int32)
+        ('total_counts', '<f8'),  # Total UMI counts (float64)
+        ('pct_mito', '<f4'),  # Percent mitochondrial (float32)
+    ]
+)
 
 # Create compound dtype for var
-var_dtype = np.dtype([
-    ('_index', 'S32'),      # Gene ID (fixed-length string)
-    ('gene_name', 'S32'),   # Gene symbol (fixed-length string)
-    ('n_cells', '<i4'),     # Number of cells expressing (int32)
-    ('mean_expr', '<f8'),   # Mean expression (float64)
-])
+var_dtype = np.dtype(
+    [
+        ('_index', 'S32'),  # Gene ID (fixed-length string)
+        ('gene_name', 'S32'),  # Gene symbol (fixed-length string)
+        ('n_cells', '<i4'),  # Number of cells expressing (int32)
+        ('mean_expr', '<f8'),  # Mean expression (float64)
+    ]
+)
 
 with h5py.File(output_path, "w") as f:
     # X matrix (dense)

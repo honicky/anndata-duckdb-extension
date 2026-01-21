@@ -253,8 +253,8 @@ void H5ReaderMultithreaded::ReadCompoundDatasetColumn(const std::string &path, c
 
 		// Read the entire compound data (we'll extract the specific field)
 		std::vector<char> buffer(count * compound_size);
-		herr_t status = H5Dread(dataset.get(), file_dtype.get(), mem_space.get(), file_space.get(), H5P_DEFAULT,
-		                        buffer.data());
+		herr_t status =
+		    H5Dread(dataset.get(), file_dtype.get(), mem_space.get(), file_space.get(), H5P_DEFAULT, buffer.data());
 
 		if (status < 0) {
 			H5Tclose(member_type);

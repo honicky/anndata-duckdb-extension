@@ -228,8 +228,8 @@ private:
 	std::vector<ColumnInfo> GetCompoundDatasetColumns(const std::string &path, const std::string &idx_col_name);
 
 	// Read a column from a compound dataset
-	void ReadCompoundDatasetColumn(const std::string &path, const std::string &column_name, Vector &result, idx_t offset,
-	                               idx_t count);
+	void ReadCompoundDatasetColumn(const std::string &path, const std::string &column_name, Vector &result,
+	                               idx_t offset, idx_t count);
 
 	// Cache for categorical mappings
 	struct CategoricalCache {

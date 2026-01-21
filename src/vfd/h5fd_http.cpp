@@ -323,7 +323,6 @@ public:
 			config_ = *config;
 		}
 
-
 		// Set up CURL options
 		curl_easy_setopt(curl_, CURLOPT_URL, url_.c_str());
 		curl_easy_setopt(curl_, CURLOPT_NOBODY, 1L);
@@ -371,8 +370,7 @@ public:
 				size_t region_start = s3_pos + 4; // Skip ".s3."
 				size_t region_end = new_url.find(".amazonaws.com", region_start);
 				if (region_end != std::string::npos) {
-					new_url = new_url.substr(0, region_start) + s3_redirect_region_ +
-					          new_url.substr(region_end);
+					new_url = new_url.substr(0, region_start) + s3_redirect_region_ + new_url.substr(region_end);
 
 					// Update URL and retry
 					url_ = new_url;
@@ -441,7 +439,6 @@ public:
 		if (file_size_ == 0) {
 			return false;
 		}
-
 
 		// Reset for future GET requests
 		curl_easy_setopt(curl_, CURLOPT_NOBODY, 0L);
