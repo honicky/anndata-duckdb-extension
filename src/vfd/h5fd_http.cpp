@@ -357,6 +357,41 @@ public:
 
 		long http_code = 0;
 		curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &http_code);
+
+		// Handle S3 region redirect (301 with x-amz-bucket-region header)
+		// AWS S3 returns 301 without Location header when bucket is in wrong region
+		// The correct region is provided in x-amz-bucket-region header
+		if (http_code == 301 && !s3_redirect_region_.empty()) {
+			// Reconstruct URL with the correct region
+			// Current URL format: https://bucket.s3.region.amazonaws.com/key
+			// Need to replace the region part
+			std::string new_url = url_;
+			size_t s3_pos = new_url.find(".s3.");
+			if (s3_pos != std::string::npos) {
+				size_t region_start = s3_pos + 4; // Skip ".s3."
+				size_t region_end = new_url.find(".amazonaws.com", region_start);
+				if (region_end != std::string::npos) {
+					new_url = new_url.substr(0, region_start) + s3_redirect_region_ +
+					          new_url.substr(region_end);
+
+					// Update URL and retry
+					url_ = new_url;
+					s3_redirect_region_.clear(); // Clear to avoid infinite loops
+					file_size_ = 0;              // Reset file size
+
+					curl_easy_setopt(curl_, CURLOPT_URL, url_.c_str());
+
+					// Retry the HEAD request
+					res = curl_easy_perform(curl_);
+					if (res != CURLE_OK) {
+						return false;
+					}
+
+					curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &http_code);
+				}
+			}
+		}
+
 		if (http_code >= 400) {
 			return false;
 		}
@@ -516,6 +551,20 @@ private:
 		if (header.rfind("Accept-Ranges:", 0) == 0 || header.rfind("accept-ranges:", 0) == 0) {
 			if (header.find("bytes") != std::string::npos) {
 				client->supports_range_ = true;
+			}
+		}
+
+		// Parse x-amz-bucket-region for S3 region redirects
+		if (header.rfind("x-amz-bucket-region:", 0) == 0) {
+			size_t pos = header.find(':');
+			if (pos != std::string::npos) {
+				std::string region = header.substr(pos + 1);
+				// Trim whitespace and newlines
+				size_t start = region.find_first_not_of(" \t\r\n");
+				size_t end = region.find_last_not_of(" \t\r\n");
+				if (start != std::string::npos && end != std::string::npos) {
+					client->s3_redirect_region_ = region.substr(start, end - start + 1);
+				}
 			}
 		}
 
@@ -743,6 +792,7 @@ private:
 	H5FD_http_fapl_t config_;
 	uint64_t file_size_;
 	bool supports_range_ = false;
+	std::string s3_redirect_region_; // Captured from x-amz-bucket-region header on 301
 
 	// LRU block cache
 	BlockCache cache_;
