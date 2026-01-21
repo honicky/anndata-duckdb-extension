@@ -360,13 +360,44 @@ public:
 			return false;
 		}
 
-		// Fallback: If header callback didn't capture file_size_, get it from CURL directly
+		// Fallback 1: If header callback didn't capture file_size_, get it from CURL directly
 		// This can happen with HTTP/2 through proxies where header delivery differs
 		if (file_size_ == 0) {
 			curl_off_t content_length = -1;
 			curl_easy_getinfo(curl_, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &content_length);
 			if (content_length > 0) {
 				file_size_ = static_cast<uint64_t>(content_length);
+			}
+		}
+
+		// Fallback 2: If still no file size, try a small range request
+		// The Content-Range header in the response will contain the total file size
+		if (file_size_ == 0) {
+			// Reset NOBODY for GET request
+			curl_easy_setopt(curl_, CURLOPT_NOBODY, 0L);
+
+			// Request just the first byte
+			curl_easy_setopt(curl_, CURLOPT_RANGE, "0-0");
+
+			// We need a write callback to consume the single byte
+			std::vector<uint8_t> dummy_buffer;
+			curl_easy_setopt(curl_, CURLOPT_WRITEFUNCTION, WriteCallback);
+			curl_easy_setopt(curl_, CURLOPT_WRITEDATA, &dummy_buffer);
+
+			// HeaderCallback is still set and will parse Content-Range
+			res = curl_easy_perform(curl_);
+
+			// Clear range for future requests
+			curl_easy_setopt(curl_, CURLOPT_RANGE, nullptr);
+
+			if (res != CURLE_OK) {
+				return false;
+			}
+
+			// Check response code (206 Partial Content is expected)
+			curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &http_code);
+			if (http_code != 206 && http_code != 200) {
+				return false;
 			}
 		}
 
@@ -443,7 +474,31 @@ private:
 		if (header.rfind("Content-Length:", 0) == 0 || header.rfind("content-length:", 0) == 0) {
 			size_t pos = header.find(':');
 			if (pos != std::string::npos && client->file_size_ == 0) {
-				client->file_size_ = std::stoull(header.substr(pos + 1));
+				try {
+					client->file_size_ = std::stoull(header.substr(pos + 1));
+				} catch (...) {
+					// Ignore parse errors
+				}
+			}
+		}
+
+		// Parse Content-Range header (format: "bytes start-end/total" or "bytes start-end/*")
+		// This gives us the total file size even from range requests
+		if (header.rfind("Content-Range:", 0) == 0 || header.rfind("content-range:", 0) == 0) {
+			size_t slash_pos = header.find('/');
+			if (slash_pos != std::string::npos && slash_pos + 1 < header.size()) {
+				std::string total_str = header.substr(slash_pos + 1);
+				// Skip if unknown size (indicated by *)
+				if (total_str[0] != '*') {
+					try {
+						uint64_t total_size = std::stoull(total_str);
+						if (total_size > 0) {
+							client->file_size_ = total_size;
+						}
+					} catch (...) {
+						// Ignore parse errors
+					}
+				}
 			}
 		}
 
