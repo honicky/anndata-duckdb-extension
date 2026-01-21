@@ -17,7 +17,6 @@ namespace duckdb {
 H5ReaderMultithreaded::H5ReaderMultithreaded(const std::string &file_path,
                                              const H5FileCache::RemoteConfig *remote_config)
     : file_path(file_path) {
-	fprintf(stderr, "[HDF5 DEBUG] Creating H5ReaderMultithreaded for: %s\n", file_path.c_str());
 
 	// Initialize HDF5 library and set up thread safety
 	// Use a function-level static to ensure thread-safe initialization (C++11 guarantees this)
@@ -45,15 +44,11 @@ H5ReaderMultithreaded::H5ReaderMultithreaded(const std::string &file_path,
 
 	// Get shared file handle from cache
 	try {
-		fprintf(stderr, "[HDF5 DEBUG] Opening file via H5FileCache::Open\n");
 		file_handle = H5FileCache::Open(file_path, remote_config);
 		if (!file_handle || *file_handle < 0) {
-			fprintf(stderr, "[HDF5 DEBUG] Failed to get valid file handle\n");
 			throw IOException("Failed to get valid file handle from cache");
 		}
-		fprintf(stderr, "[HDF5 DEBUG] File opened successfully, handle = %lld\n", (long long)*file_handle);
 	} catch (const std::exception &e) {
-		fprintf(stderr, "[HDF5 DEBUG] Exception opening file: %s\n", e.what());
 		throw IOException("Failed to open HDF5 file " + file_path + ": " + std::string(e.what()));
 	}
 }
@@ -67,15 +62,12 @@ H5ReaderMultithreaded::~H5ReaderMultithreaded() {
 bool H5ReaderMultithreaded::IsGroupPresent(const std::string &group_name) {
 	bool link_exists = H5LinkExists(*file_handle, group_name);
 	if (!link_exists) {
-		fprintf(stderr, "[HDF5 DEBUG] IsGroupPresent(%s): link does not exist\n", group_name.c_str());
 		return false;
 	}
 
 	// Check if it's actually a group (not a dataset)
 	H5O_type_t obj_type = H5GetObjectType(*file_handle, group_name);
 	bool is_group = (obj_type == H5O_TYPE_GROUP);
-	fprintf(stderr, "[HDF5 DEBUG] IsGroupPresent(%s): link exists, type=%d, is_group=%s\n",
-	        group_name.c_str(), static_cast<int>(obj_type), is_group ? "yes" : "no");
 	return is_group;
 }
 
@@ -402,25 +394,10 @@ LogicalType H5ReaderMultithreaded::H5TypeToDuckDBType(hid_t h5_type) {
 	}
 }
 
-// Debug helper to list root group contents
-static herr_t debug_iterate_callback(hid_t group_id, const char *name, const H5L_info_t *info, void *op_data) {
-	(void)group_id;
-	(void)op_data;
-	fprintf(stderr, "[HDF5 DEBUG]   Root contains: '%s' (link_type=%d)\n", name, static_cast<int>(info->type));
-	return 0;
-}
-
 // Check if file is valid AnnData format
 bool H5ReaderMultithreaded::IsValidAnnData() {
 	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
 	auto h5_lock = H5GlobalLock::Acquire();
-
-	fprintf(stderr, "[HDF5 DEBUG] IsValidAnnData() checking file structure...\n");
-
-	// List root group contents for debugging
-	fprintf(stderr, "[HDF5 DEBUG] Listing root group contents:\n");
-	herr_t iter_status = H5Literate(*file_handle, H5_INDEX_NAME, H5_ITER_NATIVE, nullptr, debug_iterate_callback, nullptr);
-	fprintf(stderr, "[HDF5 DEBUG] H5Literate returned: %d\n", static_cast<int>(iter_status));
 
 	// Check for required objects: /obs, /var, and /X
 	// Note: In newer AnnData format, obs/var are Groups (with encoding-type=dataframe)
@@ -428,16 +405,12 @@ bool H5ReaderMultithreaded::IsValidAnnData() {
 	// So we accept either Groups OR Datasets for obs/var
 
 	bool has_obs = H5LinkExists(*file_handle, "/obs");
-	fprintf(stderr, "[HDF5 DEBUG]   /obs link exists: %s\n", has_obs ? "yes" : "no");
 
 	bool has_var = H5LinkExists(*file_handle, "/var");
-	fprintf(stderr, "[HDF5 DEBUG]   /var link exists: %s\n", has_var ? "yes" : "no");
 
 	bool has_X = H5LinkExists(*file_handle, "/X");
-	fprintf(stderr, "[HDF5 DEBUG]   /X link exists: %s\n", has_X ? "yes" : "no");
 
 	bool is_valid = has_obs && has_var && has_X;
-	fprintf(stderr, "[HDF5 DEBUG] IsValidAnnData() result: %s\n", is_valid ? "valid" : "INVALID");
 
 	return is_valid;
 }
@@ -618,12 +591,10 @@ std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetObsColu
 
 	// Check if /obs is a compound dataset (older AnnData format)
 	if (IsCompoundDataset("/obs")) {
-		fprintf(stderr, "[HDF5 DEBUG] GetObsColumns: /obs is a compound dataset (older format)\n");
 		return GetCompoundDatasetColumns("/obs", "obs_idx");
 	}
 
 	// Newer format: /obs is a group with separate datasets per column
-	fprintf(stderr, "[HDF5 DEBUG] GetObsColumns: /obs is a group (newer format)\n");
 
 	std::vector<ColumnInfo> columns;
 	std::unordered_set<std::string> seen_names;
@@ -713,12 +684,10 @@ std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetVarColu
 
 	// Check if /var is a compound dataset (older AnnData format)
 	if (IsCompoundDataset("/var")) {
-		fprintf(stderr, "[HDF5 DEBUG] GetVarColumns: /var is a compound dataset (older format)\n");
 		return GetCompoundDatasetColumns("/var", "var_idx");
 	}
 
 	// Newer format: /var is a group with separate datasets per column
-	fprintf(stderr, "[HDF5 DEBUG] GetVarColumns: /var is a group (newer format)\n");
 
 	std::vector<ColumnInfo> columns;
 	std::unordered_set<std::string> seen_names;

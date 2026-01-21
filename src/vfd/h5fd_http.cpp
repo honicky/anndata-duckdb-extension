@@ -323,7 +323,6 @@ public:
 			config_ = *config;
 		}
 
-		fprintf(stderr, "[HTTP DEBUG] Opening URL: %s\n", url_.c_str());
 
 		// Set up CURL options
 		curl_easy_setopt(curl_, CURLOPT_URL, url_.c_str());
@@ -345,7 +344,6 @@ public:
 		}
 
 		// Perform HEAD request to get file size
-		fprintf(stderr, "[HTTP DEBUG] Performing HEAD request...\n");
 		CURLcode res = curl_easy_perform(curl_);
 
 		if (headers) {
@@ -354,25 +352,20 @@ public:
 		}
 
 		if (res != CURLE_OK) {
-			fprintf(stderr, "[HTTP DEBUG] HEAD request failed: %s\n", curl_easy_strerror(res));
 			return false;
 		}
 
 		long http_code = 0;
 		curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &http_code);
-		fprintf(stderr, "[HTTP DEBUG] HEAD response code: %ld, file_size after HEAD: %llu\n", http_code, (unsigned long long)file_size_);
 		if (http_code >= 400) {
-			fprintf(stderr, "[HTTP DEBUG] HEAD request returned error code %ld\n", http_code);
 			return false;
 		}
 
 		// Fallback 1: If header callback didn't capture file_size_, get it from CURL directly
 		// This can happen with HTTP/2 through proxies where header delivery differs
 		if (file_size_ == 0) {
-			fprintf(stderr, "[HTTP DEBUG] Fallback 1: trying CURLINFO_CONTENT_LENGTH_DOWNLOAD_T\n");
 			curl_off_t content_length = -1;
 			curl_easy_getinfo(curl_, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &content_length);
-			fprintf(stderr, "[HTTP DEBUG] CURLINFO_CONTENT_LENGTH_DOWNLOAD_T returned: %lld\n", (long long)content_length);
 			if (content_length > 0) {
 				file_size_ = static_cast<uint64_t>(content_length);
 			}
@@ -381,7 +374,6 @@ public:
 		// Fallback 2: If still no file size, try a small range request
 		// The Content-Range header in the response will contain the total file size
 		if (file_size_ == 0) {
-			fprintf(stderr, "[HTTP DEBUG] Fallback 2: trying Range request for Content-Range header\n");
 			// Reset NOBODY for GET request
 			curl_easy_setopt(curl_, CURLOPT_NOBODY, 0L);
 
@@ -400,26 +392,21 @@ public:
 			curl_easy_setopt(curl_, CURLOPT_RANGE, nullptr);
 
 			if (res != CURLE_OK) {
-				fprintf(stderr, "[HTTP DEBUG] Range request failed: %s\n", curl_easy_strerror(res));
 				return false;
 			}
 
 			// Check response code (206 Partial Content is expected)
 			curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &http_code);
-			fprintf(stderr, "[HTTP DEBUG] Range response code: %ld, file_size after Range: %llu\n", http_code, (unsigned long long)file_size_);
 			if (http_code != 206 && http_code != 200) {
-				fprintf(stderr, "[HTTP DEBUG] Range request returned unexpected code %ld\n", http_code);
 				return false;
 			}
 		}
 
 		// If we still don't have a file size, fail - we need it for HDF5 random access
 		if (file_size_ == 0) {
-			fprintf(stderr, "[HTTP DEBUG] FAILED: Could not determine file size\n");
 			return false;
 		}
 
-		fprintf(stderr, "[HTTP DEBUG] SUCCESS: file_size = %llu\n", (unsigned long long)file_size_);
 
 		// Reset for future GET requests
 		curl_easy_setopt(curl_, CURLOPT_NOBODY, 0L);
@@ -492,7 +479,6 @@ private:
 			while (!log_header.empty() && (log_header.back() == '\r' || log_header.back() == '\n')) {
 				log_header.pop_back();
 			}
-			fprintf(stderr, "[HTTP DEBUG] Header: %s\n", log_header.c_str());
 		}
 
 		// Parse Content-Length - only set file_size_ if not already set
@@ -502,9 +488,7 @@ private:
 			if (pos != std::string::npos && client->file_size_ == 0) {
 				try {
 					client->file_size_ = std::stoull(header.substr(pos + 1));
-					fprintf(stderr, "[HTTP DEBUG] Parsed Content-Length: %llu\n", (unsigned long long)client->file_size_);
 				} catch (...) {
-					fprintf(stderr, "[HTTP DEBUG] Failed to parse Content-Length value\n");
 				}
 			}
 		}
@@ -521,10 +505,8 @@ private:
 						uint64_t total_size = std::stoull(total_str);
 						if (total_size > 0) {
 							client->file_size_ = total_size;
-							fprintf(stderr, "[HTTP DEBUG] Parsed Content-Range total: %llu\n", (unsigned long long)total_size);
 						}
 					} catch (...) {
-						fprintf(stderr, "[HTTP DEBUG] Failed to parse Content-Range total\n");
 					}
 				}
 			}
@@ -957,16 +939,7 @@ static herr_t H5FD_http_read(H5FD_t *_file, H5FD_mem_t type, hid_t dxpl_id, hadd
 
 	H5FD_http_t *file = reinterpret_cast<H5FD_http_t *>(_file);
 
-	// Debug: log read requests
-	static int read_count = 0;
-	if (read_count < 50) { // Limit logging
-		fprintf(stderr, "[VFD DEBUG] Read request #%d: offset=%llu, size=%zu\n",
-		        read_count++, (unsigned long long)addr, size);
-	}
-
 	if (!file->client->Read(buf, static_cast<size_t>(addr), size)) {
-		fprintf(stderr, "[VFD DEBUG] Read FAILED at offset=%llu, size=%zu\n",
-		        (unsigned long long)addr, size);
 		return -1;
 	}
 
