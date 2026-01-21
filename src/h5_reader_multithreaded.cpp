@@ -17,6 +17,8 @@ namespace duckdb {
 H5ReaderMultithreaded::H5ReaderMultithreaded(const std::string &file_path,
                                              const H5FileCache::RemoteConfig *remote_config)
     : file_path(file_path) {
+	fprintf(stderr, "[HDF5 DEBUG] Creating H5ReaderMultithreaded for: %s\n", file_path.c_str());
+
 	// Initialize HDF5 library and set up thread safety
 	// Use a function-level static to ensure thread-safe initialization (C++11 guarantees this)
 	static std::once_flag hdf5_init_flag;
@@ -43,11 +45,15 @@ H5ReaderMultithreaded::H5ReaderMultithreaded(const std::string &file_path,
 
 	// Get shared file handle from cache
 	try {
+		fprintf(stderr, "[HDF5 DEBUG] Opening file via H5FileCache::Open\n");
 		file_handle = H5FileCache::Open(file_path, remote_config);
 		if (!file_handle || *file_handle < 0) {
+			fprintf(stderr, "[HDF5 DEBUG] Failed to get valid file handle\n");
 			throw IOException("Failed to get valid file handle from cache");
 		}
+		fprintf(stderr, "[HDF5 DEBUG] File opened successfully, handle = %lld\n", (long long)*file_handle);
 	} catch (const std::exception &e) {
+		fprintf(stderr, "[HDF5 DEBUG] Exception opening file: %s\n", e.what());
 		throw IOException("Failed to open HDF5 file " + file_path + ": " + std::string(e.what()));
 	}
 }
@@ -59,12 +65,18 @@ H5ReaderMultithreaded::~H5ReaderMultithreaded() {
 
 // Helper method to check if a group exists
 bool H5ReaderMultithreaded::IsGroupPresent(const std::string &group_name) {
-	if (!H5LinkExists(*file_handle, group_name)) {
+	bool link_exists = H5LinkExists(*file_handle, group_name);
+	if (!link_exists) {
+		fprintf(stderr, "[HDF5 DEBUG] IsGroupPresent(%s): link does not exist\n", group_name.c_str());
 		return false;
 	}
 
 	// Check if it's actually a group (not a dataset)
-	return H5GetObjectType(*file_handle, group_name) == H5O_TYPE_GROUP;
+	H5O_type_t obj_type = H5GetObjectType(*file_handle, group_name);
+	bool is_group = (obj_type == H5O_TYPE_GROUP);
+	fprintf(stderr, "[HDF5 DEBUG] IsGroupPresent(%s): link exists, type=%d, is_group=%s\n",
+	        group_name.c_str(), static_cast<int>(obj_type), is_group ? "yes" : "no");
+	return is_group;
 }
 
 // Helper method to check if a dataset exists within a group
@@ -160,9 +172,24 @@ bool H5ReaderMultithreaded::IsValidAnnData() {
 	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
 	auto h5_lock = H5GlobalLock::Acquire();
 
+	fprintf(stderr, "[HDF5 DEBUG] IsValidAnnData() checking file structure...\n");
+
 	// Check for required groups: /obs, /var, and either /X group or dataset
-	return IsGroupPresent("/obs") && IsGroupPresent("/var") &&
-	       (IsGroupPresent("/X") || H5LinkExists(*file_handle, "/X"));
+	bool has_obs = IsGroupPresent("/obs");
+	fprintf(stderr, "[HDF5 DEBUG]   /obs present: %s\n", has_obs ? "yes" : "no");
+
+	bool has_var = IsGroupPresent("/var");
+	fprintf(stderr, "[HDF5 DEBUG]   /var present: %s\n", has_var ? "yes" : "no");
+
+	bool has_X_group = IsGroupPresent("/X");
+	bool has_X_link = H5LinkExists(*file_handle, "/X");
+	fprintf(stderr, "[HDF5 DEBUG]   /X group: %s, /X link: %s\n",
+	        has_X_group ? "yes" : "no", has_X_link ? "yes" : "no");
+
+	bool is_valid = has_obs && has_var && (has_X_group || has_X_link);
+	fprintf(stderr, "[HDF5 DEBUG] IsValidAnnData() result: %s\n", is_valid ? "valid" : "INVALID");
+
+	return is_valid;
 }
 
 // Get number of observations (cells)
