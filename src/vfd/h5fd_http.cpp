@@ -360,6 +360,21 @@ public:
 			return false;
 		}
 
+		// Fallback: If header callback didn't capture file_size_, get it from CURL directly
+		// This can happen with HTTP/2 through proxies where header delivery differs
+		if (file_size_ == 0) {
+			curl_off_t content_length = -1;
+			curl_easy_getinfo(curl_, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &content_length);
+			if (content_length > 0) {
+				file_size_ = static_cast<uint64_t>(content_length);
+			}
+		}
+
+		// If we still don't have a file size, fail - we need it for HDF5 random access
+		if (file_size_ == 0) {
+			return false;
+		}
+
 		// Reset for future GET requests
 		curl_easy_setopt(curl_, CURLOPT_NOBODY, 0L);
 
