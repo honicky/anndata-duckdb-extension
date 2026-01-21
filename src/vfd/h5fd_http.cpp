@@ -957,7 +957,16 @@ static herr_t H5FD_http_read(H5FD_t *_file, H5FD_mem_t type, hid_t dxpl_id, hadd
 
 	H5FD_http_t *file = reinterpret_cast<H5FD_http_t *>(_file);
 
+	// Debug: log read requests
+	static int read_count = 0;
+	if (read_count < 50) { // Limit logging
+		fprintf(stderr, "[VFD DEBUG] Read request #%d: offset=%llu, size=%zu\n",
+		        read_count++, (unsigned long long)addr, size);
+	}
+
 	if (!file->client->Read(buf, static_cast<size_t>(addr), size)) {
+		fprintf(stderr, "[VFD DEBUG] Read FAILED at offset=%llu, size=%zu\n",
+		        (unsigned long long)addr, size);
 		return -1;
 	}
 
