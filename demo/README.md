@@ -53,6 +53,18 @@ vhs demo-remote.tape
 
 This will create `demo-remote.mp4`.
 
+**⚠️ IMPORTANT: Test timing first!**
+
+Before generating the final video, test the actual query times with your internet connection:
+```bash
+duckdb
+> .timer on
+> INSTALL httpfs; LOAD httpfs; INSTALL anndata FROM community;
+> ATTACH 'https://cellxgene-annotation-public.s3.us-west-2.amazonaws.com/cell_type/tutorial/minilung.h5ad' AS lung (TYPE ANNDATA);
+> SELECT COUNT(*) FROM lung.obs;
+```
+Adjust the `Sleep` durations in the tape file based on actual execution times shown by `.timer`.
+
 ## Customization
 
 Edit the `.tape` files to adjust:

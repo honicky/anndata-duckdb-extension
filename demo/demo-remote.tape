@@ -1,5 +1,10 @@
 # AnnData DuckDB Extension Demo - Remote Files (HTTP & S3)
 # Run with: vhs demo/demo-remote.tape
+#
+# IMPORTANT: Test this locally first! Adjust Sleep timings based on:
+# - Your internet connection speed
+# - Actual query execution times (use .timer on to measure)
+# - Network latency to HTTP/S3 endpoints
 
 Output demo-remote.mp4
 
@@ -38,13 +43,13 @@ Enter
 Sleep 1s
 
 # Attach HTTP file
-Type "-- Attach AnnData file directly from HTTP"
+Type "-- Attach AnnData file directly from HTTP (~20MB)"
 Enter
 Type@5ms "ATTACH 'https://cellxgene-annotation-public.s3.us-west-2.amazonaws.com/cell_type/tutorial/minilung.h5ad'"
 Enter
 Type "  AS lung (TYPE ANNDATA);"
 Enter
-Sleep 5s
+Sleep 10s
 
 # Show tables
 Type "-- See what tables are available"
@@ -58,7 +63,7 @@ Type "-- Query cell metadata (notice the timing!)"
 Enter
 Type "SELECT COUNT(*) AS total_cells FROM lung.obs;"
 Enter
-Sleep 3s
+Sleep 4s
 
 Type "-- What cell types are present?"
 Enter
@@ -73,13 +78,13 @@ Enter
 Sleep 4s
 
 # Attach S3 file
-Type "-- Now attach another file from S3"
+Type "-- Now attach another file from public S3"
 Enter
 Type@5ms "ATTACH 's3://openproblems-bio/resources_test/common/pancreas/dataset.h5ad'"
 Enter
 Type "  AS pancreas (TYPE ANNDATA);"
 Enter
-Sleep 5s
+Sleep 8s
 
 # Show all databases
 Type "-- We now have two AnnData files attached"
