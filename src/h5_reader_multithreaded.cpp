@@ -167,12 +167,25 @@ LogicalType H5ReaderMultithreaded::H5TypeToDuckDBType(hid_t h5_type) {
 	}
 }
 
+// Debug helper to list root group contents
+static herr_t debug_iterate_callback(hid_t group_id, const char *name, const H5L_info_t *info, void *op_data) {
+	(void)group_id;
+	(void)op_data;
+	fprintf(stderr, "[HDF5 DEBUG]   Root contains: '%s' (link_type=%d)\n", name, static_cast<int>(info->type));
+	return 0;
+}
+
 // Check if file is valid AnnData format
 bool H5ReaderMultithreaded::IsValidAnnData() {
 	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
 	auto h5_lock = H5GlobalLock::Acquire();
 
 	fprintf(stderr, "[HDF5 DEBUG] IsValidAnnData() checking file structure...\n");
+
+	// List root group contents for debugging
+	fprintf(stderr, "[HDF5 DEBUG] Listing root group contents:\n");
+	herr_t iter_status = H5Literate(*file_handle, H5_INDEX_NAME, H5_ITER_NATIVE, nullptr, debug_iterate_callback, nullptr);
+	fprintf(stderr, "[HDF5 DEBUG] H5Literate returned: %d\n", static_cast<int>(iter_status));
 
 	// Check for required groups: /obs, /var, and either /X group or dataset
 	bool has_obs = IsGroupPresent("/obs");
