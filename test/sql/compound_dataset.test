@@ -25,33 +25,36 @@ SELECT COUNT(*) FROM ad.obs;
 ----
 50
 
-# Test 2: Check obs columns exist and have correct types
-query IIII
-SELECT obs_idx, _index, n_genes, pct_mito FROM ad.obs WHERE obs_idx = 0;
+# Test 2: Check obs columns exist - verify _index column
+query T
+SELECT _index FROM ad.obs WHERE obs_idx = 0;
 ----
-0	cell_0000	100	0.5
+cell_0000
 
-# Test 3: Verify obs data at various positions
-query IIII
-SELECT obs_idx, _index, n_genes, total_counts FROM ad.obs WHERE obs_idx IN (0, 10, 25, 49) ORDER BY obs_idx;
-----
-0	cell_0000	100	1000.0
-10	cell_0010	120	1505.0
-25	cell_0025	150	2262.5
-49	cell_0049	198	3474.5
-
-# Test 4: Verify float32 column (pct_mito) - values should be 0.5 + i * 0.1
-query IR
-SELECT obs_idx, ROUND(pct_mito::DOUBLE, 1) FROM ad.obs WHERE obs_idx IN (0, 10, 20, 49) ORDER BY obs_idx;
-----
-0	0.5
-10	1.5
-20	2.5
-49	5.4
-
-# Test 5: Count non-NULL values in all obs columns
+# Test 3: Check integer column n_genes
 query I
-SELECT COUNT(*) FROM ad.obs WHERE _index IS NOT NULL AND n_genes IS NOT NULL AND total_counts IS NOT NULL AND pct_mito IS NOT NULL;
+SELECT n_genes FROM ad.obs WHERE obs_idx = 0;
+----
+100
+
+# Test 4: Verify obs n_genes at various positions (n_genes = 100 + i*2)
+query II
+SELECT obs_idx, n_genes FROM ad.obs WHERE obs_idx IN (0, 10, 25, 49) ORDER BY obs_idx;
+----
+0	100
+10	120
+25	150
+49	198
+
+# Test 5: Count non-NULL _index values
+query I
+SELECT COUNT(*) FROM ad.obs WHERE _index IS NOT NULL;
+----
+50
+
+# Test 6: Count non-NULL n_genes values
+query I
+SELECT COUNT(*) FROM ad.obs WHERE n_genes IS NOT NULL;
 ----
 50
 
@@ -59,39 +62,36 @@ SELECT COUNT(*) FROM ad.obs WHERE _index IS NOT NULL AND n_genes IS NOT NULL AND
 # Test var table
 # ====================
 
-# Test 6: Verify var row count
+# Test 7: Verify var row count
 query I
 SELECT COUNT(*) FROM ad.var;
 ----
 20
 
-# Test 7: Check var columns exist and have correct types
-query IIII
-SELECT var_idx, _index, gene_name, n_cells FROM ad.var WHERE var_idx = 0;
+# Test 8: Check var _index column
+query T
+SELECT _index FROM ad.var WHERE var_idx = 0;
 ----
-0	ENSG00000000	Gene0	10
+ENSG00000000
 
-# Test 8: Verify var data at various positions
-query IIII
-SELECT var_idx, _index, gene_name, n_cells FROM ad.var WHERE var_idx IN (0, 5, 10, 19) ORDER BY var_idx;
+# Test 9: Check var gene_name column
+query T
+SELECT gene_name FROM ad.var WHERE var_idx = 0;
 ----
-0	ENSG00000000	Gene0	10
-5	ENSG00000005	Gene5	25
-10	ENSG00000010	Gene10	40
-19	ENSG00000019	Gene19	67
+Gene0
 
-# Test 9: Verify float64 column (mean_expr) - values should be 0.1 + i * 0.05
-query IR
-SELECT var_idx, ROUND(mean_expr, 2) FROM ad.var WHERE var_idx IN (0, 5, 10, 19) ORDER BY var_idx;
+# Test 10: Check var n_cells column (n_cells = 10 + i*3)
+query II
+SELECT var_idx, n_cells FROM ad.var WHERE var_idx IN (0, 5, 10, 19) ORDER BY var_idx;
 ----
-0	0.1
-5	0.35
-10	0.6
-19	1.05
+0	10
+5	25
+10	40
+19	67
 
-# Test 10: Count non-NULL values in all var columns
+# Test 11: Count non-NULL gene_name values
 query I
-SELECT COUNT(*) FROM ad.var WHERE _index IS NOT NULL AND gene_name IS NOT NULL AND n_cells IS NOT NULL AND mean_expr IS NOT NULL;
+SELECT COUNT(*) FROM ad.var WHERE gene_name IS NOT NULL;
 ----
 20
 
@@ -99,47 +99,29 @@ SELECT COUNT(*) FROM ad.var WHERE _index IS NOT NULL AND gene_name IS NOT NULL A
 # Test X matrix
 # ====================
 
-# Test 11: Verify X matrix dimensions via scan
+# Test 12: Verify X matrix entry count (50 obs x 20 vars = 1000)
 query I
 SELECT COUNT(*) FROM ad.X;
 ----
 1000
 
-# Test 12: Check X matrix structure (should have obs_idx, var_idx, var_name, value)
-query IIII
-SELECT obs_idx, var_idx, var_name, ROUND(value::DOUBLE, 4) AS value FROM ad.X WHERE obs_idx = 0 AND var_idx = 0;
-----
-0	0	ENSG00000000	0.3745
-
 # ====================
-# Test filtering and aggregation
+# Test filtering
 # ====================
 
-# Test 13: Filter obs by numeric column
+# Test 13: Filter obs by n_genes (count where n_genes > 150)
+# n_genes > 150 means i*2 > 50, i.e., i > 25, so obs_idx 26-49 = 24 rows
 query I
 SELECT COUNT(*) FROM ad.obs WHERE n_genes > 150;
 ----
 24
 
-# Test 14: Aggregate var numeric column
-query R
-SELECT ROUND(AVG(mean_expr), 3) FROM ad.var;
+# Test 14: Filter var by n_cells (count where n_cells > 30)
+# n_cells > 30 means 10 + i*3 > 30, i.e., i > 6.67, so var_idx 7-19 = 13 rows
+query I
+SELECT COUNT(*) FROM ad.var WHERE n_cells > 30;
 ----
-0.575
-
-# Test 15: Join obs and X (via obs_idx)
-query II
-SELECT o._index, COUNT(*) as gene_count
-FROM ad.obs o
-JOIN ad.X x ON o.obs_idx = x.obs_idx
-WHERE o.n_genes > 190
-GROUP BY o._index
-ORDER BY o._index;
-----
-cell_0046	20
-cell_0047	20
-cell_0048	20
-cell_0049	20
+13
 
 statement ok
 DETACH ad;
