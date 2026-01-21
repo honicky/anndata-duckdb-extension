@@ -1,0 +1,145 @@
+# name: test/sql/compound_dataset.test
+# description: Test older AnnData format with compound datasets for obs/var
+# group: [sql]
+
+require anndata
+
+# Test file uses older AnnData format where /obs and /var are compound HDF5 datasets
+# instead of groups with separate datasets per column.
+#
+# Structure:
+# /obs: compound dataset with fields (_index, n_genes, total_counts, pct_mito)
+# /var: compound dataset with fields (_index, gene_name, n_cells, mean_expr)
+# /X: 50x20 dense float32 matrix
+
+statement ok
+ATTACH 'test/data/test_compound_dataset.h5ad' AS ad (TYPE ANNDATA);
+
+# ====================
+# Test obs table
+# ====================
+
+# Test 1: Verify obs row count
+query I
+SELECT COUNT(*) FROM ad.obs;
+----
+50
+
+# Test 2: Check obs columns exist and have correct types
+query IIII
+SELECT obs_idx, _index, n_genes, pct_mito FROM ad.obs WHERE obs_idx = 0;
+----
+0	cell_0000	100	0.5
+
+# Test 3: Verify obs data at various positions
+query IIII
+SELECT obs_idx, _index, n_genes, total_counts FROM ad.obs WHERE obs_idx IN (0, 10, 25, 49) ORDER BY obs_idx;
+----
+0	cell_0000	100	1000.0
+10	cell_0010	120	1505.0
+25	cell_0025	150	2262.5
+49	cell_0049	198	3474.5
+
+# Test 4: Verify float32 column (pct_mito) - values should be 0.5 + i * 0.1
+query IR
+SELECT obs_idx, ROUND(pct_mito::DOUBLE, 1) FROM ad.obs WHERE obs_idx IN (0, 10, 20, 49) ORDER BY obs_idx;
+----
+0	0.5
+10	1.5
+20	2.5
+49	5.4
+
+# Test 5: Count non-NULL values in all obs columns
+query I
+SELECT COUNT(*) FROM ad.obs WHERE _index IS NOT NULL AND n_genes IS NOT NULL AND total_counts IS NOT NULL AND pct_mito IS NOT NULL;
+----
+50
+
+# ====================
+# Test var table
+# ====================
+
+# Test 6: Verify var row count
+query I
+SELECT COUNT(*) FROM ad.var;
+----
+20
+
+# Test 7: Check var columns exist and have correct types
+query IIII
+SELECT var_idx, _index, gene_name, n_cells FROM ad.var WHERE var_idx = 0;
+----
+0	ENSG00000000	Gene0	10
+
+# Test 8: Verify var data at various positions
+query IIII
+SELECT var_idx, _index, gene_name, n_cells FROM ad.var WHERE var_idx IN (0, 5, 10, 19) ORDER BY var_idx;
+----
+0	ENSG00000000	Gene0	10
+5	ENSG00000005	Gene5	25
+10	ENSG00000010	Gene10	40
+19	ENSG00000019	Gene19	67
+
+# Test 9: Verify float64 column (mean_expr) - values should be 0.1 + i * 0.05
+query IR
+SELECT var_idx, ROUND(mean_expr, 2) FROM ad.var WHERE var_idx IN (0, 5, 10, 19) ORDER BY var_idx;
+----
+0	0.1
+5	0.35
+10	0.6
+19	1.05
+
+# Test 10: Count non-NULL values in all var columns
+query I
+SELECT COUNT(*) FROM ad.var WHERE _index IS NOT NULL AND gene_name IS NOT NULL AND n_cells IS NOT NULL AND mean_expr IS NOT NULL;
+----
+20
+
+# ====================
+# Test X matrix
+# ====================
+
+# Test 11: Verify X matrix dimensions via scan
+query I
+SELECT COUNT(*) FROM ad.X;
+----
+1000
+
+# Test 12: Check X matrix structure (should have obs_idx, var_idx, var_name, value)
+query IIII
+SELECT obs_idx, var_idx, var_name, ROUND(value::DOUBLE, 4) AS value FROM ad.X WHERE obs_idx = 0 AND var_idx = 0;
+----
+0	0	ENSG00000000	0.3745
+
+# ====================
+# Test filtering and aggregation
+# ====================
+
+# Test 13: Filter obs by numeric column
+query I
+SELECT COUNT(*) FROM ad.obs WHERE n_genes > 150;
+----
+24
+
+# Test 14: Aggregate var numeric column
+query R
+SELECT ROUND(AVG(mean_expr), 3) FROM ad.var;
+----
+0.575
+
+# Test 15: Join obs and X (via obs_idx)
+query II
+SELECT o._index, COUNT(*) as gene_count
+FROM ad.obs o
+JOIN ad.X x ON o.obs_idx = x.obs_idx
+WHERE o.n_genes > 190
+GROUP BY o._index
+ORDER BY o._index;
+----
+cell_0046	20
+cell_0047	20
+cell_0048	20
+cell_0049	20
+
+statement ok
+DETACH ad;
