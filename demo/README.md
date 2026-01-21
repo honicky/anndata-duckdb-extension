@@ -55,7 +55,15 @@ This will create `demo-remote.mp4`.
 
 **⚠️ IMPORTANT: Test timing first!**
 
-Before generating the final video, test the actual query times with your internet connection:
+Before generating the final video, run the timing test script:
+```bash
+cd demo
+./test-timing.sh
+```
+
+This will run all queries with `.timer on` and show execution times. Add 1-2 seconds buffer to each timing, then update the `Sleep` durations in `demo-remote.tape` accordingly.
+
+Alternatively, test manually:
 ```bash
 duckdb
 > .timer on
@@ -63,7 +71,6 @@ duckdb
 > ATTACH 'https://cellxgene-annotation-public.s3.us-west-2.amazonaws.com/cell_type/tutorial/minilung.h5ad' AS lung (TYPE ANNDATA);
 > SELECT COUNT(*) FROM lung.obs;
 ```
-Adjust the `Sleep` durations in the tape file based on actual execution times shown by `.timer`.
 
 ## Customization
 
