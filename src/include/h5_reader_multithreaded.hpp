@@ -221,6 +221,16 @@ private:
 	bool IsDatasetPresent(const std::string &group_name, const std::string &dataset_name);
 	std::vector<std::string> GetGroupMembers(const std::string &group_name);
 
+	// Check if a path is a compound dataset (older AnnData format)
+	bool IsCompoundDataset(const std::string &path);
+
+	// Get column info from a compound dataset
+	std::vector<ColumnInfo> GetCompoundDatasetColumns(const std::string &path, const std::string &idx_col_name);
+
+	// Read a column from a compound dataset
+	void ReadCompoundDatasetColumn(const std::string &path, const std::string &column_name, Vector &result, idx_t offset,
+	                               idx_t count);
+
 	// Cache for categorical mappings
 	struct CategoricalCache {
 		std::vector<std::string> categories;

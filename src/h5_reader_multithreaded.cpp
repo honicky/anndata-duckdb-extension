@@ -129,6 +129,241 @@ std::vector<std::string> H5ReaderMultithreaded::GetGroupMembers(const std::strin
 	return members;
 }
 
+// Check if a path is a compound dataset (older AnnData format)
+bool H5ReaderMultithreaded::IsCompoundDataset(const std::string &path) {
+	if (!H5LinkExists(*file_handle, path)) {
+		return false;
+	}
+
+	// Check if it's a dataset
+	if (H5GetObjectType(*file_handle, path) != H5O_TYPE_DATASET) {
+		return false;
+	}
+
+	try {
+		H5DatasetHandle dataset(*file_handle, path);
+		H5TypeHandle dtype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
+
+		// Check if the datatype is compound
+		return H5Tget_class(dtype.get()) == H5T_COMPOUND;
+	} catch (...) {
+		return false;
+	}
+}
+
+// Get column info from a compound dataset (older AnnData format)
+std::vector<H5ReaderMultithreaded::ColumnInfo>
+H5ReaderMultithreaded::GetCompoundDatasetColumns(const std::string &path, const std::string &idx_col_name) {
+	std::vector<ColumnInfo> columns;
+	std::unordered_set<std::string> seen_names;
+
+	// Add index column as the first column
+	ColumnInfo idx_col;
+	idx_col.name = idx_col_name;
+	idx_col.original_name = idx_col_name;
+	idx_col.type = LogicalType::BIGINT;
+	idx_col.is_categorical = false;
+	columns.push_back(idx_col);
+	seen_names.insert(idx_col_name);
+
+	try {
+		H5DatasetHandle dataset(*file_handle, path);
+		H5TypeHandle dtype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
+
+		if (H5Tget_class(dtype.get()) != H5T_COMPOUND) {
+			return columns;
+		}
+
+		int nmembers = H5Tget_nmembers(dtype.get());
+
+		for (int i = 0; i < nmembers; i++) {
+			char *member_name = H5Tget_member_name(dtype.get(), static_cast<unsigned>(i));
+			if (!member_name) {
+				continue;
+			}
+
+			std::string name(member_name);
+			H5free_memory(member_name);
+
+			ColumnInfo col;
+			col.original_name = name;
+			col.name = name;
+			col.is_categorical = false;
+
+			// Handle duplicate column names (case-insensitive) by mangling
+			std::string lower_name = StringUtil::Lower(col.name);
+			while (seen_names.count(lower_name) > 0) {
+				col.name += "_";
+				lower_name = StringUtil::Lower(col.name);
+			}
+			seen_names.insert(lower_name);
+
+			// Get member type
+			hid_t member_type = H5Tget_member_type(dtype.get(), static_cast<unsigned>(i));
+			if (member_type >= 0) {
+				col.type = H5TypeToDuckDBType(member_type);
+				H5Tclose(member_type);
+			} else {
+				col.type = LogicalType::VARCHAR;
+			}
+
+			columns.push_back(col);
+		}
+	} catch (const std::exception &e) {
+		// Return what we have so far
+	}
+
+	return columns;
+}
+
+// Read a column from a compound dataset
+void H5ReaderMultithreaded::ReadCompoundDatasetColumn(const std::string &path, const std::string &column_name,
+                                                      Vector &result, idx_t offset, idx_t count) {
+	try {
+		H5DatasetHandle dataset(*file_handle, path);
+		H5TypeHandle file_dtype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
+		H5DataspaceHandle file_space(dataset.get());
+
+		// Find the member index
+		int nmembers = H5Tget_nmembers(file_dtype.get());
+		int member_idx = -1;
+
+		for (int i = 0; i < nmembers; i++) {
+			char *name = H5Tget_member_name(file_dtype.get(), static_cast<unsigned>(i));
+			if (name) {
+				bool matches = (column_name == name);
+				H5free_memory(name);
+				if (matches) {
+					member_idx = i;
+					break;
+				}
+			}
+		}
+
+		if (member_idx < 0) {
+			throw IOException("Column '" + column_name + "' not found in compound dataset " + path);
+		}
+
+		// Get member type and offset
+		hid_t member_type = H5Tget_member_type(file_dtype.get(), static_cast<unsigned>(member_idx));
+		size_t member_offset = H5Tget_member_offset(file_dtype.get(), static_cast<unsigned>(member_idx));
+
+		// Get the total size of one compound record
+		size_t compound_size = H5Tget_size(file_dtype.get());
+
+		// Set up hyperslab for partial read
+		hsize_t h_offset[1] = {static_cast<hsize_t>(offset)};
+		hsize_t h_count[1] = {static_cast<hsize_t>(count)};
+		H5Sselect_hyperslab(file_space.get(), H5S_SELECT_SET, h_offset, nullptr, h_count, nullptr);
+
+		// Create memory dataspace
+		H5DataspaceHandle mem_space(1, h_count);
+
+		// Read the entire compound data (we'll extract the specific field)
+		std::vector<char> buffer(count * compound_size);
+		herr_t status = H5Dread(dataset.get(), file_dtype.get(), mem_space.get(), file_space.get(), H5P_DEFAULT,
+		                        buffer.data());
+
+		if (status < 0) {
+			H5Tclose(member_type);
+			throw IOException("Failed to read compound dataset " + path);
+		}
+
+		// Extract the specific column data
+		H5T_class_t type_class = H5Tget_class(member_type);
+
+		if (type_class == H5T_STRING) {
+			bool is_variable = H5Tis_variable_str(member_type) > 0;
+			size_t str_size = H5Tget_size(member_type);
+
+			result.SetVectorType(VectorType::FLAT_VECTOR);
+			auto string_vec = FlatVector::GetData<string_t>(result);
+			auto &validity = FlatVector::Validity(result);
+			validity.SetAllValid(count);
+
+			for (idx_t i = 0; i < count; i++) {
+				char *record_ptr = buffer.data() + i * compound_size + member_offset;
+
+				if (is_variable) {
+					// Variable-length string: the field contains a pointer
+					char *str_ptr = *reinterpret_cast<char **>(record_ptr);
+					if (str_ptr) {
+						string_vec[i] = StringVector::AddString(result, str_ptr);
+					} else {
+						validity.SetInvalid(i);
+					}
+				} else {
+					// Fixed-length string
+					size_t len = strnlen(record_ptr, str_size);
+					string_vec[i] = StringVector::AddString(result, record_ptr, len);
+				}
+			}
+
+			// Reclaim variable-length data if needed
+			if (is_variable) {
+				H5Dvlen_reclaim(file_dtype.get(), mem_space.get(), H5P_DEFAULT, buffer.data());
+			}
+		} else if (type_class == H5T_INTEGER) {
+			size_t size = H5Tget_size(member_type);
+			H5T_sign_t sign = H5Tget_sign(member_type);
+			bool is_unsigned = (sign == H5T_SGN_NONE);
+
+			for (idx_t i = 0; i < count; i++) {
+				char *record_ptr = buffer.data() + i * compound_size + member_offset;
+
+				if (size <= 1) {
+					if (is_unsigned) {
+						result.SetValue(i, Value::UTINYINT(*reinterpret_cast<uint8_t *>(record_ptr)));
+					} else {
+						result.SetValue(i, Value::TINYINT(*reinterpret_cast<int8_t *>(record_ptr)));
+					}
+				} else if (size <= 2) {
+					if (is_unsigned) {
+						result.SetValue(i, Value::USMALLINT(*reinterpret_cast<uint16_t *>(record_ptr)));
+					} else {
+						result.SetValue(i, Value::SMALLINT(*reinterpret_cast<int16_t *>(record_ptr)));
+					}
+				} else if (size <= 4) {
+					if (is_unsigned) {
+						result.SetValue(i, Value::UINTEGER(*reinterpret_cast<uint32_t *>(record_ptr)));
+					} else {
+						result.SetValue(i, Value::INTEGER(*reinterpret_cast<int32_t *>(record_ptr)));
+					}
+				} else {
+					if (is_unsigned) {
+						result.SetValue(i, Value::UBIGINT(*reinterpret_cast<uint64_t *>(record_ptr)));
+					} else {
+						result.SetValue(i, Value::BIGINT(*reinterpret_cast<int64_t *>(record_ptr)));
+					}
+				}
+			}
+		} else if (type_class == H5T_FLOAT) {
+			size_t size = H5Tget_size(member_type);
+
+			for (idx_t i = 0; i < count; i++) {
+				char *record_ptr = buffer.data() + i * compound_size + member_offset;
+
+				if (size <= 4) {
+					result.SetValue(i, Value::FLOAT(*reinterpret_cast<float *>(record_ptr)));
+				} else {
+					result.SetValue(i, Value::DOUBLE(*reinterpret_cast<double *>(record_ptr)));
+				}
+			}
+		} else {
+			// Unknown type - set all values to NULL
+			result.SetVectorType(VectorType::FLAT_VECTOR);
+			auto &validity = FlatVector::Validity(result);
+			for (idx_t i = 0; i < count; i++) {
+				validity.SetInvalid(i);
+			}
+		}
+
+		H5Tclose(member_type);
+	} catch (const std::exception &e) {
+		throw IOException("Failed to read compound dataset column '" + column_name + "': " + e.what());
+	}
+}
+
 // Helper method to convert HDF5 type to DuckDB type
 LogicalType H5ReaderMultithreaded::H5TypeToDuckDBType(hid_t h5_type) {
 	H5T_class_t type_class = H5Tget_class(h5_type);
@@ -213,6 +448,15 @@ size_t H5ReaderMultithreaded::GetObsCount() {
 	auto h5_lock = H5GlobalLock::Acquire();
 
 	try {
+		// Check if /obs is a compound dataset (older AnnData format)
+		if (IsCompoundDataset("/obs")) {
+			H5DatasetHandle dataset(*file_handle, "/obs");
+			H5DataspaceHandle dataspace(dataset.get());
+			hsize_t dims[1];
+			H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
+			return dims[0];
+		}
+
 		// Try to get shape from obs/_index first (standard location)
 		if (IsDatasetPresent("/obs", "_index")) {
 			H5DatasetHandle dataset(*file_handle, "/obs/_index");
@@ -286,6 +530,15 @@ size_t H5ReaderMultithreaded::GetVarCount() {
 	auto h5_lock = H5GlobalLock::Acquire();
 
 	try {
+		// Check if /var is a compound dataset (older AnnData format)
+		if (IsCompoundDataset("/var")) {
+			H5DatasetHandle dataset(*file_handle, "/var");
+			H5DataspaceHandle dataspace(dataset.get());
+			hsize_t dims[1];
+			H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
+			return dims[0];
+		}
+
 		// Try to get shape from var/_index first (standard location)
 		if (IsDatasetPresent("/var", "_index")) {
 			H5DatasetHandle dataset(*file_handle, "/var/_index");
@@ -362,6 +615,15 @@ size_t H5ReaderMultithreaded::GetVarCount() {
 std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetObsColumns() {
 	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
 	auto h5_lock = H5GlobalLock::Acquire();
+
+	// Check if /obs is a compound dataset (older AnnData format)
+	if (IsCompoundDataset("/obs")) {
+		fprintf(stderr, "[HDF5 DEBUG] GetObsColumns: /obs is a compound dataset (older format)\n");
+		return GetCompoundDatasetColumns("/obs", "obs_idx");
+	}
+
+	// Newer format: /obs is a group with separate datasets per column
+	fprintf(stderr, "[HDF5 DEBUG] GetObsColumns: /obs is a group (newer format)\n");
 
 	std::vector<ColumnInfo> columns;
 	std::unordered_set<std::string> seen_names;
@@ -448,6 +710,15 @@ std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetObsColu
 std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetVarColumns() {
 	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
 	auto h5_lock = H5GlobalLock::Acquire();
+
+	// Check if /var is a compound dataset (older AnnData format)
+	if (IsCompoundDataset("/var")) {
+		fprintf(stderr, "[HDF5 DEBUG] GetVarColumns: /var is a compound dataset (older format)\n");
+		return GetCompoundDatasetColumns("/var", "var_idx");
+	}
+
+	// Newer format: /var is a group with separate datasets per column
+	fprintf(stderr, "[HDF5 DEBUG] GetVarColumns: /var is a group (newer format)\n");
 
 	std::vector<ColumnInfo> columns;
 	std::unordered_set<std::string> seen_names;
@@ -544,6 +815,13 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 			return;
 		}
 
+		// Check if /obs is a compound dataset (older AnnData format)
+		if (IsCompoundDataset("/obs")) {
+			ReadCompoundDatasetColumn("/obs", column_name, result, offset, count);
+			return;
+		}
+
+		// Newer format: /obs is a group with separate datasets per column
 		// Check if it's a categorical column
 		std::string group_path = "/obs/" + column_name;
 		if (H5GetObjectType(*file_handle, group_path) == H5O_TYPE_GROUP) {
@@ -836,6 +1114,13 @@ void H5ReaderMultithreaded::ReadVarColumn(const std::string &column_name, Vector
 			return;
 		}
 
+		// Check if /var is a compound dataset (older AnnData format)
+		if (IsCompoundDataset("/var")) {
+			ReadCompoundDatasetColumn("/var", column_name, result, offset, count);
+			return;
+		}
+
+		// Newer format: /var is a group with separate datasets per column
 		// Check if it's a categorical column
 		std::string group_path = "/var/" + column_name;
 		if (H5GetObjectType(*file_handle, group_path) == H5O_TYPE_GROUP) {
@@ -1205,6 +1490,26 @@ std::vector<std::string> H5ReaderMultithreaded::GetVarNames(const std::string &c
 	try {
 		auto var_count = GetVarCount();
 		names.reserve(var_count);
+
+		// Check if /var is a compound dataset (older AnnData format)
+		if (IsCompoundDataset("/var")) {
+			// For compound datasets, read from the specified column (or "_index" if not specified)
+			std::string col_to_read = column_name.empty() ? "_index" : column_name;
+
+			// Read values using ReadVarColumn
+			Vector result(LogicalType::VARCHAR, var_count);
+			ReadCompoundDatasetColumn("/var", col_to_read, result, 0, var_count);
+
+			for (idx_t i = 0; i < var_count; i++) {
+				Value val = result.GetValue(i);
+				if (val.IsNull()) {
+					names.push_back("var_" + std::to_string(i));
+				} else {
+					names.push_back(val.ToString());
+				}
+			}
+			return names;
+		}
 
 		if (column_name.empty() || column_name == "var_names") {
 			// Try to get default var names from _index attribute
