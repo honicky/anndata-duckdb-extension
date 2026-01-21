@@ -187,19 +187,21 @@ bool H5ReaderMultithreaded::IsValidAnnData() {
 	herr_t iter_status = H5Literate(*file_handle, H5_INDEX_NAME, H5_ITER_NATIVE, nullptr, debug_iterate_callback, nullptr);
 	fprintf(stderr, "[HDF5 DEBUG] H5Literate returned: %d\n", static_cast<int>(iter_status));
 
-	// Check for required groups: /obs, /var, and either /X group or dataset
-	bool has_obs = IsGroupPresent("/obs");
-	fprintf(stderr, "[HDF5 DEBUG]   /obs present: %s\n", has_obs ? "yes" : "no");
+	// Check for required objects: /obs, /var, and /X
+	// Note: In newer AnnData format, obs/var are Groups (with encoding-type=dataframe)
+	//       In older AnnData format, obs/var can be Datasets (compound datasets)
+	// So we accept either Groups OR Datasets for obs/var
 
-	bool has_var = IsGroupPresent("/var");
-	fprintf(stderr, "[HDF5 DEBUG]   /var present: %s\n", has_var ? "yes" : "no");
+	bool has_obs = H5LinkExists(*file_handle, "/obs");
+	fprintf(stderr, "[HDF5 DEBUG]   /obs link exists: %s\n", has_obs ? "yes" : "no");
 
-	bool has_X_group = IsGroupPresent("/X");
-	bool has_X_link = H5LinkExists(*file_handle, "/X");
-	fprintf(stderr, "[HDF5 DEBUG]   /X group: %s, /X link: %s\n",
-	        has_X_group ? "yes" : "no", has_X_link ? "yes" : "no");
+	bool has_var = H5LinkExists(*file_handle, "/var");
+	fprintf(stderr, "[HDF5 DEBUG]   /var link exists: %s\n", has_var ? "yes" : "no");
 
-	bool is_valid = has_obs && has_var && (has_X_group || has_X_link);
+	bool has_X = H5LinkExists(*file_handle, "/X");
+	fprintf(stderr, "[HDF5 DEBUG]   /X link exists: %s\n", has_X ? "yes" : "no");
+
+	bool is_valid = has_obs && has_var && has_X;
 	fprintf(stderr, "[HDF5 DEBUG] IsValidAnnData() result: %s\n", is_valid ? "valid" : "INVALID");
 
 	return is_valid;
