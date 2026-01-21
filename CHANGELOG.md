@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-01-21
+
+### Fixed
+- S3 URLs now automatically detect and handle region redirects. When a bucket is in a different region than the default (us-east-1), the extension captures the `x-amz-bucket-region` header and retries with the correct region.
+
 ## [0.12.1] - 2026-01-20
 
 ### Added

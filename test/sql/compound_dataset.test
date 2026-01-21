@@ -1,0 +1,117 @@
+# name: test/sql/compound_dataset.test
+# description: Test older AnnData format with compound datasets for obs/var
+# group: [sql]
+
+require anndata
+
+# Test file uses older AnnData format where /obs and /var are compound HDF5 datasets
+# instead of groups with separate datasets per column.
+#
+# Structure:
+# /obs: compound dataset with fields (_index, n_genes, total_counts, pct_mito)
+# /var: compound dataset with fields (_index, gene_name, n_cells, mean_expr)
+# /X: 50x20 dense float32 matrix
+
+statement ok
+ATTACH 'test/data/test_compound_dataset.h5ad' AS ad (TYPE ANNDATA);
+
+# ====================
+# Test obs table
+# ====================
+
+# Test 1: Verify obs row count
+query I
+SELECT COUNT(*) FROM ad.obs;
+----
+50
+
+# Test 2: Check obs columns exist - verify _index column
+query T
+SELECT _index FROM ad.obs WHERE obs_idx = 0;
+----
+cell_0000
+
+# Test 3: Check integer column n_genes
+query I
+SELECT n_genes FROM ad.obs WHERE obs_idx = 0;
+----
+100
+
+# Test 4: Verify obs n_genes at various positions (n_genes = 100 + i*2)
+query II
+SELECT obs_idx, n_genes FROM ad.obs WHERE obs_idx IN (0, 10, 25, 49) ORDER BY obs_idx;
+----
+0	100
+10	120
+25	150
+49	198
+
+# Test 5: Count non-NULL _index values
+query I
+SELECT COUNT(*) FROM ad.obs WHERE _index IS NOT NULL;
+----
+50
+
+# Test 6: Count non-NULL n_genes values
+query I
+SELECT COUNT(*) FROM ad.obs WHERE n_genes IS NOT NULL;
+----
+50
+
+# ====================
+# Test var table
+# ====================
+
+# Test 7: Verify var row count
+query I
+SELECT COUNT(*) FROM ad.var;
+----
+20
+
+# Test 8: Check var _index column
+query T
+SELECT _index FROM ad.var WHERE var_idx = 0;
+----
+ENSG00000000
+
+# Test 9: Check var gene_name column
+query T
+SELECT gene_name FROM ad.var WHERE var_idx = 0;
+----
+Gene0
+
+# Test 10: Check var n_cells column (n_cells = 10 + i*3)
+query II
+SELECT var_idx, n_cells FROM ad.var WHERE var_idx IN (0, 5, 10, 19) ORDER BY var_idx;
+----
+0	10
+5	25
+10	40
+19	67
+
+# Test 11: Count non-NULL gene_name values
+query I
+SELECT COUNT(*) FROM ad.var WHERE gene_name IS NOT NULL;
+----
+20
+
+# ====================
+# Test filtering
+# ====================
+
+# Test 13: Filter obs by n_genes (count where n_genes > 150)
+# n_genes > 150 means i*2 > 50, i.e., i > 25, so obs_idx 26-49 = 24 rows
+query I
+SELECT COUNT(*) FROM ad.obs WHERE n_genes > 150;
+----
+24
+
+# Test 14: Filter var by n_cells (count where n_cells > 30)
+# n_cells > 30 means 10 + i*3 > 30, i.e., i > 6.67, so var_idx 7-19 = 13 rows
+query I
+SELECT COUNT(*) FROM ad.var WHERE n_cells > 30;
+----
+13
+
+statement ok
+DETACH ad;

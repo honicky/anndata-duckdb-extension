@@ -544,7 +544,9 @@ inline bool H5LinkExists(hid_t loc_id, const std::string &name) {
 // Helper function to check object type
 inline H5O_type_t H5GetObjectType(hid_t loc_id, const std::string &name) {
 	H5O_info_t info;
-	if (H5Oget_info_by_name(loc_id, name.c_str(), &info, H5O_INFO_BASIC, H5P_DEFAULT) < 0) {
+	memset(&info, 0, sizeof(info));
+	herr_t status = H5Oget_info_by_name(loc_id, name.c_str(), &info, H5O_INFO_BASIC, H5P_DEFAULT);
+	if (status < 0) {
 		return H5O_TYPE_UNKNOWN;
 	}
 	return info.type;

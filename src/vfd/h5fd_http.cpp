@@ -323,6 +323,7 @@ public:
 			config_ = *config;
 		}
 
+
 		// Set up CURL options
 		curl_easy_setopt(curl_, CURLOPT_URL, url_.c_str());
 		curl_easy_setopt(curl_, CURLOPT_NOBODY, 1L);
@@ -356,9 +357,91 @@ public:
 
 		long http_code = 0;
 		curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &http_code);
+
+		// Handle S3 region redirect (301 with x-amz-bucket-region header)
+		// AWS S3 returns 301 without Location header when bucket is in wrong region
+		// The correct region is provided in x-amz-bucket-region header
+		if (http_code == 301 && !s3_redirect_region_.empty()) {
+			// Reconstruct URL with the correct region
+			// Current URL format: https://bucket.s3.region.amazonaws.com/key
+			// Need to replace the region part
+			std::string new_url = url_;
+			size_t s3_pos = new_url.find(".s3.");
+			if (s3_pos != std::string::npos) {
+				size_t region_start = s3_pos + 4; // Skip ".s3."
+				size_t region_end = new_url.find(".amazonaws.com", region_start);
+				if (region_end != std::string::npos) {
+					new_url = new_url.substr(0, region_start) + s3_redirect_region_ +
+					          new_url.substr(region_end);
+
+					// Update URL and retry
+					url_ = new_url;
+					s3_redirect_region_.clear(); // Clear to avoid infinite loops
+					file_size_ = 0;              // Reset file size
+
+					curl_easy_setopt(curl_, CURLOPT_URL, url_.c_str());
+
+					// Retry the HEAD request
+					res = curl_easy_perform(curl_);
+					if (res != CURLE_OK) {
+						return false;
+					}
+
+					curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &http_code);
+				}
+			}
+		}
+
 		if (http_code >= 400) {
 			return false;
 		}
+
+		// Fallback 1: If header callback didn't capture file_size_, get it from CURL directly
+		// This can happen with HTTP/2 through proxies where header delivery differs
+		if (file_size_ == 0) {
+			curl_off_t content_length = -1;
+			curl_easy_getinfo(curl_, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &content_length);
+			if (content_length > 0) {
+				file_size_ = static_cast<uint64_t>(content_length);
+			}
+		}
+
+		// Fallback 2: If still no file size, try a small range request
+		// The Content-Range header in the response will contain the total file size
+		if (file_size_ == 0) {
+			// Reset NOBODY for GET request
+			curl_easy_setopt(curl_, CURLOPT_NOBODY, 0L);
+
+			// Request just the first byte
+			curl_easy_setopt(curl_, CURLOPT_RANGE, "0-0");
+
+			// We need a write callback to consume the single byte
+			std::vector<uint8_t> dummy_buffer;
+			curl_easy_setopt(curl_, CURLOPT_WRITEFUNCTION, WriteCallback);
+			curl_easy_setopt(curl_, CURLOPT_WRITEDATA, &dummy_buffer);
+
+			// HeaderCallback is still set and will parse Content-Range
+			res = curl_easy_perform(curl_);
+
+			// Clear range for future requests
+			curl_easy_setopt(curl_, CURLOPT_RANGE, nullptr);
+
+			if (res != CURLE_OK) {
+				return false;
+			}
+
+			// Check response code (206 Partial Content is expected)
+			curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &http_code);
+			if (http_code != 206 && http_code != 200) {
+				return false;
+			}
+		}
+
+		// If we still don't have a file size, fail - we need it for HDF5 random access
+		if (file_size_ == 0) {
+			return false;
+		}
+
 
 		// Reset for future GET requests
 		curl_easy_setopt(curl_, CURLOPT_NOBODY, 0L);
@@ -423,12 +506,44 @@ private:
 
 		std::string header(buffer, total);
 
+		// Log headers that might be relevant for file size detection
+		if (header.rfind("Content-Length:", 0) == 0 || header.rfind("content-length:", 0) == 0 ||
+		    header.rfind("Content-Range:", 0) == 0 || header.rfind("content-range:", 0) == 0) {
+			// Remove trailing newlines for cleaner logging
+			std::string log_header = header;
+			while (!log_header.empty() && (log_header.back() == '\r' || log_header.back() == '\n')) {
+				log_header.pop_back();
+			}
+		}
+
 		// Parse Content-Length - only set file_size_ if not already set
 		// (During range requests, Content-Length is the chunk size, not total file size)
 		if (header.rfind("Content-Length:", 0) == 0 || header.rfind("content-length:", 0) == 0) {
 			size_t pos = header.find(':');
 			if (pos != std::string::npos && client->file_size_ == 0) {
-				client->file_size_ = std::stoull(header.substr(pos + 1));
+				try {
+					client->file_size_ = std::stoull(header.substr(pos + 1));
+				} catch (...) {
+				}
+			}
+		}
+
+		// Parse Content-Range header (format: "bytes start-end/total" or "bytes start-end/*")
+		// This gives us the total file size even from range requests
+		if (header.rfind("Content-Range:", 0) == 0 || header.rfind("content-range:", 0) == 0) {
+			size_t slash_pos = header.find('/');
+			if (slash_pos != std::string::npos && slash_pos + 1 < header.size()) {
+				std::string total_str = header.substr(slash_pos + 1);
+				// Skip if unknown size (indicated by *)
+				if (total_str[0] != '*') {
+					try {
+						uint64_t total_size = std::stoull(total_str);
+						if (total_size > 0) {
+							client->file_size_ = total_size;
+						}
+					} catch (...) {
+					}
+				}
 			}
 		}
 
@@ -436,6 +551,20 @@ private:
 		if (header.rfind("Accept-Ranges:", 0) == 0 || header.rfind("accept-ranges:", 0) == 0) {
 			if (header.find("bytes") != std::string::npos) {
 				client->supports_range_ = true;
+			}
+		}
+
+		// Parse x-amz-bucket-region for S3 region redirects
+		if (header.rfind("x-amz-bucket-region:", 0) == 0) {
+			size_t pos = header.find(':');
+			if (pos != std::string::npos) {
+				std::string region = header.substr(pos + 1);
+				// Trim whitespace and newlines
+				size_t start = region.find_first_not_of(" \t\r\n");
+				size_t end = region.find_last_not_of(" \t\r\n");
+				if (start != std::string::npos && end != std::string::npos) {
+					client->s3_redirect_region_ = region.substr(start, end - start + 1);
+				}
 			}
 		}
 
@@ -663,6 +792,7 @@ private:
 	H5FD_http_fapl_t config_;
 	uint64_t file_size_;
 	bool supports_range_ = false;
+	std::string s3_redirect_region_; // Captured from x-amz-bucket-region header on 301
 
 	// LRU block cache
 	BlockCache cache_;
