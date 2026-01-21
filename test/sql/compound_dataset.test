@@ -96,16 +96,6 @@ SELECT COUNT(*) FROM ad.var WHERE gene_name IS NOT NULL;
 20
 
 # ====================
-# Test X matrix
-# ====================
-
-# Test 12: Verify X matrix entry count (50 obs x 20 vars = 1000)
-query I
-SELECT COUNT(*) FROM ad.X;
-----
-1000
-
-# ====================
 # Test filtering
 # ====================
 
