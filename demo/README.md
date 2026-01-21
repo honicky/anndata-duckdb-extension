@@ -72,6 +72,36 @@ duckdb
 > SELECT COUNT(*) FROM lung.obs;
 ```
 
+### 3. S3 Authentication Demo (`demo-s3-auth.tape`)
+
+Demonstrates how to authenticate with private S3 buckets **without exposing credentials**:
+- Creating S3 secrets using environment variables
+- Using `${VAR}` syntax to reference credentials
+- Verifying secrets were created
+- Attaching private S3 files with authentication
+- Inline credential specification
+- Regional S3 endpoints
+
+**Prerequisites:**
+- AWS credentials set as environment variables BEFORE running VHS
+- Internet connection
+
+**Generate:**
+```bash
+# 1. Set your AWS credentials as environment variables
+export AWS_ACCESS_KEY_ID="your-access-key-id"
+export AWS_SECRET_ACCESS_KEY="your-secret-access-key"
+export AWS_DEFAULT_REGION="us-west-2"  # optional
+
+# 2. Run VHS - credentials won't appear in the video!
+cd demo
+vhs demo-s3-auth.tape
+```
+
+This will create `demo-s3-auth.mp4`.
+
+**🔒 Security Note:** The video will only show `${AWS_ACCESS_KEY_ID}` and `${AWS_SECRET_ACCESS_KEY}` - the actual credential values are never displayed on screen. DuckDB interpolates the environment variables at runtime.
+
 ## Customization
 
 Edit the `.tape` files to adjust:
