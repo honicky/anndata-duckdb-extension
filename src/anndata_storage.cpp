@@ -101,24 +101,31 @@ vector<string> AnndataDefaultGenerator::GetDefaultEntries() {
 //===--------------------------------------------------------------------===//
 
 vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const string &var_name_column,
-                                            const string &var_id_column, ClientContext *context = nullptr) {
+                                            const string &var_id_column, ClientContext *context,
+                                            H5ReaderMultithreaded *existing_reader) {
 	vector<TableViewInfo> tables;
 
-	// Create reader with S3 credentials if available
+	// Use existing reader or create a new one
 	unique_ptr<H5ReaderMultithreaded> reader_ptr;
-	if (context) {
-		H5FileCache::RemoteConfig config;
-		if (GetS3ConfigFromSecrets(*context, file_path, config)) {
-			reader_ptr = make_uniq<H5ReaderMultithreaded>(file_path, &config);
+	H5ReaderMultithreaded *reader;
+	if (existing_reader) {
+		reader = existing_reader;
+	} else {
+		// Create reader with S3 credentials if available
+		if (context) {
+			H5FileCache::RemoteConfig config;
+			if (GetS3ConfigFromSecrets(*context, file_path, config)) {
+				reader_ptr = make_uniq<H5ReaderMultithreaded>(file_path, &config);
+			} else {
+				reader_ptr = make_uniq<H5ReaderMultithreaded>(file_path);
+			}
 		} else {
 			reader_ptr = make_uniq<H5ReaderMultithreaded>(file_path);
 		}
-	} else {
-		reader_ptr = make_uniq<H5ReaderMultithreaded>(file_path);
+		reader = reader_ptr.get();
 	}
-	auto &reader = *reader_ptr;
 
-	if (!reader.IsValidAnnData()) {
+	if (!reader->IsValidAnnData()) {
 		throw IOException("File is not a valid AnnData (.h5ad) file. "
 		                  "AnnData files must contain /obs, /var, and /X groups: " +
 		                  file_path);
@@ -131,7 +138,7 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const strin
 
 	// Check for X matrix
 	try {
-		auto x_info = reader.GetXMatrixInfo();
+		auto x_info = reader->GetXMatrixInfo();
 		if (x_info.n_obs > 0 && x_info.n_var > 0) {
 			tables.push_back({"X", "X", "", var_name_column, var_id_column});
 		}
@@ -141,7 +148,7 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const strin
 
 	// Get obsm matrices
 	try {
-		auto obsm_matrices = reader.GetObsmMatrices();
+		auto obsm_matrices = reader->GetObsmMatrices();
 		for (const auto &m : obsm_matrices) {
 			tables.push_back({"obsm_" + m.name, "obsm", m.name, var_name_column, var_id_column});
 		}
@@ -151,7 +158,7 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const strin
 
 	// Get varm matrices
 	try {
-		auto varm_matrices = reader.GetVarmMatrices();
+		auto varm_matrices = reader->GetVarmMatrices();
 		for (const auto &m : varm_matrices) {
 			tables.push_back({"varm_" + m.name, "varm", m.name, var_name_column, var_id_column});
 		}
@@ -161,7 +168,7 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const strin
 
 	// Get layers
 	try {
-		auto layers = reader.GetLayers();
+		auto layers = reader->GetLayers();
 		for (const auto &l : layers) {
 			tables.push_back({"layers_" + l.name, "layers", l.name, var_name_column, var_id_column});
 		}
@@ -171,7 +178,7 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const strin
 
 	// Get obsp matrices
 	try {
-		auto obsp_keys = reader.GetObspKeys();
+		auto obsp_keys = reader->GetObspKeys();
 		for (const auto &k : obsp_keys) {
 			tables.push_back({"obsp_" + k, "obsp", k, var_name_column, var_id_column});
 		}
@@ -181,7 +188,7 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const strin
 
 	// Get varp matrices
 	try {
-		auto varp_keys = reader.GetVarpKeys();
+		auto varp_keys = reader->GetVarpKeys();
 		for (const auto &k : varp_keys) {
 			tables.push_back({"varp_" + k, "varp", k, var_name_column, var_id_column});
 		}
@@ -191,7 +198,7 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const strin
 
 	// Check for uns data
 	try {
-		auto uns_keys = reader.GetUnsKeys();
+		auto uns_keys = reader->GetUnsKeys();
 		if (!uns_keys.empty()) {
 			tables.push_back({"uns", "uns", "", var_name_column, var_id_column});
 		}
@@ -231,17 +238,18 @@ static unique_ptr<Catalog> AnndataStorageAttach(optional_ptr<StorageExtensionInf
 	options.options.erase("VAR_NAME_COLUMN");
 	options.options.erase("VAR_ID_COLUMN");
 
+	// Create reader once - reuse for both var column detection and table discovery
+	H5FileCache::RemoteConfig config;
+	unique_ptr<H5ReaderMultithreaded> reader_ptr;
+	if (GetS3ConfigFromSecrets(context, file_path, config)) {
+		reader_ptr = make_uniq<H5ReaderMultithreaded>(file_path, &config);
+	} else {
+		reader_ptr = make_uniq<H5ReaderMultithreaded>(file_path);
+	}
+
 	// Auto-detect var columns if not specified
 	bool auto_detected = false;
 	if (var_name_column.empty() || var_id_column.empty()) {
-		// Create reader with S3 credentials if available
-		H5FileCache::RemoteConfig config;
-		unique_ptr<H5ReaderMultithreaded> reader_ptr;
-		if (GetS3ConfigFromSecrets(context, file_path, config)) {
-			reader_ptr = make_uniq<H5ReaderMultithreaded>(file_path, &config);
-		} else {
-			reader_ptr = make_uniq<H5ReaderMultithreaded>(file_path);
-		}
 		auto detection = reader_ptr->DetectVarColumns();
 		if (var_name_column.empty()) {
 			var_name_column = detection.name_column;
@@ -259,8 +267,8 @@ static unique_ptr<Catalog> AnndataStorageAttach(optional_ptr<StorageExtensionInf
 		          << "'. Override with VAR_NAME_COLUMN/VAR_ID_COLUMN options." << std::endl;
 	}
 
-	// Verify file exists and is valid AnnData (pass context for S3 credentials)
-	auto tables = DiscoverAnndataTables(file_path, var_name_column, var_id_column, &context);
+	// Verify file exists and is valid AnnData - reuse the existing reader
+	auto tables = DiscoverAnndataTables(file_path, var_name_column, var_id_column, &context, reader_ptr.get());
 
 	// Force READ_WRITE access mode since we're using an in-memory catalog
 	// (in-memory databases cannot be opened in read-only mode)
