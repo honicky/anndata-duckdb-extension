@@ -32,6 +32,91 @@ std::unique_ptr<T> make_unique(Args &&...args) {
 namespace duckdb {
 
 //===--------------------------------------------------------------------===//
+// Thread-local HTTP Error Storage
+//===--------------------------------------------------------------------===//
+
+// Thread-local storage for the last HTTP error from remote file operations
+static thread_local long g_last_http_error_code = 0;
+static thread_local std::string g_last_http_error_url;
+
+// Clear the last HTTP error
+void ClearLastHttpError() {
+	g_last_http_error_code = 0;
+	g_last_http_error_url.clear();
+}
+
+// Set the last HTTP error
+static void SetLastHttpError(long http_code, const std::string &url) {
+	g_last_http_error_code = http_code;
+	g_last_http_error_url = url;
+}
+
+// Get user-friendly error message for HTTP status codes
+std::string GetHttpErrorMessage(long http_code, const std::string &url) {
+	std::string message;
+
+	switch (http_code) {
+	case 400:
+		message = "Bad request";
+		break;
+	case 401:
+		message = "Authentication required (invalid or missing credentials)";
+		break;
+	case 403:
+		message = "Access denied (permission denied or invalid credentials)";
+		break;
+	case 404:
+		message = "File not found";
+		break;
+	case 405:
+		message = "Method not allowed (server may not support range requests)";
+		break;
+	case 408:
+		message = "Request timeout";
+		break;
+	case 429:
+		message = "Too many requests (rate limited)";
+		break;
+	case 500:
+		message = "Internal server error";
+		break;
+	case 502:
+		message = "Bad gateway";
+		break;
+	case 503:
+		message = "Service unavailable";
+		break;
+	case 504:
+		message = "Gateway timeout";
+		break;
+	default:
+		if (http_code >= 400 && http_code < 500) {
+			message = "Client error (HTTP " + std::to_string(http_code) + ")";
+		} else if (http_code >= 500) {
+			message = "Server error (HTTP " + std::to_string(http_code) + ")";
+		} else {
+			message = "HTTP error " + std::to_string(http_code);
+		}
+		break;
+	}
+
+	return message + ": " + url;
+}
+
+// Get the last HTTP error as a user-friendly message (returns empty string if no error)
+std::string GetLastHttpErrorMessage() {
+	if (g_last_http_error_code == 0) {
+		return "";
+	}
+	return GetHttpErrorMessage(g_last_http_error_code, g_last_http_error_url);
+}
+
+// Get the last HTTP error code (returns 0 if no error)
+long GetLastHttpErrorCode() {
+	return g_last_http_error_code;
+}
+
+//===--------------------------------------------------------------------===//
 // AWS SigV4 Signing Helpers
 //===--------------------------------------------------------------------===//
 
@@ -323,6 +408,9 @@ public:
 			config_ = *config;
 		}
 
+		// Clear any previous HTTP error
+		ClearLastHttpError();
+
 		// Set up CURL options
 		curl_easy_setopt(curl_, CURLOPT_URL, url_.c_str());
 		curl_easy_setopt(curl_, CURLOPT_NOBODY, 1L);
@@ -391,6 +479,7 @@ public:
 		}
 
 		if (http_code >= 400) {
+			SetLastHttpError(http_code, url_);
 			return false;
 		}
 
@@ -431,6 +520,9 @@ public:
 			// Check response code (206 Partial Content is expected)
 			curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &http_code);
 			if (http_code != 206 && http_code != 200) {
+				if (http_code >= 400) {
+					SetLastHttpError(http_code, url_);
+				}
 				return false;
 			}
 		}

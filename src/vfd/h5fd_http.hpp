@@ -86,11 +86,28 @@ herr_t H5Pset_fapl_http(hid_t fapl_id, const H5FD_http_fapl_t *config);
 herr_t H5Pget_fapl_http(hid_t fapl_id, H5FD_http_fapl_t *config);
 
 //===--------------------------------------------------------------------===//
+// HTTP Error Handling
+//===--------------------------------------------------------------------===//
+
+// Get the last HTTP error code from remote file operations (returns 0 if no error)
+long GetLastHttpErrorCode();
+
+// Get the last HTTP error as a user-friendly message (returns empty string if no error)
+std::string GetLastHttpErrorMessage();
+
+// Clear the last HTTP error
+void ClearLastHttpError();
+
+// Get user-friendly error message for an HTTP status code
+std::string GetHttpErrorMessage(long http_code, const std::string &url);
+
+//===--------------------------------------------------------------------===//
 // Helper to open file with appropriate VFD
 //===--------------------------------------------------------------------===//
 
 // Open an HDF5 file, automatically selecting VFD based on URL scheme
 // Returns file handle, or H5I_INVALID_HID on failure
+// On failure, call GetLastHttpErrorMessage() to get details about HTTP errors
 hid_t H5Fopen_remote(const std::string &path, const RemoteFileConfig &config);
 
 } // namespace duckdb
