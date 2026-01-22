@@ -633,35 +633,7 @@ std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetObsColu
 			if (H5GetObjectType(*file_handle, member_path) == H5O_TYPE_GROUP) {
 				col.is_categorical = true;
 				col.type = LogicalType::VARCHAR;
-
-				// Load categories
-				try {
-					std::string cat_path = member_path + "/categories";
-					if (H5LinkExists(*file_handle, cat_path.c_str())) {
-						H5DatasetHandle cat_dataset(*file_handle, cat_path);
-						H5DataspaceHandle cat_space(cat_dataset.get());
-						hsize_t cat_dims[1];
-						H5Sget_simple_extent_dims(cat_space.get(), cat_dims, nullptr);
-
-						// Read string categories
-						H5TypeHandle dtype(cat_dataset.get(), H5TypeHandle::TypeClass::DATASET);
-						if (H5Tget_class(dtype.get()) == H5T_STRING) {
-							// Fixed-length strings
-							size_t str_len = H5Tget_size(dtype.get());
-							std::vector<char> buffer(cat_dims[0] * str_len);
-							H5Dread(cat_dataset.get(), dtype.get(), H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
-
-							// Extract strings
-							for (hsize_t i = 0; i < cat_dims[0]; i++) {
-								std::string cat_value(buffer.data() + i * str_len,
-								                      strnlen(buffer.data() + i * str_len, str_len));
-								col.categories.push_back(cat_value);
-							}
-						}
-					}
-				} catch (...) {
-					// Continue without categories
-				}
+				// Note: Categories are loaded lazily during query execution, not during schema discovery
 			} else if (IsDatasetPresent("/obs", member)) {
 				// Direct dataset
 				H5DatasetHandle dataset(*file_handle, "/obs/" + member);
@@ -726,35 +698,7 @@ std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetVarColu
 			if (H5GetObjectType(*file_handle, member_path) == H5O_TYPE_GROUP) {
 				col.is_categorical = true;
 				col.type = LogicalType::VARCHAR;
-
-				// Load categories similar to obs
-				try {
-					std::string cat_path = member_path + "/categories";
-					if (H5LinkExists(*file_handle, cat_path.c_str())) {
-						H5DatasetHandle cat_dataset(*file_handle, cat_path);
-						H5DataspaceHandle cat_space(cat_dataset.get());
-						hsize_t cat_dims[1];
-						H5Sget_simple_extent_dims(cat_space.get(), cat_dims, nullptr);
-
-						// Read string categories
-						H5TypeHandle dtype(cat_dataset.get(), H5TypeHandle::TypeClass::DATASET);
-						if (H5Tget_class(dtype.get()) == H5T_STRING) {
-							// Fixed-length strings
-							size_t str_len = H5Tget_size(dtype.get());
-							std::vector<char> buffer(cat_dims[0] * str_len);
-							H5Dread(cat_dataset.get(), dtype.get(), H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
-
-							// Extract strings
-							for (hsize_t i = 0; i < cat_dims[0]; i++) {
-								std::string cat_value(buffer.data() + i * str_len,
-								                      strnlen(buffer.data() + i * str_len, str_len));
-								col.categories.push_back(cat_value);
-							}
-						}
-					}
-				} catch (...) {
-					// Continue without categories
-				}
+				// Note: Categories are loaded lazily during query execution, not during schema discovery
 			} else if (IsDatasetPresent("/var", member)) {
 				// Direct dataset
 				H5DatasetHandle dataset(*file_handle, "/var/" + member);
@@ -1710,30 +1654,46 @@ H5ReaderMultithreaded::VarColumnDetection H5ReaderMultithreaded::DetectVarColumn
 
 	// Phase 2: If not found, score columns by content sampling
 	if (result.name_column.empty() || result.id_column.empty()) {
-		// Sample up to 100 values from each string column and score them
+		// Use a smaller initial sample size for faster detection
+		// Only sample more if we don't find a strong candidate
+		constexpr size_t SAMPLE_SIZE = 20;
+		// High-confidence threshold: if >70% match a pattern, accept it immediately
+		constexpr double HIGH_CONFIDENCE_THRESHOLD = 0.7;
+
 		int best_name_score = 0;
 		int best_id_score = 0;
 		std::string best_name_col;
 		std::string best_id_col;
 
+		auto var_count = GetVarCount();
+		auto sample_size = std::min(SAMPLE_SIZE, var_count);
+
 		for (const auto &col : columns) {
-			// Only check string columns
-			if (col.type != LogicalType::VARCHAR) {
+			// Only check string columns (skip _index as it's the fallback)
+			if (col.type != LogicalType::VARCHAR || col.name == "_index") {
 				continue;
+			}
+
+			// Early exit if we've found high-confidence matches for both
+			bool need_name = result.name_column.empty() && best_name_col.empty();
+			bool need_id = result.id_column.empty() && best_id_col.empty();
+			if (!need_name && !need_id) {
+				break;
 			}
 
 			// Sample values from this column
 			int gene_symbol_count = 0;
 			int ensembl_count = 0;
 			int numeric_count = 0;
+			int valid_count = 0;
 
 			try {
-				auto sample_size = std::min(static_cast<size_t>(100), GetVarCount());
 				for (size_t i = 0; i < sample_size; i++) {
 					auto value = ReadVarColumnString(col.original_name, i);
 					if (value.empty()) {
 						continue;
 					}
+					valid_count++;
 
 					// Check if looks like Ensembl ID (starts with ENS)
 					if (value.size() >= 4 && value.substr(0, 3) == "ENS") {
@@ -1772,18 +1732,25 @@ H5ReaderMultithreaded::VarColumnDetection H5ReaderMultithreaded::DetectVarColumn
 					}
 				}
 
-				// Score: gene symbols get 2 points, ensembl gets 1 point
-				// Avoid columns that are mostly numeric
-				if (numeric_count < static_cast<int>(sample_size) / 2) {
-					int name_score = gene_symbol_count * 2;
-					int id_score = ensembl_count;
-
-					if (result.name_column.empty() && name_score > best_name_score) {
-						best_name_score = name_score;
+				// Skip columns that are mostly numeric
+				if (valid_count > 0 && numeric_count < valid_count / 2) {
+					// Check for high-confidence gene symbol column
+					if (result.name_column.empty() &&
+					    gene_symbol_count > static_cast<int>(valid_count * HIGH_CONFIDENCE_THRESHOLD)) {
+						best_name_col = col.name;
+						best_name_score = gene_symbol_count * 2;
+					} else if (result.name_column.empty() && gene_symbol_count * 2 > best_name_score) {
+						best_name_score = gene_symbol_count * 2;
 						best_name_col = col.name;
 					}
-					if (result.id_column.empty() && id_score > best_id_score) {
-						best_id_score = id_score;
+
+					// Check for high-confidence Ensembl ID column
+					if (result.id_column.empty() &&
+					    ensembl_count > static_cast<int>(valid_count * HIGH_CONFIDENCE_THRESHOLD)) {
+						best_id_col = col.name;
+						best_id_score = ensembl_count;
+					} else if (result.id_column.empty() && ensembl_count > best_id_score) {
+						best_id_score = ensembl_count;
 						best_id_col = col.name;
 					}
 				}
