@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-01-22
+
+### Added
+- New `info` table in attached AnnData databases showing file metadata (dimensions, matrices, layers)
+- Documentation for remote file access (HTTP/HTTPS and S3) in README
+
+### Changed
+- Optimized h5ad file attach for faster open times:
+  - Lazy loading of categorical column values (loaded at query time instead of attach time)
+  - Reuse of HDF5 reader during attach to avoid duplicate file opens
+  - Smarter var column detection with smaller sample size and early termination
+
+### Fixed
+- Improved error messages for file not found and remote access failures
+- Better error reporting when AnnData file validation fails
+
 ## [0.12.2] - 2026-01-21
 
 ### Fixed
