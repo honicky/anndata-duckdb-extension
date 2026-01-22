@@ -50,7 +50,9 @@ H5ReaderMultithreaded::H5ReaderMultithreaded(const std::string &file_path,
 		}
 	} catch (const std::exception &e) {
 		// Re-throw with the original error message which is already descriptive
-		throw IOException(e.what());
+		// Use explicit string construction to avoid format string interpretation
+		// (error messages may contain % from URL-encoded paths like %2F)
+		throw IOException(std::string(e.what()));
 	}
 }
 
