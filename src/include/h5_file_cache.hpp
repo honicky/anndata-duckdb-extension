@@ -8,6 +8,14 @@
 #include <list>
 #include <fstream>
 #include <sys/stat.h>
+
+// Windows MSVC doesn't define S_ISDIR
+#ifdef _MSC_VER
+#ifndef S_ISDIR
+#define S_ISDIR(m) (((m)&_S_IFMT) == _S_IFDIR)
+#endif
+#endif
+
 #include "h5_handles.hpp"
 #include <hdf5.h>
 
