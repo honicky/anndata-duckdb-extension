@@ -53,6 +53,8 @@ string AnndataDefaultGenerator::GenerateViewSQL(const TableViewInfo &info) const
 		                          SQLString(info.param));
 	} else if (info.table_type == "uns") {
 		return StringUtil::Format("SELECT * FROM anndata_scan_uns(%s)", SQLString(file_path));
+	} else if (info.table_type == "info") {
+		return StringUtil::Format("SELECT * FROM anndata_info(%s)", SQLString(file_path));
 	}
 
 	throw InternalException("Unknown table type: " + info.table_type);
@@ -120,9 +122,10 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const strin
 		throw IOException("File is not a valid AnnData file: " + file_path);
 	}
 
-	// Always add obs and var
+	// Always add obs, var, and info
 	tables.push_back({"obs", "obs", "", var_name_column, var_id_column});
 	tables.push_back({"var", "var", "", var_name_column, var_id_column});
+	tables.push_back({"info", "info", "", var_name_column, var_id_column});
 
 	// Check for X matrix
 	try {
