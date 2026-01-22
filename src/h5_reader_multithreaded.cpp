@@ -1664,6 +1664,8 @@ H5ReaderMultithreaded::VarColumnDetection H5ReaderMultithreaded::DetectVarColumn
 		int best_id_score = 0;
 		std::string best_name_col;
 		std::string best_id_col;
+		bool found_high_conf_name = false;
+		bool found_high_conf_id = false;
 
 		auto var_count = GetVarCount();
 		auto sample_size = std::min(SAMPLE_SIZE, var_count);
@@ -1674,10 +1676,11 @@ H5ReaderMultithreaded::VarColumnDetection H5ReaderMultithreaded::DetectVarColumn
 				continue;
 			}
 
-			// Early exit if we've found high-confidence matches for both
-			bool need_name = result.name_column.empty() && best_name_col.empty();
-			bool need_id = result.id_column.empty() && best_id_col.empty();
-			if (!need_name && !need_id) {
+			// Early exit only if we've found HIGH-CONFIDENCE matches for both
+			// (not just any match - we need to keep looking for better candidates)
+			bool have_name = !result.name_column.empty() || found_high_conf_name;
+			bool have_id = !result.id_column.empty() || found_high_conf_id;
+			if (have_name && have_id) {
 				break;
 			}
 
@@ -1739,6 +1742,7 @@ H5ReaderMultithreaded::VarColumnDetection H5ReaderMultithreaded::DetectVarColumn
 					    gene_symbol_count > static_cast<int>(valid_count * HIGH_CONFIDENCE_THRESHOLD)) {
 						best_name_col = col.name;
 						best_name_score = gene_symbol_count * 2;
+						found_high_conf_name = true;
 					} else if (result.name_column.empty() && gene_symbol_count * 2 > best_name_score) {
 						best_name_score = gene_symbol_count * 2;
 						best_name_col = col.name;
@@ -1749,6 +1753,7 @@ H5ReaderMultithreaded::VarColumnDetection H5ReaderMultithreaded::DetectVarColumn
 					    ensembl_count > static_cast<int>(valid_count * HIGH_CONFIDENCE_THRESHOLD)) {
 						best_id_col = col.name;
 						best_id_score = ensembl_count;
+						found_high_conf_id = true;
 					} else if (result.id_column.empty() && ensembl_count > best_id_score) {
 						best_id_score = ensembl_count;
 						best_id_col = col.name;

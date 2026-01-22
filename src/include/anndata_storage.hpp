@@ -7,6 +7,9 @@
 
 namespace duckdb {
 
+// Forward declaration
+class H5ReaderMultithreaded;
+
 //! TableViewInfo holds information about a table/view to be created
 struct TableViewInfo {
 	string name;            //! Table name (e.g., "obs", "obsm_pca")
@@ -39,7 +42,9 @@ private:
 unique_ptr<StorageExtension> CreateAnndataStorageExtension();
 
 //! Discover available tables from an AnnData file
+//! If existing_reader is provided, it will be used instead of creating a new one
 vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const string &var_name_column,
-                                            const string &var_id_column);
+                                            const string &var_id_column, ClientContext *context = nullptr,
+                                            H5ReaderMultithreaded *existing_reader = nullptr);
 
 } // namespace duckdb
