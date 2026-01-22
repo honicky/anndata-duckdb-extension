@@ -159,6 +159,13 @@ public:
 		if (file < 0) {
 			// Provide more specific error message based on context
 			if (is_remote) {
+#ifndef DUCKDB_NO_REMOTE_VFD
+				// Check if we have a specific HTTP error
+				std::string http_error = GetLastHttpErrorMessage();
+				if (!http_error.empty()) {
+					throw std::runtime_error(http_error);
+				}
+#endif
 				throw std::runtime_error("Failed to open remote file (check URL and credentials): " + path);
 			} else {
 				throw std::runtime_error("File is not a valid HDF5 file: " + path);
