@@ -101,8 +101,8 @@ vector<string> AnndataDefaultGenerator::GetDefaultEntries() {
 //===--------------------------------------------------------------------===//
 
 vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const string &var_name_column,
-                                            const string &var_id_column, ClientContext *context = nullptr,
-                                            H5ReaderMultithreaded *existing_reader = nullptr) {
+                                            const string &var_id_column, ClientContext *context,
+                                            H5ReaderMultithreaded *existing_reader) {
 	vector<TableViewInfo> tables;
 
 	// Use existing reader or create a new one
