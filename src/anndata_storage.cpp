@@ -125,7 +125,7 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const strin
 		reader = reader_ptr.get();
 	}
 
-	if (!reader.IsValidAnnData()) {
+	if (!reader->IsValidAnnData()) {
 		throw IOException("File is not a valid AnnData (.h5ad) file. "
 		                  "AnnData files must contain /obs, /var, and /X groups: " +
 		                  file_path);
