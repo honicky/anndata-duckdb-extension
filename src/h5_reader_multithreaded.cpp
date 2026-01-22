@@ -49,7 +49,10 @@ H5ReaderMultithreaded::H5ReaderMultithreaded(const std::string &file_path,
 			throw IOException("Failed to get valid file handle from cache");
 		}
 	} catch (const std::exception &e) {
-		throw IOException("Failed to open HDF5 file " + file_path + ": " + std::string(e.what()));
+		// Re-throw with the original error message which is already descriptive
+		// Use explicit string construction to avoid format string interpretation
+		// (error messages may contain % from URL-encoded paths like %2F)
+		throw IOException(std::string(e.what()));
 	}
 }
 

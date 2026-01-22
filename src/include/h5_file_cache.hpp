@@ -6,6 +6,16 @@
 #include <string>
 #include <cstring>
 #include <list>
+#include <fstream>
+#include <sys/stat.h>
+
+// Windows MSVC doesn't define S_ISDIR
+#ifdef _MSC_VER
+#ifndef S_ISDIR
+#define S_ISDIR(m) (((m)&_S_IFMT) == _S_IFDIR)
+#endif
+#endif
+
 #include "h5_handles.hpp"
 #include <hdf5.h>
 
@@ -98,6 +108,7 @@ public:
 		// Detect URL scheme
 		bool is_s3 = (path.rfind("s3://", 0) == 0 || path.rfind("s3a://", 0) == 0);
 		bool is_http = (path.rfind("http://", 0) == 0 || path.rfind("https://", 0) == 0);
+		bool is_remote = is_s3 || is_http;
 
 #ifndef DUCKDB_NO_REMOTE_VFD
 		if (is_http || is_s3) {
@@ -119,6 +130,25 @@ public:
 		} else
 #endif
 		{
+			// Local file - check existence and permissions before HDF5 operations
+			struct stat file_stat;
+			if (stat(path.c_str(), &file_stat) != 0) {
+				// File doesn't exist or can't be accessed
+				throw std::runtime_error("File not found: " + path);
+			}
+
+			// Check if it's a directory
+			if (S_ISDIR(file_stat.st_mode)) {
+				throw std::runtime_error("Path is a directory, not a file: " + path);
+			}
+
+			// Check if we can read the file
+			std::ifstream test_file(path);
+			if (!test_file.good()) {
+				throw std::runtime_error("Cannot read file (permission denied?): " + path);
+			}
+			test_file.close();
+
 			// Local file - use standard POSIX VFD
 			hid_t fapl = H5Pcreate(H5P_FILE_ACCESS);
 			if (fapl < 0) {
@@ -135,7 +165,19 @@ public:
 		}
 
 		if (file < 0) {
-			throw std::runtime_error("H5Fopen failed: " + path);
+			// Provide more specific error message based on context
+			if (is_remote) {
+#ifndef DUCKDB_NO_REMOTE_VFD
+				// Check if we have a specific HTTP error
+				std::string http_error = GetLastHttpErrorMessage();
+				if (!http_error.empty()) {
+					throw std::runtime_error(http_error);
+				}
+#endif
+				throw std::runtime_error("Failed to open remote file (check URL and credentials): " + path);
+			} else {
+				throw std::runtime_error("File is not a valid HDF5 file: " + path);
+			}
 		}
 
 		// Create shared pointer with custom deleter
