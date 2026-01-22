@@ -58,6 +58,75 @@ SELECT * FROM scdata.layers_raw;
 DETACH scdata;
 ```
 
+### Remote Files (HTTP/HTTPS and S3)
+
+The extension supports reading AnnData files from remote locations via HTTP/HTTPS and S3. This requires the `httpfs` extension.
+
+#### HTTPS Files
+
+```sql
+-- Load the httpfs extension for remote access
+INSTALL httpfs;
+LOAD httpfs;
+
+-- Attach an AnnData file from HTTPS URL
+ATTACH 'https://example.com/data/pbmc3k.h5ad' AS remote (TYPE ANNDATA);
+
+-- Query as usual
+SELECT * FROM remote.obs LIMIT 10;
+```
+
+#### S3 Files (Anonymous/Public Buckets)
+
+```sql
+-- Load the httpfs extension
+INSTALL httpfs;
+LOAD httpfs;
+
+-- For public buckets, just use the s3:// URL directly
+ATTACH 's3://my-public-bucket/data.h5ad' AS s3data (TYPE ANNDATA);
+
+SELECT COUNT(*) FROM s3data.obs;
+```
+
+#### S3 Files (Authenticated Access)
+
+```sql
+-- Load the httpfs extension
+INSTALL httpfs;
+LOAD httpfs;
+
+-- Create an S3 secret with your credentials
+CREATE SECRET my_s3_secret (
+    TYPE S3,
+    KEY_ID 'your-access-key-id',
+    SECRET 'your-secret-access-key',
+    REGION 'us-west-2'
+);
+
+-- Attach and query
+ATTACH 's3://my-private-bucket/data.h5ad' AS s3data (TYPE ANNDATA);
+SELECT * FROM s3data.obs LIMIT 10;
+
+-- Clean up secret when done
+DROP SECRET my_s3_secret;
+```
+
+For custom S3-compatible endpoints (e.g., MinIO):
+
+```sql
+CREATE SECRET minio_secret (
+    TYPE S3,
+    KEY_ID 'your-access-key',
+    SECRET 'your-secret-key',
+    ENDPOINT 'localhost:9000',
+    URL_STYLE 'path',
+    USE_SSL false
+);
+
+ATTACH 's3://bucket/data.h5ad' AS miniodata (TYPE ANNDATA);
+```
+
 You can also use the function syntax:
 ```sql
 -- Load the extension
@@ -80,6 +149,7 @@ SELECT * FROM anndata_scan_x('data.h5ad');
 ## Features
 
 - Read-only access to AnnData HDF5 files
+- **Remote file support** for HTTP/HTTPS and S3 (including authenticated S3)
 - Attach to an AnnData file like a database
 - Query observation (cell) metadata from `.obs`
 - Query variable (gene) metadata from `.var`
@@ -97,7 +167,6 @@ SELECT * FROM anndata_scan_x('data.h5ad');
 
 - Read only
 - Single file access (for now)
-- No support for remote files (for now)
 - Windows HDF5 library limitations mean that we don't support threading on Windows. This limits the throughput of more complicated queries on Windows.
 
 ## Usage
