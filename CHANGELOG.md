@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-01-23
+
+### Changed
+- Optimized obs/var table queries by caching categorical column categories. Previously, categories were re-read from HDF5 for every chunk (~2048 rows), causing significant slowdown on large tables. Now categories are read once and cached, dramatically improving query performance especially on remote files.
+
 ## [0.13.0] - 2026-01-22
 
 ### Added
