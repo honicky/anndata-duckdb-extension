@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-01-23
+
+### Added
+- Comprehensive remote file test coverage for HTTP and S3 access, testing all AnnData features (obs, var, X, obsm, varm, layers, obsp, varp, info) via both ATTACH and function interfaces
+- New `test_comprehensive.h5ad` test file containing all AnnData features for thorough testing
+- Python script `create_test_comprehensive.py` to generate the comprehensive test file
+
 ## [0.13.1] - 2026-01-23
 
 ### Changed

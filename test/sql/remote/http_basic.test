@@ -1,5 +1,5 @@
 # name: test/sql/remote/http_basic.test
-# description: Test HTTP remote access
+# description: Test HTTP remote access for all AnnData features
 # group: [remote]
 
 require anndata
@@ -10,32 +10,307 @@ require anndata
 
 require-env ANNDATA_TEST_HTTP_ENDPOINT
 
-# Test attaching HTTP file (MinIO serves files over HTTP too)
-statement ok
-ATTACH '${ANNDATA_TEST_HTTP_ENDPOINT}/test_small.h5ad' AS httpdata (TYPE ANNDATA);
+# =============================================================================
+# Test 1: Basic attach and info
+# =============================================================================
 
-# Verify obs table
+statement ok
+ATTACH '${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad' AS httpdata (TYPE ANNDATA);
+
+# Verify info table works
+query I
+SELECT COUNT(*) FROM (SELECT * FROM httpdata.info);
+----
+11
+
+# =============================================================================
+# Test 2: obs table (cell metadata)
+# =============================================================================
+
 query I
 SELECT COUNT(*) FROM httpdata.obs;
 ----
 100
 
-# Verify var table
+# Test categorical columns
+query III
+SELECT obs_idx, cell_type, batch
+FROM httpdata.obs
+WHERE obs_idx < 3
+ORDER BY obs_idx;
+----
+0	Dendritic	batch1
+1	NK cell	batch1
+2	NK cell	batch1
+
+# Test numeric columns
+query I
+SELECT COUNT(*) FROM httpdata.obs WHERE n_counts > 0;
+----
+100
+
+# =============================================================================
+# Test 3: var table (gene metadata)
+# =============================================================================
+
 query I
 SELECT COUNT(*) FROM httpdata.var;
 ----
 50
 
-# Test querying specific data
-query II
-SELECT obs_idx, cell_type
-FROM httpdata.obs
-WHERE obs_idx < 2
-ORDER BY obs_idx;
+# Test categorical columns in var
+query I
+SELECT COUNT(DISTINCT gene_type) FROM httpdata.var;
 ----
-0	T cell
-1	Monocyte
+4
 
-# Clean up
+# =============================================================================
+# Test 4: X matrix (sparse expression data)
+# =============================================================================
+
+# X returns one row per obs (row-based format)
+query I
+SELECT COUNT(*) FROM httpdata.X;
+----
+100
+
+# Test filtering on X
+query I
+SELECT COUNT(*) FROM httpdata.X WHERE obs_idx < 10;
+----
+10
+
+# =============================================================================
+# Test 5: obsm tables (dimensional reductions)
+# =============================================================================
+
+# PCA embeddings
+query I
+SELECT COUNT(*) FROM httpdata.obsm_X_pca;
+----
+100
+
+# UMAP embeddings
+query I
+SELECT COUNT(*) FROM httpdata.obsm_X_umap;
+----
+100
+
+# tSNE embeddings
+query I
+SELECT COUNT(*) FROM httpdata.obsm_X_tsne;
+----
+100
+
+# Verify obsm has correct number of dimensions
+query I
+SELECT COUNT(*) FROM (DESCRIBE httpdata.obsm_X_pca) WHERE column_name LIKE 'X_pca_%';
+----
+50
+
+query I
+SELECT COUNT(*) FROM (DESCRIBE httpdata.obsm_X_umap) WHERE column_name LIKE 'X_umap_%';
+----
+2
+
+# =============================================================================
+# Test 6: varm tables (gene embeddings)
+# =============================================================================
+
+query I
+SELECT COUNT(*) FROM httpdata.varm_PCs;
+----
+50
+
+query I
+SELECT COUNT(*) FROM httpdata.varm_gene_loadings;
+----
+50
+
+# =============================================================================
+# Test 7: layers (alternative matrices)
+# =============================================================================
+
+query I
+SELECT COUNT(*) FROM httpdata.layers_raw_counts;
+----
+100
+
+query I
+SELECT COUNT(*) FROM httpdata.layers_normalized;
+----
+100
+
+# =============================================================================
+# Test 8: obsp tables (cell-cell pairwise matrices)
+# =============================================================================
+
+# obsp returns sparse triplets (row_idx, col_idx, value)
+query I
+SELECT COUNT(*) FROM httpdata.obsp_distances;
+----
+1000
+
+query I
+SELECT COUNT(*) FROM httpdata.obsp_connectivities;
+----
+1000
+
+# =============================================================================
+# Test 9: varp tables (gene-gene pairwise matrices)
+# =============================================================================
+
+query I
+SELECT COUNT(*) FROM httpdata.varp_correlations;
+----
+250
+
+# =============================================================================
+# Test 10: Complex queries across tables
+# =============================================================================
+
+# Join obs with X data
+query I
+SELECT COUNT(*)
+FROM httpdata.obs o
+JOIN httpdata.X x ON o.obs_idx = x.obs_idx
+WHERE o.cell_type = 'T cell';
+----
+19
+
+# Filter obsm by obs metadata
+query I
+SELECT COUNT(*)
+FROM httpdata.obsm_X_umap u
+JOIN httpdata.obs o ON u.obs_idx = o.obs_idx
+WHERE o.batch = 'batch1';
+----
+28
+
+# =============================================================================
+# Cleanup attach interface
+# =============================================================================
+
 statement ok
 DETACH httpdata;
+
+# =============================================================================
+# Test 11: Function interface - anndata_info
+# =============================================================================
+
+query I
+SELECT COUNT(*) FROM anndata_info('${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad');
+----
+11
+
+# =============================================================================
+# Test 12: Function interface - anndata_scan_obs
+# =============================================================================
+
+query I
+SELECT COUNT(*) FROM anndata_scan_obs('${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad');
+----
+100
+
+query III
+SELECT obs_idx, cell_type, batch
+FROM anndata_scan_obs('${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad')
+WHERE obs_idx < 3
+ORDER BY obs_idx;
+----
+0	Dendritic	batch1
+1	NK cell	batch1
+2	NK cell	batch1
+
+# =============================================================================
+# Test 13: Function interface - anndata_scan_var
+# =============================================================================
+
+query I
+SELECT COUNT(*) FROM anndata_scan_var('${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad');
+----
+50
+
+query I
+SELECT COUNT(DISTINCT gene_type) FROM anndata_scan_var('${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad');
+----
+4
+
+# =============================================================================
+# Test 14: Function interface - anndata_scan_x
+# =============================================================================
+
+query I
+SELECT COUNT(*) FROM anndata_scan_x('${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad');
+----
+100
+
+query I
+SELECT COUNT(*) FROM anndata_scan_x('${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad') WHERE obs_idx < 10;
+----
+10
+
+# =============================================================================
+# Test 15: Function interface - anndata_scan_obsm
+# =============================================================================
+
+query I
+SELECT COUNT(*) FROM anndata_scan_obsm('${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad', 'X_pca');
+----
+100
+
+query I
+SELECT COUNT(*) FROM anndata_scan_obsm('${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad', 'X_umap');
+----
+100
+
+# =============================================================================
+# Test 16: Function interface - anndata_scan_varm
+# =============================================================================
+
+query I
+SELECT COUNT(*) FROM anndata_scan_varm('${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad', 'PCs');
+----
+50
+
+query I
+SELECT COUNT(*) FROM anndata_scan_varm('${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad', 'gene_loadings');
+----
+50
+
+# =============================================================================
+# Test 17: Function interface - anndata_scan_layers
+# =============================================================================
+
+query I
+SELECT COUNT(*) FROM anndata_scan_layers('${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad', 'raw_counts');
+----
+100
+
+query I
+SELECT COUNT(*) FROM anndata_scan_layers('${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad', 'normalized');
+----
+100
+
+# =============================================================================
+# Test 18: Function interface - anndata_scan_obsp
+# =============================================================================
+
+query I
+SELECT COUNT(*) FROM anndata_scan_obsp('${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad', 'distances');
+----
+1000
+
+query I
+SELECT COUNT(*) FROM anndata_scan_obsp('${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad', 'connectivities');
+----
+1000
+
+# =============================================================================
+# Test 19: Function interface - anndata_scan_varp
+# =============================================================================
+
+query I
+SELECT COUNT(*) FROM anndata_scan_varp('${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad', 'correlations');
+----
+250
