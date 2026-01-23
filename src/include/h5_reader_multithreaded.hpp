@@ -231,6 +231,9 @@ private:
 	void ReadCompoundDatasetColumn(const std::string &path, const std::string &column_name, Vector &result,
 	                               idx_t offset, idx_t count);
 
+	// Get cached categories for a categorical column (reads from HDF5 only once)
+	const std::vector<std::string> &GetCachedCategories(const std::string &group_path);
+
 	// Cache for categorical mappings
 	struct CategoricalCache {
 		std::vector<std::string> categories;

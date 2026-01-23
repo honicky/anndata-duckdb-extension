@@ -124,6 +124,96 @@ std::vector<std::string> H5ReaderMultithreaded::GetGroupMembers(const std::strin
 	return members;
 }
 
+// Helper method to get cached categories for a categorical column
+// This avoids re-reading categories from HDF5 for every chunk
+const std::vector<std::string> &H5ReaderMultithreaded::GetCachedCategories(const std::string &group_path) {
+	// Check if we already have this in the cache
+	auto it = categorical_cache.find(group_path);
+	if (it != categorical_cache.end()) {
+		return it->second.categories;
+	}
+
+	// Read categories from HDF5 and cache them
+	std::vector<std::string> categories;
+
+	H5DatasetHandle cat_dataset(*file_handle, group_path + "/categories");
+	H5DataspaceHandle cat_space(cat_dataset.get());
+	hsize_t cat_dims[1];
+	H5Sget_simple_extent_dims(cat_space.get(), cat_dims, nullptr);
+
+	categories.reserve(cat_dims[0]);
+
+	H5TypeHandle cat_dtype(cat_dataset.get(), H5TypeHandle::TypeClass::DATASET);
+	H5T_class_t cat_class = H5Tget_class(cat_dtype.get());
+
+	if (cat_class == H5T_STRING) {
+		if (H5Tis_variable_str(cat_dtype.get())) {
+			// Variable-length strings
+			std::vector<char *> str_buffer(cat_dims[0]);
+			H5Dread(cat_dataset.get(), cat_dtype.get(), H5S_ALL, H5S_ALL, H5P_DEFAULT, str_buffer.data());
+
+			for (size_t i = 0; i < cat_dims[0]; i++) {
+				if (str_buffer[i]) {
+					categories.emplace_back(str_buffer[i]);
+				} else {
+					categories.emplace_back("");
+				}
+			}
+
+			H5Dvlen_reclaim(cat_dtype.get(), cat_space.get(), H5P_DEFAULT, str_buffer.data());
+		} else {
+			// Fixed-length strings
+			size_t str_size = H5Tget_size(cat_dtype.get());
+			std::vector<char> buffer(cat_dims[0] * str_size);
+			H5Dread(cat_dataset.get(), cat_dtype.get(), H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
+
+			for (size_t i = 0; i < cat_dims[0]; i++) {
+				char *str_ptr = buffer.data() + i * str_size;
+				size_t len = strnlen(str_ptr, str_size);
+				categories.emplace_back(str_ptr, len);
+			}
+		}
+	} else if (cat_class == H5T_INTEGER) {
+		// Integer categories
+		size_t int_size = H5Tget_size(cat_dtype.get());
+		if (int_size <= 4) {
+			std::vector<int32_t> int_cats(cat_dims[0]);
+			H5Dread(cat_dataset.get(), H5T_NATIVE_INT32, H5S_ALL, H5S_ALL, H5P_DEFAULT, int_cats.data());
+			for (size_t i = 0; i < cat_dims[0]; i++) {
+				categories.emplace_back(std::to_string(int_cats[i]));
+			}
+		} else {
+			std::vector<int64_t> int_cats(cat_dims[0]);
+			H5Dread(cat_dataset.get(), H5T_NATIVE_INT64, H5S_ALL, H5S_ALL, H5P_DEFAULT, int_cats.data());
+			for (size_t i = 0; i < cat_dims[0]; i++) {
+				categories.emplace_back(std::to_string(int_cats[i]));
+			}
+		}
+	} else if (cat_class == H5T_FLOAT) {
+		// Float categories
+		size_t float_size = H5Tget_size(cat_dtype.get());
+		if (float_size <= 4) {
+			std::vector<float> float_cats(cat_dims[0]);
+			H5Dread(cat_dataset.get(), H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, float_cats.data());
+			for (size_t i = 0; i < cat_dims[0]; i++) {
+				categories.emplace_back(std::to_string(float_cats[i]));
+			}
+		} else {
+			std::vector<double> double_cats(cat_dims[0]);
+			H5Dread(cat_dataset.get(), H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, double_cats.data());
+			for (size_t i = 0; i < cat_dims[0]; i++) {
+				categories.emplace_back(std::to_string(double_cats[i]));
+			}
+		}
+	}
+
+	// Store in cache and return reference
+	CategoricalCache cache_entry;
+	cache_entry.categories = std::move(categories);
+	auto result = categorical_cache.emplace(group_path, std::move(cache_entry));
+	return result.first->second.categories;
+}
+
 // Check if a path is a compound dataset (older AnnData format)
 bool H5ReaderMultithreaded::IsCompoundDataset(const std::string &path) {
 	if (!H5LinkExists(*file_handle, path)) {
@@ -743,84 +833,12 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 		if (H5GetObjectType(*file_handle, group_path) == H5O_TYPE_GROUP) {
 			// Handle categorical columns
 			try {
-				// Read codes
+				// Get cached categories (reads from HDF5 only on first call)
+				const auto &categories = GetCachedCategories(group_path);
+
+				// Read codes for the requested range
 				H5DatasetHandle codes_dataset(*file_handle, group_path + "/codes");
 				H5DataspaceHandle codes_space(codes_dataset.get());
-
-				// Read categories into memory (usually small)
-				H5DatasetHandle cat_dataset(*file_handle, group_path + "/categories");
-				H5DataspaceHandle cat_space(cat_dataset.get());
-				hsize_t cat_dims[1];
-				H5Sget_simple_extent_dims(cat_space.get(), cat_dims, nullptr);
-
-				// Read all categories first (as strings for output)
-				std::vector<std::string> categories;
-				categories.reserve(cat_dims[0]);
-
-				H5TypeHandle cat_dtype(cat_dataset.get(), H5TypeHandle::TypeClass::DATASET);
-				H5T_class_t cat_class = H5Tget_class(cat_dtype.get());
-				if (cat_class == H5T_STRING) {
-					if (H5Tis_variable_str(cat_dtype.get())) {
-						// Variable-length strings
-						std::vector<char *> str_buffer(cat_dims[0]);
-						H5Dread(cat_dataset.get(), cat_dtype.get(), H5S_ALL, H5S_ALL, H5P_DEFAULT, str_buffer.data());
-
-						for (size_t i = 0; i < cat_dims[0]; i++) {
-							if (str_buffer[i]) {
-								categories.emplace_back(str_buffer[i]);
-							} else {
-								categories.emplace_back("");
-							}
-						}
-
-						// Clean up variable-length strings
-						H5Dvlen_reclaim(cat_dtype.get(), cat_space.get(), H5P_DEFAULT, str_buffer.data());
-					} else {
-						// Fixed-length strings
-						size_t str_size = H5Tget_size(cat_dtype.get());
-						std::vector<char> buffer(cat_dims[0] * str_size);
-						H5Dread(cat_dataset.get(), cat_dtype.get(), H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
-
-						for (size_t i = 0; i < cat_dims[0]; i++) {
-							char *str_ptr = buffer.data() + i * str_size;
-							size_t len = strnlen(str_ptr, str_size);
-							categories.emplace_back(str_ptr, len);
-						}
-					}
-				} else if (cat_class == H5T_INTEGER) {
-					// Integer categories
-					size_t int_size = H5Tget_size(cat_dtype.get());
-					if (int_size <= 4) {
-						std::vector<int32_t> int_cats(cat_dims[0]);
-						H5Dread(cat_dataset.get(), H5T_NATIVE_INT32, H5S_ALL, H5S_ALL, H5P_DEFAULT, int_cats.data());
-						for (size_t i = 0; i < cat_dims[0]; i++) {
-							categories.emplace_back(std::to_string(int_cats[i]));
-						}
-					} else {
-						std::vector<int64_t> int_cats(cat_dims[0]);
-						H5Dread(cat_dataset.get(), H5T_NATIVE_INT64, H5S_ALL, H5S_ALL, H5P_DEFAULT, int_cats.data());
-						for (size_t i = 0; i < cat_dims[0]; i++) {
-							categories.emplace_back(std::to_string(int_cats[i]));
-						}
-					}
-				} else if (cat_class == H5T_FLOAT) {
-					// Float categories
-					size_t float_size = H5Tget_size(cat_dtype.get());
-					if (float_size <= 4) {
-						std::vector<float> float_cats(cat_dims[0]);
-						H5Dread(cat_dataset.get(), H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, float_cats.data());
-						for (size_t i = 0; i < cat_dims[0]; i++) {
-							categories.emplace_back(std::to_string(float_cats[i]));
-						}
-					} else {
-						std::vector<double> double_cats(cat_dims[0]);
-						H5Dread(cat_dataset.get(), H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT,
-						        double_cats.data());
-						for (size_t i = 0; i < cat_dims[0]; i++) {
-							categories.emplace_back(std::to_string(double_cats[i]));
-						}
-					}
-				}
 
 				// Now read the codes for the requested range - detect code dtype
 				hsize_t h_offset[1] = {static_cast<hsize_t>(offset)};
@@ -1042,83 +1060,12 @@ void H5ReaderMultithreaded::ReadVarColumn(const std::string &column_name, Vector
 		if (H5GetObjectType(*file_handle, group_path) == H5O_TYPE_GROUP) {
 			// Handle categorical columns - same logic as obs
 			try {
-				// Read codes
+				// Get cached categories (reads from HDF5 only on first call)
+				const auto &categories = GetCachedCategories(group_path);
+
+				// Read codes for the requested range
 				H5DatasetHandle codes_dataset(*file_handle, group_path + "/codes");
 				H5DataspaceHandle codes_space(codes_dataset.get());
-
-				// Read categories into memory
-				H5DatasetHandle cat_dataset(*file_handle, group_path + "/categories");
-				H5DataspaceHandle cat_space(cat_dataset.get());
-				hsize_t cat_dims[1];
-				H5Sget_simple_extent_dims(cat_space.get(), cat_dims, nullptr);
-
-				// Read all categories first (as strings for output)
-				std::vector<std::string> categories;
-				categories.reserve(cat_dims[0]);
-
-				H5TypeHandle cat_dtype(cat_dataset.get(), H5TypeHandle::TypeClass::DATASET);
-				H5T_class_t cat_class = H5Tget_class(cat_dtype.get());
-				if (cat_class == H5T_STRING) {
-					if (H5Tis_variable_str(cat_dtype.get())) {
-						// Variable-length strings
-						std::vector<char *> str_buffer(cat_dims[0]);
-						H5Dread(cat_dataset.get(), cat_dtype.get(), H5S_ALL, H5S_ALL, H5P_DEFAULT, str_buffer.data());
-
-						for (size_t i = 0; i < cat_dims[0]; i++) {
-							if (str_buffer[i]) {
-								categories.emplace_back(str_buffer[i]);
-							} else {
-								categories.emplace_back("");
-							}
-						}
-
-						H5Dvlen_reclaim(cat_dtype.get(), cat_space.get(), H5P_DEFAULT, str_buffer.data());
-					} else {
-						// Fixed-length strings
-						size_t str_size = H5Tget_size(cat_dtype.get());
-						std::vector<char> buffer(cat_dims[0] * str_size);
-						H5Dread(cat_dataset.get(), cat_dtype.get(), H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
-
-						for (size_t i = 0; i < cat_dims[0]; i++) {
-							char *str_ptr = buffer.data() + i * str_size;
-							size_t len = strnlen(str_ptr, str_size);
-							categories.emplace_back(str_ptr, len);
-						}
-					}
-				} else if (cat_class == H5T_INTEGER) {
-					// Integer categories (e.g., feature_length)
-					size_t int_size = H5Tget_size(cat_dtype.get());
-					if (int_size <= 4) {
-						std::vector<int32_t> int_cats(cat_dims[0]);
-						H5Dread(cat_dataset.get(), H5T_NATIVE_INT32, H5S_ALL, H5S_ALL, H5P_DEFAULT, int_cats.data());
-						for (size_t i = 0; i < cat_dims[0]; i++) {
-							categories.emplace_back(std::to_string(int_cats[i]));
-						}
-					} else {
-						std::vector<int64_t> int_cats(cat_dims[0]);
-						H5Dread(cat_dataset.get(), H5T_NATIVE_INT64, H5S_ALL, H5S_ALL, H5P_DEFAULT, int_cats.data());
-						for (size_t i = 0; i < cat_dims[0]; i++) {
-							categories.emplace_back(std::to_string(int_cats[i]));
-						}
-					}
-				} else if (cat_class == H5T_FLOAT) {
-					// Float categories
-					size_t float_size = H5Tget_size(cat_dtype.get());
-					if (float_size <= 4) {
-						std::vector<float> float_cats(cat_dims[0]);
-						H5Dread(cat_dataset.get(), H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, float_cats.data());
-						for (size_t i = 0; i < cat_dims[0]; i++) {
-							categories.emplace_back(std::to_string(float_cats[i]));
-						}
-					} else {
-						std::vector<double> double_cats(cat_dims[0]);
-						H5Dread(cat_dataset.get(), H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT,
-						        double_cats.data());
-						for (size_t i = 0; i < cat_dims[0]; i++) {
-							categories.emplace_back(std::to_string(double_cats[i]));
-						}
-					}
-				}
 
 				// Now read the codes for the requested range - detect code dtype
 				hsize_t h_offset[1] = {static_cast<hsize_t>(offset)};
