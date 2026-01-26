@@ -17,7 +17,7 @@ jobs:
     name: Build extension binaries
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
-      duckdb_version: v1.4.3
+      duckdb_version: v1.4.4
       ci_tools_version: main
       extension_name: anndata
 
@@ -25,7 +25,7 @@ jobs:
     name: Code Quality Check
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
     with:
-      duckdb_version: v1.4.3
+      duckdb_version: v1.4.4
       ci_tools_version: main
       extension_name: anndata
       format_checks: 'format;tidy'
@@ -78,7 +78,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: anndata-v1.4.3-extension-linux_amd64
+          name: anndata-v1.4.4-extension-linux_amd64
           path: /tmp/extension
 
       - name: Setup DuckDB with extension
@@ -88,13 +88,13 @@ jobs:
           ls -la /tmp/extension/
 
           # Download DuckDB CLI to /tmp to avoid conflict with duckdb/ submodule
-          wget -q https://github.com/duckdb/duckdb/releases/download/v1.4.3/duckdb_cli-linux-amd64.zip -O /tmp/duckdb_cli.zip
+          wget -q https://github.com/duckdb/duckdb/releases/download/v1.4.4/duckdb_cli-linux-amd64.zip -O /tmp/duckdb_cli.zip
           unzip -o -q /tmp/duckdb_cli.zip -d /tmp/duckdb-cli
           chmod +x /tmp/duckdb-cli/duckdb
 
           # Setup extension directory (no gunzip needed - file is not compressed)
-          mkdir -p ~/.duckdb/extensions/v1.4.3/linux_amd64
-          cp /tmp/extension/anndata.duckdb_extension ~/.duckdb/extensions/v1.4.3/linux_amd64/
+          mkdir -p ~/.duckdb/extensions/v1.4.4/linux_amd64
+          cp /tmp/extension/anndata.duckdb_extension ~/.duckdb/extensions/v1.4.4/linux_amd64/
 
       - name: Run remote access tests
         env:
@@ -196,11 +196,11 @@ jobs:
       - name: Checkout DuckDB to version
         run: |
           cd duckdb
-          git checkout v1.4.3
+          git checkout v1.4.4
 
       - uses: actions/download-artifact@v4
         with:
-          name: anndata-v1.4.3-extension-${{matrix.duckdb_arch}}
+          name: anndata-v1.4.4-extension-${{matrix.duckdb_arch}}
           path: /tmp/extension
           
       - name: Deploy
