@@ -4,6 +4,8 @@
 
 require anndata
 
+require httpfs
+
 # These tests require an HTTP server with test data
 # Set environment variable before running:
 #   ANNDATA_TEST_HTTP_ENDPOINT=http://localhost:9000/data

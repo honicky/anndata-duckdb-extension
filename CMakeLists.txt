@@ -84,8 +84,9 @@ else()
     endif()
 endif()
 
-# Find libcurl for remote file access (not available on WASM)
-if(NOT EMSCRIPTEN AND NOT CLANG_TIDY)
+# Find libcurl for remote file access (not available on WASM or MinGW)
+# MinGW is excluded because OpenSSL fails to build in vcpkg on that platform
+if(NOT EMSCRIPTEN AND NOT CLANG_TIDY AND NOT MINGW)
     find_package(CURL CONFIG QUIET)
     if(CURL_FOUND)
         message(STATUS "Found CURL via CONFIG mode (VCPKG)")
@@ -120,8 +121,9 @@ else()
 endif()
 
 # HTTP VFD sources for remote file access (S3, HTTP)
-# Not available on WASM or tidy builds
-if(NOT EMSCRIPTEN AND NOT CLANG_TIDY)
+# Not available on WASM, MinGW, or tidy builds
+# MinGW is excluded because OpenSSL fails to build in vcpkg on that platform
+if(NOT EMSCRIPTEN AND NOT CLANG_TIDY AND NOT MINGW)
     set(VFD_SOURCES
         src/vfd/h5fd_http.cpp
     )

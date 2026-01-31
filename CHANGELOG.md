@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-01-31
+
+### Fixed
+- Fixed MinGW build failure by excluding OpenSSL and curl dependencies. Remote file access (HTTP/S3) is not available on MinGW builds, but local file access works normally.
+
 ## [0.13.2] - 2026-01-23
 
 ### Added

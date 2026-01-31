@@ -18,11 +18,11 @@
     {
       "name": "curl",
       "features": ["ssl"],
-      "platform": "!emscripten"
+      "platform": "!emscripten & !mingw"
     },
     {
       "name": "openssl",
-      "platform": "!emscripten"
+      "platform": "!emscripten & !mingw"
     }
   ]
 }
