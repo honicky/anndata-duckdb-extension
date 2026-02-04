@@ -42,12 +42,12 @@ Type ".timer on"
 Enter
 Sleep 1s
 
-# Attach HTTP file
-Type "-- Attach AnnData file directly from HTTP (~20MB)"
+# Attach HTTP file (PBMC blood cells from GitHub)
+Type "-- Attach AnnData file from HTTP (PBMC ~24MB)"
 Enter
-Type@5ms "ATTACH 'https://cellxgene-annotation-public.s3.us-west-2.amazonaws.com/cell_type/tutorial/minilung.h5ad'"
+Type@5ms "ATTACH 'https://raw.githubusercontent.com/chanzuckerberg/cellxgene/main/example-dataset/pbmc3k.h5ad'"
 Enter
-Type "  AS lung (TYPE ANNDATA);"
+Type "  AS pbmc (TYPE ANNDATA);"
 Enter
 Sleep 10s
 
@@ -61,73 +61,76 @@ Sleep 3s
 # Query cell metadata with timing
 Type "-- Query cell metadata (notice the timing!)"
 Enter
-Type "SELECT COUNT(*) AS total_cells FROM lung.obs;"
+Type "SELECT COUNT(*) AS total_cells FROM pbmc.obs;"
 Enter
 Sleep 4s
 
 Type "-- What cell types are present?"
 Enter
-Type "SELECT cell_type, COUNT(*) as count"
+Type "SELECT louvain, COUNT(*) as count"
 Enter
-Type "FROM lung.obs"
+Type "FROM pbmc.obs"
 Enter
-Type "GROUP BY cell_type"
+Type "GROUP BY louvain"
 Enter
 Type "ORDER BY count DESC;"
 Enter
 Sleep 4s
 
-# Attach S3 file
-Type "-- Now attach another file from public S3"
+# Attach S3 file (lung cells from cellxgene S3)
+Type "-- Now attach lung data from S3"
 Enter
-Type@5ms "ATTACH 's3://openproblems-bio/resources_test/common/pancreas/dataset.h5ad'"
+Type "SET s3_region = 'us-west-2';"
 Enter
-Type "  AS pancreas (TYPE ANNDATA);"
+Sleep 1s
+Type@5ms "ATTACH 's3://cellxgene-annotation-public/cell_type/tutorial/minilung.h5ad'"
 Enter
-Sleep 8s
+Type "  AS lung (TYPE ANNDATA);"
+Enter
+Sleep 10s
 
 # Show all databases
-Type "-- We now have two AnnData files attached"
+Type "-- We now have blood (HTTP) and lung (S3) attached"
 Enter
 Type "CALL duckdb_databases();"
 Enter
 Sleep 3s
 
 # Query across both
-Type "-- Compare cell counts across datasets"
+Type "-- Compare cell counts: blood vs lung"
 Enter
-Type "SELECT 'lung' as dataset,"
+Type "SELECT 'pbmc (blood)' as tissue,"
 Enter
 Type "       COUNT(*) as cells"
 Enter
-Type "FROM lung.obs"
+Type "FROM pbmc.obs"
 Enter
 Type "UNION ALL"
 Enter
-Type "SELECT 'pancreas' as dataset,"
+Type "SELECT 'lung' as tissue,"
 Enter
 Type "       COUNT(*) as cells"
 Enter
-Type "FROM pancreas.obs;"
+Type "FROM lung.obs;"
 Enter
 Sleep 4s
 
-# Explore pancreas obs
-Type "-- Explore pancreas cell metadata"
+# Explore lung obs
+Type "-- Explore lung cell metadata"
 Enter
-Type "SELECT * FROM pancreas.obs LIMIT 5;"
+Type "SELECT cell_type, COUNT(*) FROM lung.obs GROUP BY 1;"
 Enter
 Sleep 3s
 
 # Gene expression query
-Type "-- Query gene expression"
+Type "-- Query gene metadata"
 Enter
-Type "SELECT * FROM lung.var LIMIT 10;"
+Type "SELECT * FROM pbmc.var LIMIT 10;"
 Enter
 Sleep 3s
 
 # Exit
-Type "-- That's it! AnnData files from HTTP and S3!"
+Type "-- That's it! Blood (HTTP) + Lung (S3) in one query!"
 Enter
 Sleep 2s
 Type ".quit"

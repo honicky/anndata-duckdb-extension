@@ -42,8 +42,8 @@ Demonstrates querying AnnData files directly from HTTP and S3:
 **Prerequisites:**
 - Internet connection (no local files needed!)
 - Files used:
-  - HTTP: `minilung.h5ad` from CELLxGENE
-  - S3: `pancreas/dataset.h5ad` from OpenProblems test data
+  - HTTP: `pbmc3k.h5ad` (~24MB) - blood cells from [cellxgene GitHub](https://github.com/chanzuckerberg/cellxgene)
+  - S3: `minilung.h5ad` (~20MB) - lung cells from CELLxGENE (us-west-2)
 
 **Generate:**
 ```bash
@@ -68,7 +68,10 @@ Alternatively, test manually:
 duckdb
 > .timer on
 > INSTALL httpfs; LOAD httpfs; INSTALL anndata FROM community;
-> ATTACH 'https://cellxgene-annotation-public.s3.us-west-2.amazonaws.com/cell_type/tutorial/minilung.h5ad' AS lung (TYPE ANNDATA);
+> ATTACH 'https://raw.githubusercontent.com/chanzuckerberg/cellxgene/main/example-dataset/pbmc3k.h5ad' AS pbmc (TYPE ANNDATA);
+> SELECT COUNT(*) FROM pbmc.obs;
+> SET s3_region = 'us-west-2';
+> ATTACH 's3://cellxgene-annotation-public/cell_type/tutorial/minilung.h5ad' AS lung (TYPE ANNDATA);
 > SELECT COUNT(*) FROM lung.obs;
 ```
 
@@ -115,9 +118,9 @@ Edit the `.tape` files to adjust:
 The remote demo uses these publicly accessible files:
 
 **HTTP:**
-- CELLxGENE minilung: https://cellxgene-annotation-public.s3.us-west-2.amazonaws.com/cell_type/tutorial/minilung.h5ad (~20MB)
+- PBMC3k (blood cells): https://raw.githubusercontent.com/chanzuckerberg/cellxgene/main/example-dataset/pbmc3k.h5ad (~24MB)
 
 **S3:**
-- OpenProblems pancreas test data: s3://openproblems-bio/resources_test/common/pancreas/dataset.h5ad (small test file)
+- CELLxGENE minilung (lung cells): s3://cellxgene-annotation-public/cell_type/tutorial/minilung.h5ad (~20MB, us-west-2 region)
 
 These files are intentionally small to keep the demo fast and accessible.

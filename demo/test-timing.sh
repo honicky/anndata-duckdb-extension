@@ -22,55 +22,46 @@ cat > /tmp/anndata_timing_test.sql << 'EOF'
 .echo on
 
 -- STEP 1: Install extensions
--- Adjust Sleep after line 26 based on this timing
 INSTALL httpfs;
 LOAD httpfs;
 INSTALL anndata FROM community;
 
--- STEP 2: Attach HTTP file (~20MB)
--- Adjust Sleep after line 47 based on this timing
-ATTACH 'https://cellxgene-annotation-public.s3.us-west-2.amazonaws.com/cell_type/tutorial/minilung.h5ad'
-  AS lung (TYPE ANNDATA);
+-- STEP 2: Attach HTTP file (PBMC blood cells ~24MB)
+ATTACH 'https://raw.githubusercontent.com/chanzuckerberg/cellxgene/main/example-dataset/pbmc3k.h5ad'
+  AS pbmc (TYPE ANNDATA);
 
 -- STEP 3: Show tables
--- Adjust Sleep after line 54 based on this timing
 SHOW ALL TABLES;
 
 -- STEP 4: Query cell count
--- Adjust Sleep after line 61 based on this timing
-SELECT COUNT(*) AS total_cells FROM lung.obs;
+SELECT COUNT(*) AS total_cells FROM pbmc.obs;
 
--- STEP 5: Query cell types
--- Adjust Sleep after line 73 based on this timing
-SELECT cell_type, COUNT(*) as count
-FROM lung.obs
-GROUP BY cell_type
+-- STEP 5: Query cell types (pbmc uses 'louvain' column)
+SELECT louvain, COUNT(*) as count
+FROM pbmc.obs
+GROUP BY louvain
 ORDER BY count DESC;
 
--- STEP 6: Attach S3 file
--- Adjust Sleep after line 82 based on this timing
-ATTACH 's3://openproblems-bio/resources_test/common/pancreas/dataset.h5ad'
-  AS pancreas (TYPE ANNDATA);
+-- STEP 6: Attach S3 file (lung cells ~20MB, us-west-2)
+SET s3_region = 'us-west-2';
+ATTACH 's3://cellxgene-annotation-public/cell_type/tutorial/minilung.h5ad'
+  AS lung (TYPE ANNDATA);
 
 -- STEP 7: Show databases
--- Adjust Sleep after line 89 based on this timing
 CALL duckdb_databases();
 
--- STEP 8: Compare counts
--- Adjust Sleep after line 108 based on this timing
-SELECT 'lung' as dataset, COUNT(*) as cells
-FROM lung.obs
+-- STEP 8: Compare counts (blood vs lung)
+SELECT 'pbmc (blood)' as tissue, COUNT(*) as cells
+FROM pbmc.obs
 UNION ALL
-SELECT 'pancreas' as dataset, COUNT(*) as cells
-FROM pancreas.obs;
+SELECT 'lung' as tissue, COUNT(*) as cells
+FROM lung.obs;
 
--- STEP 9: Explore pancreas obs
--- Adjust Sleep after line 115 based on this timing
-SELECT * FROM pancreas.obs LIMIT 5;
+-- STEP 9: Explore lung cell types
+SELECT cell_type, COUNT(*) FROM lung.obs GROUP BY 1;
 
 -- STEP 10: Check var table
--- Adjust Sleep after line 122 based on this timing
-SELECT * FROM lung.var LIMIT 10;
+SELECT * FROM pbmc.var LIMIT 10;
 
 .quit
 EOF
