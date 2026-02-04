@@ -1,12 +1,10 @@
 # AnnData DuckDB Extension Demo - S3 Authentication
 # Run with: vhs demo/demo-s3-auth.tape
 #
-# IMPORTANT: Set these environment variables BEFORE running this demo:
-#   export AWS_ACCESS_KEY_ID="your-key-id"
-#   export AWS_SECRET_ACCESS_KEY="your-secret-key"
-#   export AWS_DEFAULT_REGION="us-west-2"  # optional
+# IMPORTANT: Set AWS_PROFILE environment variable BEFORE running:
+#   export AWS_PROFILE="your-profile-name"
 #
-# The actual credentials will NOT appear in the video - only the variable names
+# Your profile name will appear in the video, but NOT your credentials
 
 Output demo-s3-auth.mp4
 
@@ -37,18 +35,14 @@ Type "INSTALL anndata FROM community;"
 Enter
 Sleep 1s
 
-# Create S3 secret using environment variables
-Type "-- Create S3 secret using environment variables"
-Enter
-Type "-- (Your actual keys won't be shown on screen!)"
+# Create S3 secret using AWS profile
+Type "-- Create S3 secret using AWS profile from ~/.aws/credentials"
 Enter
 Type "CREATE SECRET my_s3 ("
 Enter
 Type "    TYPE S3,"
 Enter
-Type "    KEY_ID '\${AWS_ACCESS_KEY_ID}',"
-Enter
-Type "    SECRET '\${AWS_SECRET_ACCESS_KEY}',"
+Type "    PROVIDER credential_chain,"
 Enter
 Type "    REGION 'us-west-2'"
 Enter
@@ -101,7 +95,7 @@ Enter
 Sleep 1s
 
 # Exit
-Type "-- That's it! Private S3 data, credentials stayed hidden."
+Type "-- That's it! Used AWS profile - no keys exposed."
 Enter
 Sleep 2s
 Type ".quit"
