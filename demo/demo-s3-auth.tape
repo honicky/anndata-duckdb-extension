@@ -44,6 +44,10 @@ Type "    TYPE S3,"
 Enter
 Type "    PROVIDER credential_chain,"
 Enter
+Type "    CHAIN 'config',"
+Enter
+Type "    PROFILE 'miratyper',"
+Enter
 Type "    REGION 'us-west-2'"
 Enter
 Type ");"
