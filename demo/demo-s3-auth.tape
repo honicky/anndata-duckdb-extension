@@ -48,7 +48,9 @@ Type "    TYPE S3,"
 Enter
 Type "    KEY_ID '\${AWS_ACCESS_KEY_ID}',"
 Enter
-Type "    SECRET '\${AWS_SECRET_ACCESS_KEY}'"
+Type "    SECRET '\${AWS_SECRET_ACCESS_KEY}',"
+Enter
+Type "    REGION 'us-west-2'"
 Enter
 Type ");"
 Enter
@@ -62,69 +64,44 @@ Enter
 Sleep 3s
 
 # Now attach a private S3 file
-Type "-- Now you can attach private S3 files"
+Type "-- Now attach a private S3 file (~42MB)"
 Enter
-Type "-- Example: s3://your-bucket/your-file.h5ad"
+Type@5ms "ATTACH 's3://pythiomicsdata/cellxgene_v2/test_v1/17e9d436-a264-4c94-a42d-48c8daf6fdd9_subset.h5ad'"
 Enter
-Sleep 2s
+Type "  AS cells (TYPE ANNDATA);"
+Enter
+Sleep 10s
 
-# Alternative: Attach with inline credentials (also using env vars)
-Type "-- Alternative: Inline credentials (still using env vars)"
+# Query the private data
+Type "-- Query the private data"
 Enter
-Type "ATTACH 's3://your-bucket/data.h5ad'"
+Type "SELECT COUNT(*) AS total_cells FROM cells.obs;"
 Enter
-Type "  AS mydata (TYPE ANNDATA,"
-Enter
-Type "             S3_ACCESS_KEY_ID '\${AWS_ACCESS_KEY_ID}',"
-Enter
-Type "             S3_SECRET_ACCESS_KEY '\${AWS_SECRET_ACCESS_KEY}');"
-Enter
-Sleep 2s
+Sleep 4s
 
-# Show public S3 access (no auth needed)
-Type "-- For public S3 buckets, no auth needed:"
+# Show cell metadata
+Type "-- Explore cell metadata"
 Enter
-Type@5ms "ATTACH 's3://openproblems-bio/resources_test/common/pancreas/dataset.h5ad'"
+Type "SELECT * FROM cells.obs LIMIT 5;"
 Enter
-Type "  AS public_data (TYPE ANNDATA);"
-Enter
-Sleep 5s
+Sleep 4s
 
-Type "-- Query the public data"
+# Show tables
+Type "-- See all available tables"
 Enter
-Type "SELECT COUNT(*) FROM public_data.obs;"
+Type "SHOW ALL TABLES;"
 Enter
 Sleep 3s
 
-# Regional endpoints
-Type "-- For specific regions, specify the endpoint:"
-Enter
-Type "CREATE SECRET my_s3_region ("
-Enter
-Type "    TYPE S3,"
-Enter
-Type "    KEY_ID '\${AWS_ACCESS_KEY_ID}',"
-Enter
-Type "    SECRET '\${AWS_SECRET_ACCESS_KEY}',"
-Enter
-Type "    REGION 'us-west-2'"
-Enter
-Type ");"
-Enter
-Sleep 2s
-
 # Clean up
-Type "-- Clean up secrets"
+Type "-- Clean up"
 Enter
 Type "DROP SECRET my_s3;"
 Enter
 Sleep 1s
-Type "DROP SECRET my_s3_region;"
-Enter
-Sleep 1s
 
 # Exit
-Type "-- That's it! Your credentials stayed private."
+Type "-- That's it! Private S3 data, credentials stayed hidden."
 Enter
 Sleep 2s
 Type ".quit"
