@@ -4,6 +4,7 @@
 #include "duckdb/main/extension/extension_loader.hpp"
 #include <fstream>
 #include <iostream>
+#include <unordered_set>
 
 namespace duckdb {
 
@@ -302,10 +303,33 @@ unique_ptr<FunctionData> AnndataScanner::XBind(ClientContext &context, TableFunc
 	names.push_back("obs_idx");
 	return_types.push_back(LogicalType::BIGINT);
 
-	// Add one column for each gene
+	// Add one column for each gene, handling duplicate names by appending _1, _2, etc.
+	std::unordered_set<std::string> used_names;
+	used_names.insert("obs_idx"); // Reserve the first column name
+	idx_t duplicate_count = 0;
+
 	for (size_t i = 0; i < bind_data->n_var && i < bind_data->var_names.size(); i++) {
-		names.push_back(bind_data->var_names[i]);
+		std::string base_name = bind_data->var_names[i];
+		std::string unique_name = base_name;
+
+		int suffix = 1;
+		while (used_names.count(unique_name) > 0) {
+			unique_name = base_name + "_" + std::to_string(suffix);
+			suffix++;
+			if (suffix == 2) {
+				// Only count each base name once as duplicate
+				duplicate_count++;
+			}
+		}
+
+		used_names.insert(unique_name);
+		names.push_back(unique_name);
 		return_types.push_back(LogicalType::DOUBLE);
+	}
+
+	if (duplicate_count > 0) {
+		std::cerr << "Warning: " << duplicate_count << " duplicate variable name(s) found in X matrix. "
+		          << "Duplicate columns renamed with _1, _2, etc. suffixes." << std::endl;
 	}
 
 	// Set row count to number of observations
@@ -659,13 +683,35 @@ unique_ptr<FunctionData> AnndataScanner::LayerBind(ClientContext &context, Table
 	// Get variable names for column headers using the same method as XBind
 	result->var_names = reader.GetVarNames(var_column);
 
-	// Set up column schema: obs_idx + all gene columns
+	// Set up column schema: obs_idx + all gene columns, handling duplicate names
 	names.push_back("obs_idx");
 	return_types.push_back(LogicalType::BIGINT);
 
+	std::unordered_set<std::string> used_names;
+	used_names.insert("obs_idx"); // Reserve the first column name
+	idx_t duplicate_count = 0;
+
 	for (const auto &var_name : result->var_names) {
-		names.push_back(var_name);
+		std::string unique_name = var_name;
+
+		int suffix = 1;
+		while (used_names.count(unique_name) > 0) {
+			unique_name = var_name + "_" + std::to_string(suffix);
+			suffix++;
+			if (suffix == 2) {
+				// Only count each base name once as duplicate
+				duplicate_count++;
+			}
+		}
+
+		used_names.insert(unique_name);
+		names.push_back(unique_name);
 		return_types.push_back(layer_info.dtype);
+	}
+
+	if (duplicate_count > 0) {
+		std::cerr << "Warning: " << duplicate_count << " duplicate variable name(s) found in layer '"
+		          << result->layer_name << "'. Duplicate columns renamed with _1, _2, etc. suffixes." << std::endl;
 	}
 
 	result->column_names = names;
