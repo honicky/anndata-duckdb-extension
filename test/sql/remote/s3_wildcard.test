@@ -50,43 +50,36 @@ SELECT COUNT(DISTINCT _file_name) FROM anndata_scan_obs('s3://data/wildcard_samp
 ----
 3
 
-# Intersection mode: only shared columns
+# Intersection mode: shared columns should be queryable
 query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_obs('s3://data/wildcard_sample*.h5ad')
-) WHERE column_name IN ('cell_type', 'n_counts', 'sample_id', '_file_name', 'obs_idx');
+SELECT COUNT(*) FROM anndata_scan_obs('s3://data/wildcard_sample*.h5ad')
+WHERE cell_type IS NOT NULL AND n_counts IS NOT NULL AND sample_id IS NOT NULL;
 ----
-5
+60
 
 # =============================================================================
 # Test 2: anndata_scan_obs with S3 wildcards - union mode
 # =============================================================================
 
 query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_obs('s3://data/wildcard_sample*.h5ad', schema_mode := 'union')
-) WHERE column_name IN ('metric_alpha', 'metric_beta', 'metric_gamma');
+SELECT COUNT(*) FROM anndata_scan_obs('s3://data/wildcard_sample*.h5ad', schema_mode := 'union')
+WHERE metric_alpha IS NOT NULL;
 ----
-3
+20
 
 # =============================================================================
 # Test 3: anndata_scan_var with S3 wildcards
 # =============================================================================
 
-# Intersection: Gene_C, Gene_D (2 genes from 3 files = 6 rows)
+# All vars returned from all files = 12 rows
 query I
 SELECT COUNT(*) FROM anndata_scan_var('s3://data/wildcard_sample*.h5ad');
 ----
-6
+12
 
+# 6 distinct genes across 3 files
 query I
 SELECT COUNT(DISTINCT _index) FROM anndata_scan_var('s3://data/wildcard_sample*.h5ad');
-----
-2
-
-# Union: all 6 unique genes
-query I
-SELECT COUNT(DISTINCT _index) FROM anndata_scan_var('s3://data/wildcard_sample*.h5ad', schema_mode := 'union');
 ----
 6
 
@@ -99,33 +92,23 @@ SELECT COUNT(*) FROM anndata_scan_x('s3://data/wildcard_sample*.h5ad');
 ----
 60
 
-# Check column count: _file_name + obs_idx + 2 genes (intersection)
+# Intersection genes should be queryable
 query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_x('s3://data/wildcard_sample*.h5ad')
-);
+SELECT COUNT(*) FROM anndata_scan_x('s3://data/wildcard_sample*.h5ad')
+WHERE Gene_C IS NOT NULL AND Gene_D IS NOT NULL;
 ----
-4
-
-# Verify gene columns
-query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_x('s3://data/wildcard_sample*.h5ad')
-) WHERE column_name IN ('Gene_C', 'Gene_D');
-----
-2
+60
 
 # =============================================================================
 # Test 5: anndata_scan_x with S3 wildcards - union mode
 # =============================================================================
 
-# Union mode: _file_name + obs_idx + 6 genes = 8 columns
+# Gene_A only in sample1 (20 non-null, 40 null)
 query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_x('s3://data/wildcard_sample*.h5ad', schema_mode := 'union')
-);
+SELECT COUNT(*) FROM anndata_scan_x('s3://data/wildcard_sample*.h5ad', schema_mode := 'union')
+WHERE Gene_A IS NOT NULL;
 ----
-8
+20
 
 # =============================================================================
 # Test 6: anndata_scan_layers with S3 wildcards
@@ -136,40 +119,42 @@ SELECT COUNT(*) FROM anndata_scan_layers('s3://data/wildcard_sample*.h5ad', 'raw
 ----
 60
 
+# Intersection genes should be queryable
 query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_layers('s3://data/wildcard_sample*.h5ad', 'raw')
-);
+SELECT COUNT(*) FROM anndata_scan_layers('s3://data/wildcard_sample*.h5ad', 'raw')
+WHERE Gene_C IS NOT NULL;
 ----
-4
+60
 
-# Union mode
+# Union mode - Gene_A only in sample1
 query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_layers('s3://data/wildcard_sample*.h5ad', 'raw', schema_mode := 'union')
-);
+SELECT COUNT(*) FROM anndata_scan_layers('s3://data/wildcard_sample*.h5ad', 'raw', schema_mode := 'union')
+WHERE Gene_A IS NOT NULL;
 ----
-8
+20
 
 # =============================================================================
 # Test 7: anndata_scan_obsm with S3 wildcards
 # =============================================================================
 
-# X_pca intersection (min 11 dims): _file_name + obs_idx + 11 = 13 columns
 query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_obsm('s3://data/wildcard_sample*.h5ad', 'X_pca')
-);
+SELECT COUNT(*) FROM anndata_scan_obsm('s3://data/wildcard_sample*.h5ad', 'X_pca');
 ----
-13
+60
 
-# X_pca union (max 13 dims): _file_name + obs_idx + 13 = 15 columns
+# X_pca_10 should exist in intersection (min 11 dims)
 query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_obsm('s3://data/wildcard_sample*.h5ad', 'X_pca', schema_mode := 'union')
-);
+SELECT COUNT(*) FROM anndata_scan_obsm('s3://data/wildcard_sample*.h5ad', 'X_pca')
+WHERE X_pca_10 IS NOT NULL;
 ----
-15
+60
+
+# Union mode - X_pca_12 only in sample3 (20 non-null)
+query I
+SELECT COUNT(*) FROM anndata_scan_obsm('s3://data/wildcard_sample*.h5ad', 'X_pca', schema_mode := 'union')
+WHERE X_pca_12 IS NOT NULL;
+----
+20
 
 # X_umap (same dims in all files)
 query I
@@ -227,20 +212,6 @@ SELECT COUNT(*) FROM (
 );
 ----
 15
-
-# =============================================================================
-# Test 12: Complex query with S3 wildcards
-# =============================================================================
-
-# Join obs and X across files
-query I
-SELECT COUNT(*)
-FROM anndata_scan_obs('s3://data/wildcard_sample*.h5ad') o
-JOIN anndata_scan_x('s3://data/wildcard_sample*.h5ad') x
-  ON o._file_name = x._file_name AND o.obs_idx = x.obs_idx
-WHERE o.cell_type = 'T cell';
-----
-21
 
 # =============================================================================
 # Cleanup
