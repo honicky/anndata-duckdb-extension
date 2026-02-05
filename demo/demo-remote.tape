@@ -12,7 +12,7 @@ Output demo-remote.mp4
 Set Shell bash
 Set FontSize 20
 Set Width 1200
-Set Height 1500
+Set Height 1000
 Set Theme "Dracula"
 Set TypingSpeed 15ms
 Set Padding 20
@@ -23,14 +23,12 @@ Enter
 Sleep 2s
 
 # Install extensions
-Type "-- Install required extensions"
+Type "-- Install required extensions (only needed the first time)"
 Enter
 Type "INSTALL anndata FROM community;"
 Enter
-Sleep 1s
 Type "INSTALL httpfs;"
 Enter
-Sleep 1s
 Type "LOAD httpfs;"
 Enter
 Sleep 1s
@@ -49,21 +47,21 @@ Type@5ms "ATTACH 'https://raw.githubusercontent.com/chanzuckerberg/cellxgene/mai
 Enter
 Type "  AS pbmc (TYPE ANNDATA);"
 Enter
-Sleep 10s
+Sleep 3s
 
 # Show tables
 Type "-- See what tables are available"
 Enter
 Type "SHOW ALL TABLES;"
 Enter
-Sleep 3s
+Sleep 2s
 
 # Query cell metadata with timing
 Type "-- Query cell metadata (notice the timing!)"
 Enter
 Type "SELECT COUNT(*) AS total_cells FROM pbmc.obs;"
 Enter
-Sleep 4s
+Sleep 2s
 
 Type "-- What cell types are present?"
 Enter
@@ -75,7 +73,7 @@ Type "GROUP BY louvain"
 Enter
 Type "ORDER BY count DESC;"
 Enter
-Sleep 4s
+Sleep 2s
 
 # Attach S3 file (lung cells from cellxgene S3)
 Type "-- Now attach lung data from S3"
@@ -87,14 +85,14 @@ Type@5ms "ATTACH 's3://cellxgene-annotation-public/cell_type/tutorial/minilung.h
 Enter
 Type "  AS lung (TYPE ANNDATA);"
 Enter
-Sleep 10s
+Sleep 4s
 
 # Show all databases
 Type "-- We now have blood (HTTP) and lung (S3) attached"
 Enter
 Type "CALL duckdb_databases();"
 Enter
-Sleep 3s
+Sleep 2s
 
 # Query across both
 Type "-- Compare cell counts: blood vs lung"
@@ -113,21 +111,7 @@ Type "       COUNT(*) as cells"
 Enter
 Type "FROM lung.obs;"
 Enter
-Sleep 4s
-
-# Explore lung obs
-Type "-- Explore lung cell metadata"
-Enter
-Type "SELECT cell_type, COUNT(*) FROM lung.obs GROUP BY 1;"
-Enter
-Sleep 3s
-
-# Gene expression query
-Type "-- Query gene metadata"
-Enter
-Type "SELECT * FROM pbmc.var LIMIT 10;"
-Enter
-Sleep 3s
+Sleep 2s
 
 # Exit
 Type "-- That's it! Blood (HTTP) + Lung (S3) in one query!"

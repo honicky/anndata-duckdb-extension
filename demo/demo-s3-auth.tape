@@ -27,10 +27,8 @@ Type "-- Install required extensions"
 Enter
 Type "INSTALL httpfs;"
 Enter
-Sleep 1s
 Type "LOAD httpfs;"
 Enter
-Sleep 1s
 Type "INSTALL anndata FROM community;"
 Enter
 Sleep 1s
@@ -46,20 +44,13 @@ Type "    PROVIDER credential_chain,"
 Enter
 Type "    CHAIN 'config',"
 Enter
-Type "    PROFILE 'miratyper',"
+Type "    PROFILE 'miratyper',   -- optional, will use 'default'"
 Enter
-Type "    REGION 'us-west-2'"
+Type "    REGION 'us-west-2'     -- optional, will use profile default"
 Enter
 Type ");"
 Enter
 Sleep 2s
-
-# Show that the secret was created
-Type "-- Verify the secret was created"
-Enter
-Type "SELECT name, type FROM duckdb_secrets();"
-Enter
-Sleep 3s
 
 # Now attach a private S3 file
 Type "-- Now attach a private S3 file (~42MB)"
@@ -68,40 +59,30 @@ Type@5ms "ATTACH 's3://pythiomicsdata/cellxgene_v2/test_v1/17e9d436-a264-4c94-a4
 Enter
 Type "  AS cells (TYPE ANNDATA);"
 Enter
-Sleep 10s
+Sleep 4s
 
 # Query the private data
 Type "-- Query the private data"
 Enter
 Type "SELECT COUNT(*) AS total_cells FROM cells.obs;"
 Enter
-Sleep 4s
+Sleep 2s
 
 # Show cell metadata
 Type "-- Explore cell metadata"
 Enter
 Type "SELECT * FROM cells.obs LIMIT 5;"
 Enter
-Sleep 4s
+Sleep 2s
 
 # Show tables
 Type "-- See all available tables"
 Enter
 Type "SHOW ALL TABLES;"
 Enter
-Sleep 3s
-
-# Clean up
-Type "-- Clean up"
-Enter
-Type "DROP SECRET my_s3;"
-Enter
-Sleep 1s
+Sleep 2s
 
 # Exit
-Type "-- That's it! Used AWS profile - no keys exposed."
-Enter
-Sleep 2s
 Type ".quit"
 Enter
 Sleep 1s
