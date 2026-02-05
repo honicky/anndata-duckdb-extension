@@ -651,60 +651,120 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 		}
 
 		idx_t count = to_read;
-		idx_t col_offset = 0;
 
-		// Fill _file_name column
-		auto file_name_data = FlatVector::GetData<string_t>(output.data[0]);
-		for (idx_t i = 0; i < count; i++) {
-			file_name_data[i] = StringVector::AddString(output.data[0], gstate.current_file_name);
-		}
-		col_offset = 1;
+		// With projection pushdown, column_ids maps output positions to bind-time column indices
+		// Column layout at bind time: 0=_file_name, 1=obs_idx, 2+=gene columns
+		// When projection pushdown is active, output.data only has column_ids.size() columns
+		bool has_projection = !gstate.column_ids.empty();
 
-		// Fill obs_idx column (file-local indices)
-		auto obs_idx_data = FlatVector::GetData<int64_t>(output.data[col_offset]);
-		for (idx_t i = 0; i < count; i++) {
-			obs_idx_data[i] = static_cast<int64_t>(gstate.current_row_in_file + i);
-		}
-		col_offset++;
+		if (has_projection) {
+			// Build a map from bind-time column index to output position
+			vector<idx_t> file_var_indices;
+			vector<idx_t> output_gene_cols; // output positions for gene columns
 
-		// Check projection pushdown - get valid column indices for this file
-		vector<idx_t> file_var_indices;
-		vector<idx_t> output_var_cols;
-		for (idx_t v = 0; v < gstate.current_var_mapping.size(); v++) {
-			idx_t file_idx = gstate.current_var_mapping[v];
-			if (file_idx != DConstants::INVALID_INDEX) {
-				file_var_indices.push_back(file_idx);
-				output_var_cols.push_back(col_offset + v);
-			}
-		}
-
-		if (!file_var_indices.empty()) {
-			// Create temporary chunk for matrix data
-			DataChunk matrix_output;
-			vector<LogicalType> matrix_types(file_var_indices.size(), LogicalType::DOUBLE);
-			matrix_output.Initialize(Allocator::DefaultAllocator(), matrix_types);
-
-			// Read only the mapped columns from X matrix
-			gstate.h5_reader->ReadMatrixColumns("/X", gstate.current_row_in_file, count, file_var_indices,
-			                                    matrix_output, false);
-
-			// Copy to output columns
-			for (idx_t m = 0; m < file_var_indices.size(); m++) {
-				auto &src = matrix_output.data[m];
-				auto &dst = output.data[output_var_cols[m]];
-				for (idx_t row = 0; row < count; row++) {
-					dst.SetValue(row, src.GetValue(row));
+			for (idx_t out_idx = 0; out_idx < gstate.column_ids.size(); out_idx++) {
+				idx_t col_id = gstate.column_ids[out_idx];
+				if (col_id == 0) {
+					// _file_name column
+					auto file_name_data = FlatVector::GetData<string_t>(output.data[out_idx]);
+					for (idx_t i = 0; i < count; i++) {
+						file_name_data[i] = StringVector::AddString(output.data[out_idx], gstate.current_file_name);
+					}
+				} else if (col_id == 1) {
+					// obs_idx column
+					auto obs_idx_data = FlatVector::GetData<int64_t>(output.data[out_idx]);
+					for (idx_t i = 0; i < count; i++) {
+						obs_idx_data[i] = static_cast<int64_t>(gstate.current_row_in_file + i);
+					}
+				} else {
+					// Gene column: col_id - 2 is the index into common_var_names
+					idx_t var_idx = col_id - 2;
+					if (var_idx < gstate.current_var_mapping.size()) {
+						idx_t file_col = gstate.current_var_mapping[var_idx];
+						if (file_col != DConstants::INVALID_INDEX) {
+							file_var_indices.push_back(file_col);
+							output_gene_cols.push_back(out_idx);
+						} else {
+							// Union mode: column not in this file, set NULL
+							auto &validity = FlatVector::Validity(output.data[out_idx]);
+							for (idx_t i = 0; i < count; i++) {
+								validity.SetInvalid(i);
+							}
+						}
+					}
 				}
 			}
-		}
 
-		// For columns not in this file (union mode), set to NULL
-		for (idx_t v = 0; v < gstate.current_var_mapping.size(); v++) {
-			if (gstate.current_var_mapping[v] == DConstants::INVALID_INDEX) {
-				auto &vec = output.data[col_offset + v];
-				auto &validity = FlatVector::Validity(vec);
-				for (idx_t row = 0; row < count; row++) {
-					validity.SetInvalid(row);
+			if (!file_var_indices.empty()) {
+				DataChunk matrix_output;
+				vector<LogicalType> matrix_types(file_var_indices.size(), LogicalType::DOUBLE);
+				matrix_output.Initialize(Allocator::DefaultAllocator(), matrix_types);
+
+				gstate.h5_reader->ReadMatrixColumns("/X", gstate.current_row_in_file, count, file_var_indices,
+				                                    matrix_output, false);
+
+				for (idx_t m = 0; m < file_var_indices.size(); m++) {
+					auto &src = matrix_output.data[m];
+					auto &dst = output.data[output_gene_cols[m]];
+					for (idx_t row = 0; row < count; row++) {
+						dst.SetValue(row, src.GetValue(row));
+					}
+				}
+			}
+		} else {
+			// No projection pushdown - write all columns
+			idx_t col_offset = 0;
+
+			// Fill _file_name column
+			auto file_name_data = FlatVector::GetData<string_t>(output.data[0]);
+			for (idx_t i = 0; i < count; i++) {
+				file_name_data[i] = StringVector::AddString(output.data[0], gstate.current_file_name);
+			}
+			col_offset = 1;
+
+			// Fill obs_idx column
+			auto obs_idx_data = FlatVector::GetData<int64_t>(output.data[col_offset]);
+			for (idx_t i = 0; i < count; i++) {
+				obs_idx_data[i] = static_cast<int64_t>(gstate.current_row_in_file + i);
+			}
+			col_offset++;
+
+			// Read all gene columns using var mapping
+			vector<idx_t> file_var_indices;
+			vector<idx_t> output_var_cols;
+			for (idx_t v = 0; v < gstate.current_var_mapping.size(); v++) {
+				idx_t file_idx = gstate.current_var_mapping[v];
+				if (file_idx != DConstants::INVALID_INDEX) {
+					file_var_indices.push_back(file_idx);
+					output_var_cols.push_back(col_offset + v);
+				}
+			}
+
+			if (!file_var_indices.empty()) {
+				DataChunk matrix_output;
+				vector<LogicalType> matrix_types(file_var_indices.size(), LogicalType::DOUBLE);
+				matrix_output.Initialize(Allocator::DefaultAllocator(), matrix_types);
+
+				gstate.h5_reader->ReadMatrixColumns("/X", gstate.current_row_in_file, count, file_var_indices,
+				                                    matrix_output, false);
+
+				for (idx_t m = 0; m < file_var_indices.size(); m++) {
+					auto &src = matrix_output.data[m];
+					auto &dst = output.data[output_var_cols[m]];
+					for (idx_t row = 0; row < count; row++) {
+						dst.SetValue(row, src.GetValue(row));
+					}
+				}
+			}
+
+			// For columns not in this file (union mode), set to NULL
+			for (idx_t v = 0; v < gstate.current_var_mapping.size(); v++) {
+				if (gstate.current_var_mapping[v] == DConstants::INVALID_INDEX) {
+					auto &vec = output.data[col_offset + v];
+					auto &validity = FlatVector::Validity(vec);
+					for (idx_t row = 0; row < count; row++) {
+						validity.SetInvalid(row);
+					}
 				}
 			}
 		}
@@ -1296,61 +1356,114 @@ void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data,
 		}
 
 		idx_t count = to_read;
-		idx_t col_offset = 0;
 
-		// Fill _file_name column
-		auto file_name_data = FlatVector::GetData<string_t>(output.data[0]);
-		for (idx_t i = 0; i < count; i++) {
-			file_name_data[i] = StringVector::AddString(output.data[0], state.current_file_name);
-		}
-		col_offset = 1;
+		// With projection pushdown, column_ids maps output positions to bind-time column indices
+		// Column layout at bind time: 0=_file_name, 1=obs_idx, 2+=gene columns
+		bool has_projection = !state.column_ids.empty();
 
-		// Fill obs_idx column (file-local indices)
-		auto obs_idx_data = FlatVector::GetData<int64_t>(output.data[col_offset]);
-		for (idx_t i = 0; i < count; i++) {
-			obs_idx_data[i] = static_cast<int64_t>(state.current_row_in_file + i);
-		}
-		col_offset++;
+		if (has_projection) {
+			vector<idx_t> file_var_indices;
+			vector<idx_t> output_gene_cols;
 
-		// Get valid column indices for this file
-		vector<idx_t> file_var_indices;
-		vector<idx_t> output_var_cols;
-		for (idx_t v = 0; v < state.current_var_mapping.size(); v++) {
-			idx_t file_idx = state.current_var_mapping[v];
-			if (file_idx != DConstants::INVALID_INDEX) {
-				file_var_indices.push_back(file_idx);
-				output_var_cols.push_back(col_offset + v);
-			}
-		}
-
-		if (!file_var_indices.empty()) {
-			// Create temporary chunk for matrix data
-			DataChunk matrix_output;
-			vector<LogicalType> matrix_types(file_var_indices.size(), LogicalType::DOUBLE);
-			matrix_output.Initialize(Allocator::DefaultAllocator(), matrix_types);
-
-			// Read only the mapped columns from layer matrix
-			string layer_path = "/layers/" + bind_data.layer_name;
-			state.h5_reader->ReadMatrixColumns(layer_path, state.current_row_in_file, count, file_var_indices,
-			                                   matrix_output, true);
-
-			// Copy to output columns
-			for (idx_t m = 0; m < file_var_indices.size(); m++) {
-				auto &src = matrix_output.data[m];
-				auto &dst = output.data[output_var_cols[m]];
-				for (idx_t row = 0; row < count; row++) {
-					dst.SetValue(row, src.GetValue(row));
+			for (idx_t out_idx = 0; out_idx < state.column_ids.size(); out_idx++) {
+				idx_t col_id = state.column_ids[out_idx];
+				if (col_id == 0) {
+					// _file_name column
+					auto file_name_data = FlatVector::GetData<string_t>(output.data[out_idx]);
+					for (idx_t i = 0; i < count; i++) {
+						file_name_data[i] = StringVector::AddString(output.data[out_idx], state.current_file_name);
+					}
+				} else if (col_id == 1) {
+					// obs_idx column
+					auto obs_idx_data = FlatVector::GetData<int64_t>(output.data[out_idx]);
+					for (idx_t i = 0; i < count; i++) {
+						obs_idx_data[i] = static_cast<int64_t>(state.current_row_in_file + i);
+					}
+				} else {
+					idx_t var_idx = col_id - 2;
+					if (var_idx < state.current_var_mapping.size()) {
+						idx_t file_col = state.current_var_mapping[var_idx];
+						if (file_col != DConstants::INVALID_INDEX) {
+							file_var_indices.push_back(file_col);
+							output_gene_cols.push_back(out_idx);
+						} else {
+							auto &validity = FlatVector::Validity(output.data[out_idx]);
+							for (idx_t i = 0; i < count; i++) {
+								validity.SetInvalid(i);
+							}
+						}
+					}
 				}
 			}
-		}
 
-		// For columns not in this file (union mode), set to NULL
-		for (idx_t v = 0; v < state.current_var_mapping.size(); v++) {
-			if (state.current_var_mapping[v] == DConstants::INVALID_INDEX) {
-				auto &vec = output.data[col_offset + v];
-				auto &validity = FlatVector::Validity(vec);
-				for (idx_t row = 0; row < count; row++) {
-					validity.SetInvalid(row);
+			if (!file_var_indices.empty()) {
+				DataChunk matrix_output;
+				vector<LogicalType> matrix_types(file_var_indices.size(), LogicalType::DOUBLE);
+				matrix_output.Initialize(Allocator::DefaultAllocator(), matrix_types);
+
+				string layer_path = "/layers/" + bind_data.layer_name;
+				state.h5_reader->ReadMatrixColumns(layer_path, state.current_row_in_file, count, file_var_indices,
+				                                   matrix_output, true);
+
+				for (idx_t m = 0; m < file_var_indices.size(); m++) {
+					auto &src = matrix_output.data[m];
+					auto &dst = output.data[output_gene_cols[m]];
+					for (idx_t row = 0; row < count; row++) {
+						dst.SetValue(row, src.GetValue(row));
+					}
+				}
+			}
+		} else {
+			// No projection pushdown - write all columns
+			idx_t col_offset = 0;
+
+			auto file_name_data = FlatVector::GetData<string_t>(output.data[0]);
+			for (idx_t i = 0; i < count; i++) {
+				file_name_data[i] = StringVector::AddString(output.data[0], state.current_file_name);
+			}
+			col_offset = 1;
+
+			auto obs_idx_data = FlatVector::GetData<int64_t>(output.data[col_offset]);
+			for (idx_t i = 0; i < count; i++) {
+				obs_idx_data[i] = static_cast<int64_t>(state.current_row_in_file + i);
+			}
+			col_offset++;
+
+			vector<idx_t> file_var_indices;
+			vector<idx_t> output_var_cols;
+			for (idx_t v = 0; v < state.current_var_mapping.size(); v++) {
+				idx_t file_idx = state.current_var_mapping[v];
+				if (file_idx != DConstants::INVALID_INDEX) {
+					file_var_indices.push_back(file_idx);
+					output_var_cols.push_back(col_offset + v);
+				}
+			}
+
+			if (!file_var_indices.empty()) {
+				DataChunk matrix_output;
+				vector<LogicalType> matrix_types(file_var_indices.size(), LogicalType::DOUBLE);
+				matrix_output.Initialize(Allocator::DefaultAllocator(), matrix_types);
+
+				string layer_path = "/layers/" + bind_data.layer_name;
+				state.h5_reader->ReadMatrixColumns(layer_path, state.current_row_in_file, count, file_var_indices,
+				                                   matrix_output, true);
+
+				for (idx_t m = 0; m < file_var_indices.size(); m++) {
+					auto &src = matrix_output.data[m];
+					auto &dst = output.data[output_var_cols[m]];
+					for (idx_t row = 0; row < count; row++) {
+						dst.SetValue(row, src.GetValue(row));
+					}
+				}
+			}
+
+			for (idx_t v = 0; v < state.current_var_mapping.size(); v++) {
+				if (state.current_var_mapping[v] == DConstants::INVALID_INDEX) {
+					auto &vec = output.data[col_offset + v];
+					auto &validity = FlatVector::Validity(vec);
+					for (idx_t row = 0; row < count; row++) {
+						validity.SetInvalid(row);
+					}
 				}
 			}
 		}

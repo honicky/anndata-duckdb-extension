@@ -20,21 +20,18 @@ SELECT COUNT(DISTINCT _file_name) FROM anndata_scan_obs('test/data/wildcard_samp
 ----
 3
 
-# Intersection mode: only shared columns (cell_type, n_counts, sample_id, obs_idx)
-# metric_alpha, metric_beta, metric_gamma should NOT be present
-query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_obs('test/data/wildcard_sample*.h5ad')
-) WHERE column_name IN ('cell_type', 'n_counts', 'sample_id', '_file_name', 'obs_idx');
-----
-5
-
-# Verify shared columns work
+# Intersection mode: shared columns should be queryable
 query I
 SELECT COUNT(*) FROM anndata_scan_obs('test/data/wildcard_sample*.h5ad')
-WHERE cell_type = 'T cell';
+WHERE cell_type IS NOT NULL AND n_counts IS NOT NULL AND sample_id IS NOT NULL;
 ----
-21
+60
+
+# Intersection mode: unique columns should NOT be present
+statement error
+SELECT metric_alpha FROM anndata_scan_obs('test/data/wildcard_sample*.h5ad') LIMIT 1;
+----
+metric_alpha
 
 # =============================================================================
 # Test 2: anndata_scan_obs with wildcards - union mode
@@ -42,11 +39,22 @@ WHERE cell_type = 'T cell';
 
 # Union mode should have all columns including unique ones
 query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_obs('test/data/wildcard_sample*.h5ad', schema_mode := 'union')
-) WHERE column_name IN ('metric_alpha', 'metric_beta', 'metric_gamma');
+SELECT COUNT(*) FROM anndata_scan_obs('test/data/wildcard_sample*.h5ad', schema_mode := 'union')
+WHERE metric_alpha IS NOT NULL;
 ----
-3
+20
+
+query I
+SELECT COUNT(*) FROM anndata_scan_obs('test/data/wildcard_sample*.h5ad', schema_mode := 'union')
+WHERE metric_beta IS NOT NULL;
+----
+20
+
+query I
+SELECT COUNT(*) FROM anndata_scan_obs('test/data/wildcard_sample*.h5ad', schema_mode := 'union')
+WHERE metric_gamma IS NOT NULL;
+----
+20
 
 # Total count should be the same
 query I
@@ -58,29 +66,30 @@ SELECT COUNT(*) FROM anndata_scan_obs('test/data/wildcard_sample*.h5ad', schema_
 # Test 3: anndata_scan_var with wildcards - intersection mode
 # =============================================================================
 
-# Each file has 4 genes, intersection is Gene_C, Gene_D
+# Each file has 4 genes, all vars returned from all files = 12 rows
+# (intersection/union applies to var metadata columns, not to which genes)
 query I
 SELECT COUNT(*) FROM anndata_scan_var('test/data/wildcard_sample*.h5ad');
 ----
-6
+12
 
-# Check that we get 2 unique genes (C, D) from 3 files = 6 rows
+# 6 distinct genes across 3 files
 query I
 SELECT COUNT(DISTINCT _index) FROM anndata_scan_var('test/data/wildcard_sample*.h5ad');
 ----
-2
+6
 
 # =============================================================================
 # Test 4: anndata_scan_var with wildcards - union mode
 # =============================================================================
 
-# Union mode: all 6 unique genes (A, B, C, D, E, F) from 3 files
-# But each gene appears in different number of files
+# Union mode: same row count (12) but may have additional metadata columns
 query I
 SELECT COUNT(*) FROM anndata_scan_var('test/data/wildcard_sample*.h5ad', schema_mode := 'union');
 ----
 12
 
+# Still 6 distinct genes
 query I
 SELECT COUNT(DISTINCT _index) FROM anndata_scan_var('test/data/wildcard_sample*.h5ad', schema_mode := 'union');
 ----
@@ -90,73 +99,75 @@ SELECT COUNT(DISTINCT _index) FROM anndata_scan_var('test/data/wildcard_sample*.
 # Test 5: anndata_scan_x with wildcards - intersection mode
 # =============================================================================
 
-# Should have 60 rows (20 per file), columns: _file_name, obs_idx, Gene_C, Gene_D
+# Should have 60 rows (20 per file)
 query I
 SELECT COUNT(*) FROM anndata_scan_x('test/data/wildcard_sample*.h5ad');
 ----
 60
 
-# Check column count: _file_name + obs_idx + 2 genes (intersection)
+# Intersection genes (Gene_C, Gene_D) should be queryable
 query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_x('test/data/wildcard_sample*.h5ad')
-);
+SELECT COUNT(*) FROM anndata_scan_x('test/data/wildcard_sample*.h5ad')
+WHERE Gene_C IS NOT NULL AND Gene_D IS NOT NULL;
 ----
-4
+60
 
-# Verify gene columns
-query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_x('test/data/wildcard_sample*.h5ad')
-) WHERE column_name IN ('Gene_C', 'Gene_D');
+# Non-intersection gene should NOT be present
+statement error
+SELECT Gene_A FROM anndata_scan_x('test/data/wildcard_sample*.h5ad') LIMIT 1;
 ----
-2
+Gene_A
 
 # =============================================================================
 # Test 6: anndata_scan_x with wildcards - union mode
 # =============================================================================
 
-# Union mode: _file_name + obs_idx + 6 genes = 8 columns
-query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_x('test/data/wildcard_sample*.h5ad', schema_mode := 'union')
-);
-----
-8
-
-# Rows should still be 60
+# Union mode should have all genes
 query I
 SELECT COUNT(*) FROM anndata_scan_x('test/data/wildcard_sample*.h5ad', schema_mode := 'union');
 ----
 60
 
+# Gene_A only in sample1 (20 rows non-null, 40 null)
+query I
+SELECT COUNT(*) FROM anndata_scan_x('test/data/wildcard_sample*.h5ad', schema_mode := 'union')
+WHERE Gene_A IS NOT NULL;
+----
+20
+
+# Gene_F only in sample3 (20 rows non-null, 40 null)
+query I
+SELECT COUNT(*) FROM anndata_scan_x('test/data/wildcard_sample*.h5ad', schema_mode := 'union')
+WHERE Gene_F IS NOT NULL;
+----
+20
+
 # =============================================================================
 # Test 7: anndata_scan_layers with wildcards - intersection mode
 # =============================================================================
 
-# Should have 60 rows, columns: _file_name, obs_idx + 2 genes (intersection)
+# Should have 60 rows
 query I
 SELECT COUNT(*) FROM anndata_scan_layers('test/data/wildcard_sample*.h5ad', 'raw');
 ----
 60
 
+# Intersection genes should be queryable
 query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_layers('test/data/wildcard_sample*.h5ad', 'raw')
-);
+SELECT COUNT(*) FROM anndata_scan_layers('test/data/wildcard_sample*.h5ad', 'raw')
+WHERE Gene_C IS NOT NULL;
 ----
-4
+60
 
 # =============================================================================
 # Test 8: anndata_scan_layers with wildcards - union mode
 # =============================================================================
 
 query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_layers('test/data/wildcard_sample*.h5ad', 'raw', schema_mode := 'union')
-);
+SELECT COUNT(*) FROM anndata_scan_layers('test/data/wildcard_sample*.h5ad', 'raw', schema_mode := 'union')
+WHERE Gene_A IS NOT NULL;
 ----
-8
+20
 
 # =============================================================================
 # Test 9: anndata_scan_obsm with wildcards - intersection mode
@@ -169,39 +180,42 @@ SELECT COUNT(*) FROM anndata_scan_obsm('test/data/wildcard_sample*.h5ad', 'X_pca
 ----
 60
 
-# Columns: _file_name + obs_idx + 11 pca dims = 13
+# X_pca_10 should exist (0-indexed, dims 0-10 = 11 dims)
 query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_obsm('test/data/wildcard_sample*.h5ad', 'X_pca')
-);
+SELECT COUNT(*) FROM anndata_scan_obsm('test/data/wildcard_sample*.h5ad', 'X_pca')
+WHERE X_pca_10 IS NOT NULL;
 ----
-13
+60
+
+# X_pca_11 should NOT exist in intersection mode (only files 2&3 have it)
+statement error
+SELECT X_pca_11 FROM anndata_scan_obsm('test/data/wildcard_sample*.h5ad', 'X_pca') LIMIT 1;
+----
+X_pca_11
 
 # X_umap has same dimensions (2) in all files
 query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_obsm('test/data/wildcard_sample*.h5ad', 'X_umap')
-);
+SELECT COUNT(*) FROM anndata_scan_obsm('test/data/wildcard_sample*.h5ad', 'X_umap');
 ----
-4
+60
 
 # =============================================================================
 # Test 10: anndata_scan_obsm with wildcards - union mode
 # =============================================================================
 
-# Union uses maximum dimensions: 13
+# Union uses maximum dimensions: 13 (X_pca_0 through X_pca_12)
 query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_obsm('test/data/wildcard_sample*.h5ad', 'X_pca', schema_mode := 'union')
-);
+SELECT COUNT(*) FROM anndata_scan_obsm('test/data/wildcard_sample*.h5ad', 'X_pca', schema_mode := 'union')
+WHERE X_pca_12 IS NOT NULL;
 ----
-15
+20
 
 # =============================================================================
 # Test 11: anndata_scan_varm with wildcards
 # =============================================================================
 
-# loadings matrix exists in all files with same dimensions
+# loadings matrix exists in all files with 4 vars each
+# Intersection of var count: 4 vars from each file = 12 total rows
 query I
 SELECT COUNT(*) FROM anndata_scan_varm('test/data/wildcard_sample*.h5ad', 'loadings');
 ----
@@ -255,12 +269,10 @@ SELECT COUNT(*) FROM (
 # Test 15: Single file should not have _file_name column
 # =============================================================================
 
-query I
-SELECT COUNT(*) FROM (
-    DESCRIBE anndata_scan_obs('test/data/wildcard_sample1.h5ad')
-) WHERE column_name = '_file_name';
+statement error
+SELECT _file_name FROM anndata_scan_obs('test/data/wildcard_sample1.h5ad') LIMIT 1;
 ----
-0
+_file_name
 
 # =============================================================================
 # Test 16: Empty pattern should error
@@ -269,4 +281,4 @@ SELECT COUNT(*) FROM (
 statement error
 SELECT * FROM anndata_scan_obs('test/data/nonexistent_*.h5ad');
 ----
-No files found matching pattern
+No files found

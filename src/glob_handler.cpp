@@ -31,7 +31,7 @@ vector<string> GlobHandler::ExpandLocalGlob(ClientContext &context, const string
 	// Use DuckDB's built-in glob functionality
 	auto matches = fs.GlobFiles(pattern, context);
 	for (const auto &match : matches) {
-		result.push_back(match);
+		result.push_back(match.path);
 	}
 
 	// Sort for consistent ordering
@@ -72,7 +72,7 @@ vector<string> GlobHandler::ExpandS3Glob(ClientContext &context, const string &p
 	try {
 		auto matches = fs.GlobFiles(pattern, context);
 		for (const auto &match : matches) {
-			result.push_back(match);
+			result.push_back(match.path);
 		}
 	} catch (const std::exception &e) {
 		// If glob fails, try to provide a helpful error message

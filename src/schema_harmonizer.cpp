@@ -361,13 +361,19 @@ FileSchema SchemaHarmonizer::GetLayerSchema(ClientContext &context, const string
 	FileSchema schema(file_path);
 	auto reader = CreateReader(context, file_path);
 
-	auto layer_info = reader->GetLayerInfo(layer_name);
-	if (!layer_info.exists) {
+	auto layers = reader->GetLayers();
+	bool found = false;
+	for (const auto &layer : layers) {
+		if (layer.name == layer_name) {
+			schema.n_obs = layer.rows;
+			schema.n_var = layer.cols;
+			found = true;
+			break;
+		}
+	}
+	if (!found) {
 		throw InvalidInputException("Layer '" + layer_name + "' not found in file '" + file_path + "'");
 	}
-
-	schema.n_obs = layer_info.rows;
-	schema.n_var = layer_info.cols;
 
 	// Get var names
 	schema.var_names = reader->GetVarNames(var_name_column);
@@ -382,13 +388,19 @@ FileSchema SchemaHarmonizer::GetObsmSchema(ClientContext &context, const string 
 	FileSchema schema(file_path);
 	auto reader = CreateReader(context, file_path);
 
-	auto matrix_info = reader->GetMatrixInfo("obsm", matrix_name);
-	if (!matrix_info.exists) {
+	auto matrices = reader->GetObsmMatrices();
+	bool found = false;
+	for (const auto &mat : matrices) {
+		if (mat.name == matrix_name) {
+			schema.n_obs = mat.rows;
+			schema.n_var = mat.cols; // Store cols in n_var for obsm/varm
+			found = true;
+			break;
+		}
+	}
+	if (!found) {
 		throw InvalidInputException("Matrix 'obsm/" + matrix_name + "' not found in file '" + file_path + "'");
 	}
-
-	schema.n_obs = matrix_info.rows;
-	schema.n_var = matrix_info.cols; // Store cols in n_var for obsm/varm
 
 	return schema;
 }
@@ -397,13 +409,19 @@ FileSchema SchemaHarmonizer::GetVarmSchema(ClientContext &context, const string 
 	FileSchema schema(file_path);
 	auto reader = CreateReader(context, file_path);
 
-	auto matrix_info = reader->GetMatrixInfo("varm", matrix_name);
-	if (!matrix_info.exists) {
+	auto matrices = reader->GetVarmMatrices();
+	bool found = false;
+	for (const auto &mat : matrices) {
+		if (mat.name == matrix_name) {
+			schema.n_obs = mat.rows; // Actually var count
+			schema.n_var = mat.cols;
+			found = true;
+			break;
+		}
+	}
+	if (!found) {
 		throw InvalidInputException("Matrix 'varm/" + matrix_name + "' not found in file '" + file_path + "'");
 	}
-
-	schema.n_obs = matrix_info.rows; // Actually var count
-	schema.n_var = matrix_info.cols;
 
 	return schema;
 }
@@ -412,11 +430,7 @@ FileSchema SchemaHarmonizer::GetObspSchema(ClientContext &context, const string 
 	FileSchema schema(file_path);
 	auto reader = CreateReader(context, file_path);
 
-	auto obsp_info = reader->GetObspInfo(matrix_name);
-	if (!obsp_info.exists) {
-		throw InvalidInputException("Matrix 'obsp/" + matrix_name + "' not found in file '" + file_path + "'");
-	}
-
+	auto obsp_info = reader->GetObspMatrixInfo(matrix_name);
 	// For obsp, we track nnz as n_obs (it's the number of rows we'll output)
 	schema.n_obs = obsp_info.nnz;
 
@@ -427,11 +441,7 @@ FileSchema SchemaHarmonizer::GetVarpSchema(ClientContext &context, const string 
 	FileSchema schema(file_path);
 	auto reader = CreateReader(context, file_path);
 
-	auto varp_info = reader->GetVarpInfo(matrix_name);
-	if (!varp_info.exists) {
-		throw InvalidInputException("Matrix 'varp/" + matrix_name + "' not found in file '" + file_path + "'");
-	}
-
+	auto varp_info = reader->GetVarpMatrixInfo(matrix_name);
 	schema.n_obs = varp_info.nnz;
 
 	return schema;
