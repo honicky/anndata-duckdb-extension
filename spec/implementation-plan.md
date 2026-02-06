@@ -16,10 +16,8 @@ This document outlines the implementation plan for the AnnData DuckDB extension 
 - **Phase 9**: obsp/varp Pairwise Tables - Cell-cell and gene-gene relationship matrices ✅
 - **Phase 10**: Layers Support - Alternative expression matrices
 - **Phase 11**: uns (Unstructured) Data - Scalar values, DataFrames, and JSON export ✅
+- **Phase 13**: Wildcard Query Support - Multi-file glob patterns with schema harmonization ✅
 - **HDF5 C API Migration**: Switched from C++ to C API for thread-safe builds ✅
-
-### 🔄 In Progress
-- **Phase 13**: Wildcard Query Support - Multi-file glob patterns with schema harmonization
 
 ### 📋 Pending
 - **Phase 3**: ATTACH/DETACH - Deferred in favor of table functions
@@ -223,17 +221,17 @@ WHERE value < 0.5;
 2. ✅ Returns key-value pairs: (property VARCHAR, value VARCHAR)
 3. ✅ Properties include: n_obs, n_vars, obsm_keys, varm_keys, layers, uns_keys, obsp_keys, varp_keys
 
-### Phase 13: Wildcard Query Support 🔄
+### Phase 13: Wildcard Query Support ✅
 **Goal**: Enable glob pattern support for querying multiple AnnData files
 **Spec**: See `spec/wildcard-query-spec.md` for full details
 
-**Implementation Approach**:
+**Implementation**:
 ```sql
--- Query all .h5ad files with union schema (default)
+-- Query all .h5ad files (intersection mode - default)
 SELECT * FROM anndata_scan_obs('data/*.h5ad');
 
--- Intersection mode - only common columns
-SELECT * FROM anndata_scan_obs('data/*.h5ad', schema_mode := 'intersection');
+-- Union mode - all columns, NULL for missing
+SELECT * FROM anndata_scan_obs('data/*.h5ad', schema_mode := 'union');
 
 -- Remote files (S3)
 SELECT * FROM anndata_scan_obs('s3://bucket/project/*.h5ad');
@@ -241,27 +239,30 @@ SELECT * FROM anndata_scan_obs('s3://bucket/project/*.h5ad');
 
 **Key Components**:
 
-1. **Glob Handler** (`src/glob_handler.cpp`)
+1. **Glob Handler** (`src/glob_handler.cpp`) ✅
    - Pattern expansion for local and remote files
-   - Use DuckDB's FileSystem::Glob() for local
-   - S3 ListObjectsV2 for remote patterns
+   - Uses DuckDB's FileSystem::GlobFiles() for both local and S3
+   - Sorted results for consistent ordering
 
-2. **Schema Harmonizer** (`src/schema_harmonizer.cpp`)
+2. **Schema Harmonizer** (`src/schema_harmonizer.cpp`) ✅
+   - Intersection mode (default): only common columns/genes
    - Union mode: all columns, NULL for missing
-   - Intersection mode: only common columns
-   - Type coercion for mismatched column types
+   - Type coercion for mismatched column types (numeric promotion, VARCHAR fallback)
+   - Specialized methods: ComputeObsVarSchema, ComputeXSchema, ComputeObsmVarmSchema
 
-3. **Multi-File Scanner State**
-   - Track current file index
-   - Per-file column mapping to union schema
-   - `_file_name` column for source tracking
+3. **Multi-File Scanner State** ✅
+   - Track current file index across scan calls
+   - Per-file column/var mapping to harmonized schema
+   - `_file_name` column automatically added for multi-file queries
+   - Projection pushdown support for X and layers
 
-**Implementation Phases**:
-- Phase 13.1: Local glob support with union schema
-- Phase 13.2: Schema harmonization (union/intersection modes)
-- Phase 13.3: Remote (S3) glob support
-- Phase 13.4: Performance optimization (parallel discovery)
-- Phase 13.5: Testing and documentation
+4. **All scan functions updated** ✅
+   - obs, var: schema_mode for metadata columns
+   - X, layers: schema_mode for gene columns + projection pushdown
+   - obsm, varm: schema_mode for dimension count (min/max)
+   - obsp, varp: file-scoped pairs (concatenated, no schema_mode needed)
+
+**Testing**: 34 assertions for local wildcard queries, S3 wildcard test suite
 
 ### Phase 12: ATTACH/DETACH Interface 📋
 **Goal**: Provide standard DuckDB attachment semantics

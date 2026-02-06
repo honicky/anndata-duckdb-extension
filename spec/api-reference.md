@@ -67,33 +67,59 @@ DETACH scdata;
 
 ### Component-Specific Table Functions
 
-Direct table functions for scanning AnnData components without attaching.
+Direct table functions for scanning AnnData components without attaching. All functions support wildcard glob patterns (e.g., `'data/*.h5ad'`) for querying multiple files at once.
 
 #### anndata_scan_obs
 ```sql
-SELECT * FROM anndata_scan_obs('path');
+SELECT * FROM anndata_scan_obs('path' [, schema_mode := 'intersection']);
 ```
 Returns observation (cell) metadata with obs_idx and all metadata columns.
 
+**Parameters:**
+- `path`: File path or glob pattern (e.g., `'data/*.h5ad'`, `'s3://bucket/*.h5ad'`)
+- `schema_mode` (named, optional): `'intersection'` (default) or `'union'`
+
+When using a glob pattern, a `_file_name` column is added to identify the source file for each row.
+
 #### anndata_scan_var
 ```sql
-SELECT * FROM anndata_scan_var('path');
+SELECT * FROM anndata_scan_var('path' [, schema_mode := 'intersection']);
 ```
 Returns variable (gene) metadata with var_idx and all metadata columns.
 
+**Parameters:**
+- `path`: File path or glob pattern
+- `schema_mode` (named, optional): `'intersection'` (default) or `'union'`
+
+When using a glob pattern, returns all variables from all files (intersection/union applies to metadata columns, not which genes are returned). A `_file_name` column is added.
+
 #### anndata_scan_x
 ```sql
-SELECT * FROM anndata_scan_x('path' [, var_column]);
+SELECT * FROM anndata_scan_x('path' [, var_column] [, schema_mode := 'intersection']);
 ```
-Returns expression matrix in long format: (obs_idx, var_idx, var_name, value).
-Optional var_column parameter specifies which var column to use for var_name.
+Returns expression matrix in wide format with genes as columns: (obs_idx, Gene_A, Gene_B, ...).
+Optional var_column parameter specifies which var column to use for gene column names.
+
+**Parameters:**
+- `path`: File path or glob pattern
+- `var_column` (positional, optional): Column from var to use as gene names
+- `schema_mode` (named, optional): `'intersection'` (default) or `'union'`
+
+In intersection mode, only genes present in ALL files are included. In union mode, all genes are included with NULL for files that don't have a given gene. Projection pushdown is supported for efficient column selection.
 
 #### anndata_scan_obsm / anndata_scan_varm
 ```sql
-SELECT * FROM anndata_scan_obsm('path', 'matrix_name');
-SELECT * FROM anndata_scan_varm('path', 'matrix_name');
+SELECT * FROM anndata_scan_obsm('path', 'matrix_name' [, schema_mode := 'intersection']);
+SELECT * FROM anndata_scan_varm('path', 'matrix_name' [, schema_mode := 'intersection']);
 ```
 Returns dimensional reduction matrices (e.g., 'X_pca', 'X_umap') with obs_idx/var_idx and dim_0, dim_1, ... columns.
+
+**Parameters:**
+- `path`: File path or glob pattern
+- `matrix_name`: Name of the matrix (e.g., `'X_pca'`, `'X_umap'`)
+- `schema_mode` (named, optional): `'intersection'` (default) or `'union'`
+
+When files have different numbers of dimensions (e.g., 11 vs 13 PCA components), intersection uses the minimum and union uses the maximum.
 
 #### anndata_scan_obsp / anndata_scan_varp
 ```sql
@@ -102,17 +128,53 @@ SELECT * FROM anndata_scan_varp('path', 'matrix_name');
 ```
 Returns pairwise relationship matrices in sparse format: (obs_idx_1, obs_idx_2, value) or (var_idx_1, var_idx_2, value).
 
+**Parameters:**
+- `path`: File path or glob pattern
+- `matrix_name`: Name of the matrix (e.g., `'distances'`, `'connectivities'`)
+
+Pairwise matrices are file-scoped (pairs are only meaningful within the same file), so no schema_mode parameter is needed. When using glob patterns, results from all files are concatenated and a `_file_name` column is added.
+
 #### anndata_scan_layers
 ```sql
-SELECT * FROM anndata_scan_layers('path', 'layer_name' [, var_column]);
+SELECT * FROM anndata_scan_layers('path', 'layer_name' [, var_column] [, schema_mode := 'intersection']);
 ```
 Returns alternative expression matrices with same format as anndata_scan_x.
+
+**Parameters:**
+- `path`: File path or glob pattern
+- `layer_name`: Name of the layer (e.g., `'raw'`, `'normalized'`)
+- `var_column` (positional, optional): Column from var to use as gene names
+- `schema_mode` (named, optional): `'intersection'` (default) or `'union'`
 
 #### anndata_scan_uns
 ```sql
 SELECT * FROM anndata_scan_uns('path');
 ```
 Returns scalar metadata from the uns (unstructured) group.
+
+### Wildcard Query Parameters
+
+When using glob patterns in any scan function:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `schema_mode` | VARCHAR | `'intersection'` | How to combine schemas across files: `'intersection'` (common columns only) or `'union'` (all columns, NULL for missing) |
+
+**Special columns added for multi-file queries:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `_file_name` | VARCHAR | The base filename (not full path) of the source file for each row |
+
+**Supported glob patterns:**
+- `*` matches any number of characters (e.g., `'data/*.h5ad'`)
+- `?` matches a single character (e.g., `'sample?.h5ad'`)
+- `[...]` matches character ranges (e.g., `'sample[1-3].h5ad'`)
+
+**Supported path types:**
+- Local files: `'data/*.h5ad'`
+- S3: `'s3://bucket/prefix/*.h5ad'`
+- HTTP/HTTPS: `'https://example.com/data/*.h5ad'`
 
 ### anndata_info
 
