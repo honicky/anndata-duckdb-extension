@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.4] - 2026-02-05
+
+### Fixed
+- Duplicate variable name warning no longer prints twice during DESCRIBE operations
+
 ## [0.13.3] - 2026-01-31
 
 ### Fixed
