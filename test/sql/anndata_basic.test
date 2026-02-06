@@ -105,7 +105,7 @@ query II
 SELECT COUNT(*) as num_properties, COUNT(DISTINCT property) as unique_properties
 FROM anndata_info('test/data/test_small.h5ad');
 ----
-7	7
+11	11
 
 # Test basic properties are present in info
 query II
