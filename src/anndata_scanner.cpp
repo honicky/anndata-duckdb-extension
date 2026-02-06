@@ -1126,6 +1126,14 @@ unique_ptr<FunctionData> AnndataScanner::InfoBind(ClientContext &context, TableF
 	// to avoid opening the file twice
 	bind_data->is_info_scan = true;
 
+	// Check for optional var_name_column and var_id_column parameters
+	if (input.inputs.size() >= 2) {
+		bind_data->info_var_name_column = input.inputs[1].GetValue<string>();
+	}
+	if (input.inputs.size() >= 3) {
+		bind_data->info_var_id_column = input.inputs[2].GetValue<string>();
+	}
+
 	// Define output schema for info table
 	names.emplace_back("property");
 	return_types.emplace_back(LogicalType::VARCHAR);
@@ -1295,13 +1303,34 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 			info_rows.emplace_back("tables", tables_list);
 		}
 
-		// Detect var columns (gene index)
-		auto var_detection = gstate.h5_reader->DetectVarColumns();
-		if (!var_detection.name_column.empty()) {
-			info_rows.emplace_back("var_name_column", var_detection.name_column);
+		// Var columns: use user-configured values if provided, otherwise auto-detect
+		string var_name_col;
+		string var_id_col;
+		if (!bind_data.info_var_name_column.empty() || !bind_data.info_var_id_column.empty()) {
+			// User specified at least one column via ATTACH options
+			var_name_col = bind_data.info_var_name_column;
+			var_id_col = bind_data.info_var_id_column;
+			// Fill in any unspecified column via auto-detection
+			if (var_name_col.empty() || var_id_col.empty()) {
+				auto var_detection = gstate.h5_reader->DetectVarColumns();
+				if (var_name_col.empty()) {
+					var_name_col = var_detection.name_column;
+				}
+				if (var_id_col.empty()) {
+					var_id_col = var_detection.id_column;
+				}
+			}
+		} else {
+			// Auto-detect both columns
+			auto var_detection = gstate.h5_reader->DetectVarColumns();
+			var_name_col = var_detection.name_column;
+			var_id_col = var_detection.id_column;
 		}
-		if (!var_detection.id_column.empty()) {
-			info_rows.emplace_back("var_id_column", var_detection.id_column);
+		if (!var_name_col.empty()) {
+			info_rows.emplace_back("var_name_column", var_name_col);
+		}
+		if (!var_id_col.empty()) {
+			info_rows.emplace_back("var_id_column", var_id_col);
 		}
 
 		// Output rows
@@ -1423,6 +1452,13 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 	                        AnndataInitGlobal, AnndataInitLocal);
 	info_func.name = "anndata_info";
 	loader.RegisterFunction(info_func);
+
+	// Also register with optional var_name_column and var_id_column parameters
+	TableFunction info_func_with_params(
+	    "anndata_info", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR}, AnndataScanner::InfoScan,
+	    AnndataScanner::InfoBind, AnndataInitGlobal, AnndataInitLocal);
+	info_func_with_params.name = "anndata_info";
+	loader.RegisterFunction(info_func_with_params);
 }
 
 } // namespace duckdb

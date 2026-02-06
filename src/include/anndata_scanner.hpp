@@ -108,6 +108,8 @@ struct AnndataBindData : public TableFunctionData {
 
 	// For info scanning
 	bool is_info_scan = false;
+	string info_var_name_column; // User-configured var_name_column (empty = auto-detect)
+	string info_var_id_column;   // User-configured var_id_column (empty = auto-detect)
 
 	AnndataBindData(const string &path) : file_path(path), row_count(0), column_count(0) {
 	}
