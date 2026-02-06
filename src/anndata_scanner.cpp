@@ -306,7 +306,6 @@ unique_ptr<FunctionData> AnndataScanner::XBind(ClientContext &context, TableFunc
 	// Add one column for each gene, handling duplicate names by appending _1, _2, etc.
 	std::unordered_set<std::string> used_names;
 	used_names.insert("obs_idx"); // Reserve the first column name
-	idx_t duplicate_count = 0;
 
 	for (size_t i = 0; i < bind_data->n_var && i < bind_data->var_names.size(); i++) {
 		std::string base_name = bind_data->var_names[i];
@@ -316,20 +315,11 @@ unique_ptr<FunctionData> AnndataScanner::XBind(ClientContext &context, TableFunc
 		while (used_names.count(unique_name) > 0) {
 			unique_name = base_name + "_" + std::to_string(suffix);
 			suffix++;
-			if (suffix == 2) {
-				// Only count each base name once as duplicate
-				duplicate_count++;
-			}
 		}
 
 		used_names.insert(unique_name);
 		names.push_back(unique_name);
 		return_types.push_back(LogicalType::DOUBLE);
-	}
-
-	if (duplicate_count > 0) {
-		std::cerr << "Warning: " << duplicate_count << " duplicate variable name(s) found in X matrix. "
-		          << "Duplicate columns renamed with _1, _2, etc. suffixes." << std::endl;
 	}
 
 	// Set row count to number of observations
@@ -689,7 +679,6 @@ unique_ptr<FunctionData> AnndataScanner::LayerBind(ClientContext &context, Table
 
 	std::unordered_set<std::string> used_names;
 	used_names.insert("obs_idx"); // Reserve the first column name
-	idx_t duplicate_count = 0;
 
 	for (const auto &var_name : result->var_names) {
 		std::string unique_name = var_name;
@@ -698,20 +687,11 @@ unique_ptr<FunctionData> AnndataScanner::LayerBind(ClientContext &context, Table
 		while (used_names.count(unique_name) > 0) {
 			unique_name = var_name + "_" + std::to_string(suffix);
 			suffix++;
-			if (suffix == 2) {
-				// Only count each base name once as duplicate
-				duplicate_count++;
-			}
 		}
 
 		used_names.insert(unique_name);
 		names.push_back(unique_name);
 		return_types.push_back(layer_info.dtype);
-	}
-
-	if (duplicate_count > 0) {
-		std::cerr << "Warning: " << duplicate_count << " duplicate variable name(s) found in layer '"
-		          << result->layer_name << "'. Duplicate columns renamed with _1, _2, etc. suffixes." << std::endl;
 	}
 
 	result->column_names = names;

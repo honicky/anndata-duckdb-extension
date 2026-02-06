@@ -10,6 +10,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/enums/access_mode.hpp"
 #include <iostream>
+#include <unordered_set>
 
 namespace duckdb {
 
@@ -265,6 +266,21 @@ static unique_ptr<Catalog> AnndataStorageAttach(optional_ptr<StorageExtensionInf
 	if (auto_detected) {
 		std::cerr << "Note: Using var_name='" << var_name_column << "', var_id='" << var_id_column
 		          << "'. Override with VAR_NAME_COLUMN/VAR_ID_COLUMN options." << std::endl;
+	}
+
+	// Check for duplicate variable names and warn once at attach time
+	auto var_names = reader_ptr->GetVarNames(var_name_column);
+	std::unordered_set<std::string> seen_once;
+	std::unordered_set<std::string> seen_twice;
+	for (const auto &vn : var_names) {
+		if (!seen_once.insert(vn).second) {
+			seen_twice.insert(vn);
+		}
+	}
+	if (!seen_twice.empty()) {
+		std::cerr << "Warning: " << seen_twice.size()
+		          << " duplicate variable name(s) found. Duplicate columns renamed with _1, _2, etc. suffixes."
+		          << std::endl;
 	}
 
 	// Verify file exists and is valid AnnData - reuse the existing reader
