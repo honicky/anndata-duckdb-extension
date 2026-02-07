@@ -156,3 +156,45 @@ Gene_0
 
 statement ok
 DETACH ad;
+
+# Test 10: Info table reflects user-specified VAR_NAME_COLUMN and VAR_ID_COLUMN
+statement ok
+ATTACH 'test/data/test_small.h5ad' AS ad (TYPE ANNDATA, VAR_NAME_COLUMN 'gene_id', VAR_ID_COLUMN '_index');
+
+query I
+SELECT value
+FROM ad.info
+WHERE property = 'var_name_column';
+----
+gene_id
+
+query I
+SELECT value
+FROM ad.info
+WHERE property = 'var_id_column';
+----
+_index
+
+statement ok
+DETACH ad;
+
+# Test 11: Info table shows auto-detected columns when none specified
+statement ok
+ATTACH 'test/data/test_small.h5ad' AS ad (TYPE ANNDATA);
+
+query I
+SELECT value
+FROM ad.info
+WHERE property = 'var_name_column';
+----
+gene_name
+
+query I
+SELECT value
+FROM ad.info
+WHERE property = 'var_id_column';
+----
+gene_id
+
+statement ok
+DETACH ad;

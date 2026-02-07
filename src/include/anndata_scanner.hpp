@@ -84,6 +84,7 @@ struct AnndataBindData : public TableFunctionData {
 	idx_t n_var = 0;
 	vector<string> var_names;
 	string var_name_column = "_index"; // Default column for gene names (var_names in AnnData, stored as _index in HDF5)
+	string var_id_column = "_index";   // Default column for gene IDs
 
 	// For obsm/varm matrix scanning
 	bool is_obsm_scan = false;
