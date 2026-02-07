@@ -115,21 +115,20 @@ WHERE property = 'tables';
 ----
 true
 
-# Test var_name_column detection (gene_name is in the preferred names list)
+# Test var_name_column and var_id_column default to _index (standalone, no ATTACH)
 query I
 SELECT value
 FROM anndata_info('test/data/test_small.h5ad')
 WHERE property = 'var_name_column';
 ----
-gene_name
+_index
 
-# Test var_id_column detection (gene_id is in the preferred ID list)
 query I
 SELECT value
 FROM anndata_info('test/data/test_small.h5ad')
 WHERE property = 'var_id_column';
 ----
-gene_id
+_index
 
 # Test groups for obsp/varp file
 query I
@@ -138,16 +137,6 @@ FROM anndata_info('test/data/test_obsp_varp.h5ad')
 WHERE property = 'groups';
 ----
 obs, var, X, obsp, varp
-
-# Test var columns fallback to _index when no preferred columns exist
-query I
-SELECT value
-FROM anndata_info('test/data/test_obsp_varp.h5ad')
-WHERE property IN ('var_name_column', 'var_id_column')
-ORDER BY property;
-----
-_index
-_index
 
 # Test aggregation over multiple files (simulated with UNION)
 # KNOWN LIMITATION: UNION queries with multiple HDF5 files may fail due to HDF5 C++ API limitations

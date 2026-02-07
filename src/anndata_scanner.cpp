@@ -1127,11 +1127,11 @@ unique_ptr<FunctionData> AnndataScanner::InfoBind(ClientContext &context, TableF
 	bind_data->is_info_scan = true;
 
 	// Check for optional var_name_column and var_id_column parameters
-	if (input.inputs.size() >= 2) {
-		bind_data->info_var_name_column = input.inputs[1].GetValue<string>();
+	if (input.inputs.size() > 1) {
+		bind_data->var_name_column = input.inputs[1].GetValue<string>();
 	}
-	if (input.inputs.size() >= 3) {
-		bind_data->info_var_id_column = input.inputs[2].GetValue<string>();
+	if (input.inputs.size() > 2) {
+		bind_data->var_id_column = input.inputs[2].GetValue<string>();
 	}
 
 	// Define output schema for info table
@@ -1303,35 +1303,9 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 			info_rows.emplace_back("tables", tables_list);
 		}
 
-		// Var columns: use user-configured values if provided, otherwise auto-detect
-		string var_name_col;
-		string var_id_col;
-		if (!bind_data.info_var_name_column.empty() || !bind_data.info_var_id_column.empty()) {
-			// User specified at least one column via ATTACH options
-			var_name_col = bind_data.info_var_name_column;
-			var_id_col = bind_data.info_var_id_column;
-			// Fill in any unspecified column via auto-detection
-			if (var_name_col.empty() || var_id_col.empty()) {
-				auto var_detection = gstate.h5_reader->DetectVarColumns();
-				if (var_name_col.empty()) {
-					var_name_col = var_detection.name_column;
-				}
-				if (var_id_col.empty()) {
-					var_id_col = var_detection.id_column;
-				}
-			}
-		} else {
-			// Auto-detect both columns
-			auto var_detection = gstate.h5_reader->DetectVarColumns();
-			var_name_col = var_detection.name_column;
-			var_id_col = var_detection.id_column;
-		}
-		if (!var_name_col.empty()) {
-			info_rows.emplace_back("var_name_column", var_name_col);
-		}
-		if (!var_id_col.empty()) {
-			info_rows.emplace_back("var_id_column", var_id_col);
-		}
+		// Var columns: read from bind data (same source as anndata_scan_x)
+		info_rows.emplace_back("var_name_column", bind_data.var_name_column);
+		info_rows.emplace_back("var_id_column", bind_data.var_id_column);
 
 		// Output rows
 		for (const auto &row : info_rows) {
