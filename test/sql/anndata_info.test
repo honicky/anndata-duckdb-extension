@@ -105,7 +105,7 @@ SELECT value
 FROM anndata_info('test/data/test_small.h5ad')
 WHERE property = 'groups';
 ----
-obs, var, X, obsm, varm
+obs, var, X, obsm, varm, uns
 
 # Test tables property lists available SQL tables
 query I
