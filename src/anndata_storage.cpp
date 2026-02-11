@@ -135,17 +135,34 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const strin
 	bool has_var = reader->HasVar();
 	bool has_X = reader->HasX();
 
-	// Warn about missing optional components
-	if (!has_obs) {
-		fprintf(stderr, "Warning: AnnData file '%s' has no /obs group. obs, obsm, obsp, and X tables will not be available.\n",
+	// Warn only about tables that exist in the file but can't be registered due to missing dependencies
+	if (!has_obs && has_X) {
+		fprintf(stderr, "Warning: AnnData file '%s' has /X but no /obs group. X table will not be available.\n",
 		        file_path.c_str());
 	}
-	if (!has_var) {
-		fprintf(stderr, "Warning: AnnData file '%s' has no /var group. var, varm, varp, and X tables will not be available.\n",
+	if (!has_var && has_X) {
+		fprintf(stderr, "Warning: AnnData file '%s' has /X but no /var group. X table will not be available.\n",
 		        file_path.c_str());
 	}
-	if (!has_X) {
-		fprintf(stderr, "Warning: AnnData file '%s' has no /X matrix. X and layers tables will not be available.\n",
+	if (!has_obs && reader->HasGroup("/obsm")) {
+		fprintf(stderr, "Warning: AnnData file '%s' has /obsm but no /obs group. obsm tables will not be available.\n",
+		        file_path.c_str());
+	}
+	if (!has_obs && reader->HasGroup("/obsp")) {
+		fprintf(stderr, "Warning: AnnData file '%s' has /obsp but no /obs group. obsp tables will not be available.\n",
+		        file_path.c_str());
+	}
+	if (!has_var && reader->HasGroup("/varm")) {
+		fprintf(stderr, "Warning: AnnData file '%s' has /varm but no /var group. varm tables will not be available.\n",
+		        file_path.c_str());
+	}
+	if (!has_var && reader->HasGroup("/varp")) {
+		fprintf(stderr, "Warning: AnnData file '%s' has /varp but no /var group. varp tables will not be available.\n",
+		        file_path.c_str());
+	}
+	if ((!has_obs || !has_var) && reader->HasGroup("/layers")) {
+		fprintf(stderr,
+		        "Warning: AnnData file '%s' has /layers but missing /obs or /var. layers tables will not be available.\n",
 		        file_path.c_str());
 	}
 

@@ -509,6 +509,11 @@ bool H5ReaderMultithreaded::HasX() {
 	return H5LinkExists(*file_handle, "/X");
 }
 
+bool H5ReaderMultithreaded::HasGroup(const std::string &group_name) {
+	auto h5_lock = H5GlobalLock::Acquire();
+	return H5LinkExists(*file_handle, group_name.c_str());
+}
+
 // Get number of observations (cells)
 size_t H5ReaderMultithreaded::GetObsCount() {
 	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)

@@ -33,6 +33,7 @@ public:
 	bool HasObs();
 	bool HasVar();
 	bool HasX();
+	bool HasGroup(const std::string &group_name);
 
 	// Get dimensions
 	size_t GetObsCount();

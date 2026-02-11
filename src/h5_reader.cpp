@@ -102,6 +102,10 @@ bool H5Reader::HasX() {
 	return IsGroupPresent("/X") || IsDatasetPresent("/", "X");
 }
 
+bool H5Reader::HasGroup(const std::string &group_name) {
+	return IsGroupPresent(group_name);
+}
+
 size_t H5Reader::GetObsCount() {
 	try {
 		// Try to get shape from obs/index first
