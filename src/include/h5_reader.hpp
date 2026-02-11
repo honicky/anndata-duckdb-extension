@@ -16,8 +16,13 @@ public:
 	H5Reader(const std::string &file_path);
 	~H5Reader();
 
-	// Check if file is valid AnnData format
+	// Check if file is valid AnnData format (at least obs or var must exist)
 	bool IsValidAnnData();
+
+	// Check which core components are present
+	bool HasObs();
+	bool HasVar();
+	bool HasX();
 
 	// Get dimensions
 	size_t GetObsCount();

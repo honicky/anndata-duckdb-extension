@@ -489,23 +489,24 @@ LogicalType H5ReaderMultithreaded::H5TypeToDuckDBType(hid_t h5_type) {
 
 // Check if file is valid AnnData format
 bool H5ReaderMultithreaded::IsValidAnnData() {
-	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	// At least obs or var must exist for a valid AnnData file
+	// Files like TranscriptFormer output may have only obs + obsm (no var or X)
+	return HasObs() || HasVar();
+}
+
+bool H5ReaderMultithreaded::HasObs() {
 	auto h5_lock = H5GlobalLock::Acquire();
+	return H5LinkExists(*file_handle, "/obs");
+}
 
-	// Check for required objects: /obs, /var, and /X
-	// Note: In newer AnnData format, obs/var are Groups (with encoding-type=dataframe)
-	//       In older AnnData format, obs/var can be Datasets (compound datasets)
-	// So we accept either Groups OR Datasets for obs/var
+bool H5ReaderMultithreaded::HasVar() {
+	auto h5_lock = H5GlobalLock::Acquire();
+	return H5LinkExists(*file_handle, "/var");
+}
 
-	bool has_obs = H5LinkExists(*file_handle, "/obs");
-
-	bool has_var = H5LinkExists(*file_handle, "/var");
-
-	bool has_X = H5LinkExists(*file_handle, "/X");
-
-	bool is_valid = has_obs && has_var && has_X;
-
-	return is_valid;
+bool H5ReaderMultithreaded::HasX() {
+	auto h5_lock = H5GlobalLock::Acquire();
+	return H5LinkExists(*file_handle, "/X");
 }
 
 // Get number of observations (cells)

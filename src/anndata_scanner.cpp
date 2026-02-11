@@ -78,45 +78,78 @@ string AnndataScanner::GetAnndataInfo(const string &path) {
 	std::stringstream info;
 
 	info << "AnnData file: " << path << "\n";
-	info << "  Observations: " << reader.GetObsCount() << "\n";
-	info << "  Variables: " << reader.GetVarCount() << "\n";
+
+	if (reader.HasObs()) {
+		info << "  Observations: " << reader.GetObsCount() << "\n";
+	} else {
+		info << "  Observations: (no /obs group)\n";
+	}
+
+	if (reader.HasVar()) {
+		info << "  Variables: " << reader.GetVarCount() << "\n";
+	} else {
+		info << "  Variables: (no /var group)\n";
+	}
 
 	// Get X matrix info
-	auto x_info = reader.GetXMatrixInfo();
-	info << "  X matrix: " << x_info.n_obs << " x " << x_info.n_var;
-	if (x_info.is_sparse) {
-		info << " (sparse, " << x_info.sparse_format << ")";
+	if (reader.HasX()) {
+		try {
+			auto x_info = reader.GetXMatrixInfo();
+			info << "  X matrix: " << x_info.n_obs << " x " << x_info.n_var;
+			if (x_info.is_sparse) {
+				info << " (sparse, " << x_info.sparse_format << ")";
+			}
+			info << "\n";
+		} catch (...) {
+			info << "  X matrix: (not readable)\n";
+		}
+	} else {
+		info << "  X matrix: (not present)\n";
 	}
-	info << "\n";
 
 	// List obsm matrices
-	auto obsm_matrices = reader.GetObsmMatrices();
-	if (!obsm_matrices.empty()) {
-		info << "  obsm matrices:\n";
-		for (const auto &matrix : obsm_matrices) {
-			info << "    - " << matrix.name << ": " << matrix.rows << " x " << matrix.cols << "\n";
+	if (reader.HasObs()) {
+		try {
+			auto obsm_matrices = reader.GetObsmMatrices();
+			if (!obsm_matrices.empty()) {
+				info << "  obsm matrices:\n";
+				for (const auto &matrix : obsm_matrices) {
+					info << "    - " << matrix.name << ": " << matrix.rows << " x " << matrix.cols << "\n";
+				}
+			}
+		} catch (...) {
 		}
 	}
 
 	// List varm matrices
-	auto varm_matrices = reader.GetVarmMatrices();
-	if (!varm_matrices.empty()) {
-		info << "  varm matrices:\n";
-		for (const auto &matrix : varm_matrices) {
-			info << "    - " << matrix.name << ": " << matrix.rows << " x " << matrix.cols << "\n";
+	if (reader.HasVar()) {
+		try {
+			auto varm_matrices = reader.GetVarmMatrices();
+			if (!varm_matrices.empty()) {
+				info << "  varm matrices:\n";
+				for (const auto &matrix : varm_matrices) {
+					info << "    - " << matrix.name << ": " << matrix.rows << " x " << matrix.cols << "\n";
+				}
+			}
+		} catch (...) {
 		}
 	}
 
 	// List layers
-	auto layers = reader.GetLayers();
-	if (!layers.empty()) {
-		info << "  layers:\n";
-		for (const auto &layer : layers) {
-			info << "    - " << layer.name << ": " << layer.rows << " x " << layer.cols;
-			if (layer.is_sparse) {
-				info << " (sparse, " << layer.sparse_format << ")";
+	if (reader.HasObs() && reader.HasVar()) {
+		try {
+			auto layers = reader.GetLayers();
+			if (!layers.empty()) {
+				info << "  layers:\n";
+				for (const auto &layer : layers) {
+					info << "    - " << layer.name << ": " << layer.rows << " x " << layer.cols;
+					if (layer.is_sparse) {
+						info << " (sparse, " << layer.sparse_format << ")";
+					}
+					info << "\n";
+				}
 			}
-			info << "\n";
+		} catch (...) {
 		}
 	}
 
@@ -136,9 +169,7 @@ unique_ptr<FunctionData> AnndataScanner::ObsBind(ClientContext &context, TableFu
 	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
 	auto &reader = *reader_ptr;
 
-	if (!reader.IsValidAnnData()) {
-		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
-	}
+
 
 	// Get actual columns from HDF5 (already includes obs_idx)
 	auto columns = reader.GetObsColumns();
@@ -198,9 +229,7 @@ unique_ptr<FunctionData> AnndataScanner::VarBind(ClientContext &context, TableFu
 	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
 	auto &reader = *reader_ptr;
 
-	if (!reader.IsValidAnnData()) {
-		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
-	}
+
 
 	// Get actual columns from HDF5 (already includes var_idx)
 	auto columns = reader.GetVarColumns();
@@ -285,9 +314,7 @@ unique_ptr<FunctionData> AnndataScanner::XBind(ClientContext &context, TableFunc
 	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
 	auto &reader = *reader_ptr;
 
-	if (!reader.IsValidAnnData()) {
-		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
-	}
+
 
 	// Get matrix info
 	auto x_info = reader.GetXMatrixInfo();
@@ -441,9 +468,7 @@ unique_ptr<FunctionData> AnndataScanner::ObsmBind(ClientContext &context, TableF
 	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
 	auto &reader = *reader_ptr;
 
-	if (!reader.IsValidAnnData()) {
-		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
-	}
+
 
 	// Get obsm matrix info
 	auto matrices = reader.GetObsmMatrices();
@@ -531,9 +556,7 @@ unique_ptr<FunctionData> AnndataScanner::VarmBind(ClientContext &context, TableF
 	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
 	auto &reader = *reader_ptr;
 
-	if (!reader.IsValidAnnData()) {
-		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
-	}
+
 
 	// Get varm matrix info
 	auto matrices = reader.GetVarmMatrices();
@@ -782,9 +805,7 @@ unique_ptr<FunctionData> AnndataScanner::UnsBind(ClientContext &context, TableFu
 	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
 	auto &reader = *reader_ptr;
 
-	if (!reader.IsValidAnnData()) {
-		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
-	}
+
 
 	// Get uns keys
 	bind_data->uns_keys = reader.GetUnsKeys();
@@ -961,9 +982,7 @@ unique_ptr<FunctionData> AnndataScanner::ObspBind(ClientContext &context, TableF
 	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
 	auto &reader = *reader_ptr;
 
-	if (!reader.IsValidAnnData()) {
-		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
-	}
+
 
 	// Get sparse matrix info
 	try {
@@ -1044,9 +1063,7 @@ unique_ptr<FunctionData> AnndataScanner::VarpBind(ClientContext &context, TableF
 	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
 	auto &reader = *reader_ptr;
 
-	if (!reader.IsValidAnnData()) {
-		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
-	}
+
 
 	// Get sparse matrix info
 	try {
@@ -1164,76 +1181,115 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 	if (gstate.current_row == 0) {
 		vector<pair<string, string>> info_rows;
 
+		bool has_obs = gstate.h5_reader->HasObs();
+		bool has_var = gstate.h5_reader->HasVar();
+		bool has_X = gstate.h5_reader->HasX();
+
 		// Basic file info
 		info_rows.emplace_back("file_path", bind_data.file_path);
-		info_rows.emplace_back("n_obs", to_string(gstate.h5_reader->GetObsCount()));
-		info_rows.emplace_back("n_vars", to_string(gstate.h5_reader->GetVarCount()));
+		info_rows.emplace_back("n_obs", has_obs ? to_string(gstate.h5_reader->GetObsCount()) : "N/A");
+		info_rows.emplace_back("n_vars", has_var ? to_string(gstate.h5_reader->GetVarCount()) : "N/A");
 
 		// X matrix info
-		auto x_info = gstate.h5_reader->GetXMatrixInfo();
-		info_rows.emplace_back("x_shape", to_string(x_info.n_obs) + " x " + to_string(x_info.n_var));
-		info_rows.emplace_back("x_sparse", x_info.is_sparse ? "true" : "false");
-		if (x_info.is_sparse) {
-			info_rows.emplace_back("x_format", x_info.sparse_format);
+		if (has_X) {
+			try {
+				auto x_info = gstate.h5_reader->GetXMatrixInfo();
+				info_rows.emplace_back("x_shape", to_string(x_info.n_obs) + " x " + to_string(x_info.n_var));
+				info_rows.emplace_back("x_sparse", x_info.is_sparse ? "true" : "false");
+				if (x_info.is_sparse) {
+					info_rows.emplace_back("x_format", x_info.sparse_format);
+				}
+			} catch (...) {
+			}
 		}
 
 		// Count obsm matrices
-		auto obsm_matrices = gstate.h5_reader->GetObsmMatrices();
-		if (!obsm_matrices.empty()) {
-			string obsm_list;
-			for (size_t i = 0; i < obsm_matrices.size(); ++i) {
-				if (i > 0)
-					obsm_list += ", ";
-				obsm_list += obsm_matrices[i].name;
+		if (has_obs) {
+			try {
+				auto obsm_matrices = gstate.h5_reader->GetObsmMatrices();
+				if (!obsm_matrices.empty()) {
+					string obsm_list;
+					for (size_t i = 0; i < obsm_matrices.size(); ++i) {
+						if (i > 0) {
+							obsm_list += ", ";
+						}
+						obsm_list += obsm_matrices[i].name;
+					}
+					info_rows.emplace_back("obsm_keys", obsm_list);
+				}
+			} catch (...) {
 			}
-			info_rows.emplace_back("obsm_keys", obsm_list);
 		}
 
 		// Count varm matrices
-		auto varm_matrices = gstate.h5_reader->GetVarmMatrices();
-		if (!varm_matrices.empty()) {
-			string varm_list;
-			for (size_t i = 0; i < varm_matrices.size(); ++i) {
-				if (i > 0)
-					varm_list += ", ";
-				varm_list += varm_matrices[i].name;
+		if (has_var) {
+			try {
+				auto varm_matrices = gstate.h5_reader->GetVarmMatrices();
+				if (!varm_matrices.empty()) {
+					string varm_list;
+					for (size_t i = 0; i < varm_matrices.size(); ++i) {
+						if (i > 0) {
+							varm_list += ", ";
+						}
+						varm_list += varm_matrices[i].name;
+					}
+					info_rows.emplace_back("varm_keys", varm_list);
+				}
+			} catch (...) {
 			}
-			info_rows.emplace_back("varm_keys", varm_list);
 		}
 
 		// Count layers
-		auto layers = gstate.h5_reader->GetLayers();
-		if (!layers.empty()) {
-			string layer_list;
-			for (size_t i = 0; i < layers.size(); ++i) {
-				if (i > 0)
-					layer_list += ", ";
-				layer_list += layers[i].name;
+		if (has_obs && has_var) {
+			try {
+				auto layers = gstate.h5_reader->GetLayers();
+				if (!layers.empty()) {
+					string layer_list;
+					for (size_t i = 0; i < layers.size(); ++i) {
+						if (i > 0) {
+							layer_list += ", ";
+						}
+						layer_list += layers[i].name;
+					}
+					info_rows.emplace_back("layers", layer_list);
+				}
+			} catch (...) {
 			}
-			info_rows.emplace_back("layers", layer_list);
 		}
 
 		// Count obsp/varp
-		auto obsp_keys = gstate.h5_reader->GetObspKeys();
-		if (!obsp_keys.empty()) {
-			string obsp_list;
-			for (size_t i = 0; i < obsp_keys.size(); ++i) {
-				if (i > 0)
-					obsp_list += ", ";
-				obsp_list += obsp_keys[i];
+		if (has_obs) {
+			try {
+				auto obsp_keys = gstate.h5_reader->GetObspKeys();
+				if (!obsp_keys.empty()) {
+					string obsp_list;
+					for (size_t i = 0; i < obsp_keys.size(); ++i) {
+						if (i > 0) {
+							obsp_list += ", ";
+						}
+						obsp_list += obsp_keys[i];
+					}
+					info_rows.emplace_back("obsp_keys", obsp_list);
+				}
+			} catch (...) {
 			}
-			info_rows.emplace_back("obsp_keys", obsp_list);
 		}
 
-		auto varp_keys = gstate.h5_reader->GetVarpKeys();
-		if (!varp_keys.empty()) {
-			string varp_list;
-			for (size_t i = 0; i < varp_keys.size(); ++i) {
-				if (i > 0)
-					varp_list += ", ";
-				varp_list += varp_keys[i];
+		if (has_var) {
+			try {
+				auto varp_keys = gstate.h5_reader->GetVarpKeys();
+				if (!varp_keys.empty()) {
+					string varp_list;
+					for (size_t i = 0; i < varp_keys.size(); ++i) {
+						if (i > 0) {
+							varp_list += ", ";
+						}
+						varp_list += varp_keys[i];
+					}
+					info_rows.emplace_back("varp_keys", varp_list);
+				}
+			} catch (...) {
 			}
-			info_rows.emplace_back("varp_keys", varp_list);
 		}
 
 		// Output rows
