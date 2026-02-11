@@ -16,8 +16,8 @@ SELECT 'sparse' as file, COUNT(*) as properties
 FROM anndata_info('test/data/test_sparse.h5ad')
 ORDER BY file;
 ----
-small	7
-sparse	6
+small	11
+sparse	10
 
 # Test 2: UNION of obs tables from multiple files
 query II
@@ -105,9 +105,9 @@ SELECT 'info_small2' as type, COUNT(*) as count
 FROM anndata_info('test/data/test_small.h5ad')
 ORDER BY type;
 ----
-info_small	7
-info_small2	7
-info_sparse	6
+info_small	11
+info_small2	11
+info_sparse	10
 
 # Test 7: UNION with subqueries accessing same file multiple times
 query II
@@ -154,7 +154,7 @@ SELECT 'info' as scan_type, COUNT(*) as row_count
 FROM anndata_info('test/data/test_small.h5ad')
 ORDER BY scan_type;
 ----
-info	7
+info	11
 obs	100
 var	50
 
