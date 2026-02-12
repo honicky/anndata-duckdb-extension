@@ -2151,7 +2151,7 @@ std::vector<H5ReaderMultithreaded::LayerInfo> H5ReaderMultithreaded::GetLayers()
 
 		// Check object type
 		H5O_info_t obj_info;
-		H5_CHECK(H5Oget_info_by_name(*file_handle, layer_path.c_str(), &obj_info, H5O_INFO_BASIC, H5P_DEFAULT));
+		H5_CHECK(H5Oget_info_by_name_compat(*file_handle, layer_path.c_str(), &obj_info, H5P_DEFAULT));
 
 		if (obj_info.type == H5O_TYPE_DATASET) {
 			// Dense layer
@@ -2262,7 +2262,7 @@ void H5ReaderMultithreaded::ReadLayerMatrix(const std::string &layer_name, idx_t
 
 	// Check object type
 	H5O_info_t obj_info;
-	H5_CHECK(H5Oget_info_by_name(*file_handle, layer_path.c_str(), &obj_info, H5O_INFO_BASIC, H5P_DEFAULT));
+	H5_CHECK(H5Oget_info_by_name_compat(*file_handle, layer_path.c_str(), &obj_info, H5P_DEFAULT));
 
 	if (obj_info.type == H5O_TYPE_DATASET) {
 		// Dense layer - read directly
@@ -2401,7 +2401,7 @@ void H5ReaderMultithreaded::ReadMatrixBatch(const std::string &path, idx_t row_s
 
 	// Check object type
 	H5O_info_t obj_info;
-	H5_CHECK(H5Oget_info_by_name(*file_handle, path.c_str(), &obj_info, H5O_INFO_BASIC, H5P_DEFAULT));
+	H5_CHECK(H5Oget_info_by_name_compat(*file_handle, path.c_str(), &obj_info, H5P_DEFAULT));
 
 	if (is_layer) {
 		// For layers, check the structure
@@ -2561,7 +2561,7 @@ void H5ReaderMultithreaded::ReadMatrixColumns(const std::string &path, idx_t row
 
 	// Check object type
 	H5O_info_t obj_info;
-	H5_CHECK(H5Oget_info_by_name(*file_handle, path.c_str(), &obj_info, H5O_INFO_BASIC, H5P_DEFAULT));
+	H5_CHECK(H5Oget_info_by_name_compat(*file_handle, path.c_str(), &obj_info, H5P_DEFAULT));
 
 	if (is_layer) {
 		is_dense = (obj_info.type == H5O_TYPE_DATASET);
@@ -2734,7 +2734,7 @@ static void CollectUnsItems(hid_t file_handle, const std::string &base_path, con
 		std::string obj_path = base_path + "/" + member_name;
 
 		H5O_info_t obj_info;
-		if (H5Oget_info_by_name(file_handle, obj_path.c_str(), &obj_info, H5O_INFO_BASIC, H5P_DEFAULT) < 0)
+		if (H5Oget_info_by_name_compat(file_handle, obj_path.c_str(), &obj_info, H5P_DEFAULT) < 0)
 			continue;
 
 		H5ReaderMultithreaded::UnsInfo info;

@@ -161,9 +161,10 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const strin
 		        file_path.c_str());
 	}
 	if ((!has_obs || !has_var) && reader->HasGroup("/layers")) {
-		fprintf(stderr,
-		        "Warning: AnnData file '%s' has /layers but missing /obs or /var. layers tables will not be available.\n",
-		        file_path.c_str());
+		fprintf(
+		    stderr,
+		    "Warning: AnnData file '%s' has /layers but missing /obs or /var. layers tables will not be available.\n",
+		    file_path.c_str());
 	}
 
 	// Always add info table

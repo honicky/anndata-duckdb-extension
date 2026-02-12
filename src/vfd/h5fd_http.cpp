@@ -911,7 +911,8 @@ static herr_t H5FD_http_write(H5FD_t *file, H5FD_mem_t type, hid_t dxpl_id, hadd
 // Static VFD driver ID
 static hid_t H5FD_HTTP_g = H5I_INVALID_HID;
 
-// VFD class structure
+// VFD class structure — layout differs between HDF5 versions
+#if H5_VERSION_GE(1, 14, 0)
 static const H5FD_class_t H5FD_http_g = {
     H5FD_CLASS_VERSION,       // version
     (H5FD_class_value_t)600,  // value (custom VFD ID, must be >= 256)
@@ -954,6 +955,45 @@ static const H5FD_class_t H5FD_http_g = {
     nullptr,                  // ctl
     H5FD_FLMAP_DICHOTOMY      // fl_map
 };
+#else
+// HDF5 1.10/1.12 layout: no version, value, vector/selection, del, or ctl fields;
+// fl_map is an array H5FD_mem_t[H5FD_MEM_NTYPES].
+static const H5FD_class_t H5FD_http_g = {
+    "http",                   // name
+    HADDR_MAX,                // maxaddr
+    H5F_CLOSE_WEAK,           // fc_degree
+    nullptr,                  // terminate
+    nullptr,                  // sb_size
+    nullptr,                  // sb_encode
+    nullptr,                  // sb_decode
+    sizeof(H5FD_http_fapl_t), // fapl_size
+    nullptr,                  // fapl_get
+    nullptr,                  // fapl_copy
+    nullptr,                  // fapl_free
+    0,                        // dxpl_size
+    nullptr,                  // dxpl_copy
+    nullptr,                  // dxpl_free
+    H5FD_http_open,           // open
+    H5FD_http_close,          // close
+    nullptr,                  // cmp
+    nullptr,                  // query
+    nullptr,                  // get_type_map
+    nullptr,                  // alloc
+    nullptr,                  // free
+    H5FD_http_get_eoa,        // get_eoa
+    H5FD_http_set_eoa,        // set_eoa
+    H5FD_http_get_eof,        // get_eof
+    nullptr,                  // get_handle
+    H5FD_http_read,           // read
+    H5FD_http_write,          // write
+    nullptr,                  // flush
+    nullptr,                  // truncate
+    nullptr,                  // lock
+    nullptr,                  // unlock
+    {H5FD_MEM_DEFAULT, H5FD_MEM_DEFAULT, H5FD_MEM_DEFAULT, H5FD_MEM_DEFAULT, H5FD_MEM_DEFAULT, H5FD_MEM_DEFAULT,
+     H5FD_MEM_DEFAULT} // fl_map[H5FD_MEM_NTYPES]
+};
+#endif
 
 //===--------------------------------------------------------------------===//
 // VFD Callback Implementations

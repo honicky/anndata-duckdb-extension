@@ -319,10 +319,12 @@ unique_ptr<FunctionData> AnndataScanner::XBind(ClientContext &context, TableFunc
 	auto &reader = *reader_ptr;
 
 	if (!reader.HasObs()) {
-		throw InvalidInputException("AnnData file '%s' has no /obs group (required for X matrix)", bind_data->file_path.c_str());
+		throw InvalidInputException("AnnData file '%s' has no /obs group (required for X matrix)",
+		                            bind_data->file_path.c_str());
 	}
 	if (!reader.HasVar()) {
-		throw InvalidInputException("AnnData file '%s' has no /var group (required for X matrix)", bind_data->file_path.c_str());
+		throw InvalidInputException("AnnData file '%s' has no /var group (required for X matrix)",
+		                            bind_data->file_path.c_str());
 	}
 	if (!reader.HasX()) {
 		throw InvalidInputException("AnnData file '%s' has no /X matrix", bind_data->file_path.c_str());
@@ -481,7 +483,8 @@ unique_ptr<FunctionData> AnndataScanner::ObsmBind(ClientContext &context, TableF
 	auto &reader = *reader_ptr;
 
 	if (!reader.HasObs()) {
-		throw InvalidInputException("AnnData file '%s' has no /obs group (required for obsm)", bind_data->file_path.c_str());
+		throw InvalidInputException("AnnData file '%s' has no /obs group (required for obsm)",
+		                            bind_data->file_path.c_str());
 	}
 
 	// Get obsm matrix info
@@ -571,7 +574,8 @@ unique_ptr<FunctionData> AnndataScanner::VarmBind(ClientContext &context, TableF
 	auto &reader = *reader_ptr;
 
 	if (!reader.HasVar()) {
-		throw InvalidInputException("AnnData file '%s' has no /var group (required for varm)", bind_data->file_path.c_str());
+		throw InvalidInputException("AnnData file '%s' has no /var group (required for varm)",
+		                            bind_data->file_path.c_str());
 	}
 
 	// Get varm matrix info
@@ -663,10 +667,12 @@ unique_ptr<FunctionData> AnndataScanner::LayerBind(ClientContext &context, Table
 	auto &reader = *reader_ptr;
 
 	if (!reader.HasObs()) {
-		throw InvalidInputException("AnnData file '%s' has no /obs group (required for layers)", result->file_path.c_str());
+		throw InvalidInputException("AnnData file '%s' has no /obs group (required for layers)",
+		                            result->file_path.c_str());
 	}
 	if (!reader.HasVar()) {
-		throw InvalidInputException("AnnData file '%s' has no /var group (required for layers)", result->file_path.c_str());
+		throw InvalidInputException("AnnData file '%s' has no /var group (required for layers)",
+		                            result->file_path.c_str());
 	}
 
 	auto layers = reader.GetLayers();
@@ -828,8 +834,6 @@ unique_ptr<FunctionData> AnndataScanner::UnsBind(ClientContext &context, TableFu
 	// Open the HDF5 file to get uns keys
 	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
 	auto &reader = *reader_ptr;
-
-
 
 	// Get uns keys
 	bind_data->uns_keys = reader.GetUnsKeys();
@@ -1007,7 +1011,8 @@ unique_ptr<FunctionData> AnndataScanner::ObspBind(ClientContext &context, TableF
 	auto &reader = *reader_ptr;
 
 	if (!reader.HasObs()) {
-		throw InvalidInputException("AnnData file '%s' has no /obs group (required for obsp)", bind_data->file_path.c_str());
+		throw InvalidInputException("AnnData file '%s' has no /obs group (required for obsp)",
+		                            bind_data->file_path.c_str());
 	}
 
 	// Get sparse matrix info
@@ -1090,7 +1095,8 @@ unique_ptr<FunctionData> AnndataScanner::VarpBind(ClientContext &context, TableF
 	auto &reader = *reader_ptr;
 
 	if (!reader.HasVar()) {
-		throw InvalidInputException("AnnData file '%s' has no /var group (required for varp)", bind_data->file_path.c_str());
+		throw InvalidInputException("AnnData file '%s' has no /var group (required for varp)",
+		                            bind_data->file_path.c_str());
 	}
 
 	// Get sparse matrix info
