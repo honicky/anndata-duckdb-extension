@@ -2606,12 +2606,39 @@ void H5ReaderMultithreaded::ReadMatrixBatch(const std::string &path, idx_t row_s
 			H5Sget_simple_extent_dims(indptr_space.get(), &indptr_dims, nullptr);
 
 			if (is_layer) {
-				// For layers, they should match X matrix dimensions
-				auto x_info = GetXMatrixInfo();
-				if (indptr_dims - 1 == x_info.n_obs) {
-					format = "CSR";
-				} else if (indptr_dims - 1 == x_info.n_var) {
-					format = "CSC";
+				// Try to read shape attribute from the sparse group itself
+				// This is path-independent and works for /raw/X, /layers/*, etc.
+				htri_t shape_exists = H5Aexists(group.get(), "shape");
+				if (shape_exists > 0) {
+					H5AttributeHandle shape_attr(group.get(), "shape");
+					hid_t shape_space = H5Aget_space(shape_attr.get());
+					hsize_t shape_dims;
+					H5Sget_simple_extent_dims(shape_space, &shape_dims, nullptr);
+					H5Sclose(shape_space);
+
+					if (shape_dims >= 2) {
+						std::vector<hsize_t> shape_vals(shape_dims);
+						H5Aread(shape_attr.get(), H5T_NATIVE_HSIZE, shape_vals.data());
+						hsize_t n_rows = shape_vals[0];
+						hsize_t n_cols = shape_vals[1];
+
+						if (indptr_dims - 1 == n_rows) {
+							format = "CSR";
+						} else if (indptr_dims - 1 == n_cols) {
+							format = "CSC";
+						}
+						format_determined = true;
+					}
+				}
+
+				// Fall back to main X dimensions only for actual layers (not raw)
+				if (!format_determined) {
+					auto x_info = GetXMatrixInfo();
+					if (indptr_dims - 1 == x_info.n_obs) {
+						format = "CSR";
+					} else if (indptr_dims - 1 == x_info.n_var) {
+						format = "CSC";
+					}
 				}
 			}
 		}
