@@ -1152,6 +1152,14 @@ unique_ptr<FunctionData> AnndataScanner::InfoBind(ClientContext &context, TableF
 	// to avoid opening the file twice
 	bind_data->is_info_scan = true;
 
+	// Check for optional var_name_column and var_id_column parameters
+	if (input.inputs.size() > 1) {
+		bind_data->var_name_column = input.inputs[1].GetValue<string>();
+	}
+	if (input.inputs.size() > 2) {
+		bind_data->var_id_column = input.inputs[2].GetValue<string>();
+	}
+
 	// Define output schema for info table
 	names.emplace_back("property");
 	return_types.emplace_back(LogicalType::VARCHAR);
@@ -1261,6 +1269,69 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 			}
 			info_rows.emplace_back("varp_keys", varp_list);
 		}
+
+		// Check for uns data
+		auto uns_keys = gstate.h5_reader->GetUnsKeys();
+
+		// Build list of available groups (HDF5 top-level groups present in the file)
+		{
+			string groups_list;
+			// obs and var are always present in valid AnnData
+			groups_list = "obs, var";
+			if (x_info.n_obs > 0 && x_info.n_var > 0) {
+				groups_list += ", X";
+			}
+			if (!obsm_matrices.empty()) {
+				groups_list += ", obsm";
+			}
+			if (!varm_matrices.empty()) {
+				groups_list += ", varm";
+			}
+			if (!layers.empty()) {
+				groups_list += ", layers";
+			}
+			if (!obsp_keys.empty()) {
+				groups_list += ", obsp";
+			}
+			if (!varp_keys.empty()) {
+				groups_list += ", varp";
+			}
+			if (!uns_keys.empty()) {
+				groups_list += ", uns";
+			}
+			info_rows.emplace_back("groups", groups_list);
+		}
+
+		// Build list of available tables (SQL-accessible views)
+		{
+			string tables_list = "obs, var, info";
+			if (x_info.n_obs > 0 && x_info.n_var > 0) {
+				tables_list += ", X";
+			}
+			for (const auto &m : obsm_matrices) {
+				tables_list += ", obsm_" + m.name;
+			}
+			for (const auto &m : varm_matrices) {
+				tables_list += ", varm_" + m.name;
+			}
+			for (const auto &l : layers) {
+				tables_list += ", layers_" + l.name;
+			}
+			for (const auto &k : obsp_keys) {
+				tables_list += ", obsp_" + k;
+			}
+			for (const auto &k : varp_keys) {
+				tables_list += ", varp_" + k;
+			}
+			if (!uns_keys.empty()) {
+				tables_list += ", uns";
+			}
+			info_rows.emplace_back("tables", tables_list);
+		}
+
+		// Var columns: read from bind data (same source as anndata_scan_x)
+		info_rows.emplace_back("var_name_column", bind_data.var_name_column);
+		info_rows.emplace_back("var_id_column", bind_data.var_id_column);
 
 		// Output rows
 		for (const auto &row : info_rows) {
@@ -1381,6 +1452,13 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 	                        AnndataInitGlobal, AnndataInitLocal);
 	info_func.name = "anndata_info";
 	loader.RegisterFunction(info_func);
+
+	// Also register with optional var_name_column and var_id_column parameters
+	TableFunction info_func_with_params(
+	    "anndata_info", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR}, AnndataScanner::InfoScan,
+	    AnndataScanner::InfoBind, AnndataInitGlobal, AnndataInitLocal);
+	info_func_with_params.name = "anndata_info";
+	loader.RegisterFunction(info_func_with_params);
 }
 
 } // namespace duckdb

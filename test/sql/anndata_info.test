@@ -74,7 +74,7 @@ FROM (
 ) t
 WHERE t.property IS NOT NULL AND t.value IS NOT NULL;
 ----
-7
+11
 
 # Test casting numeric properties
 query I
@@ -99,6 +99,45 @@ WHERE property = 'x_sparse';
 ----
 false
 
+# Test groups property lists available HDF5 groups
+query I
+SELECT value
+FROM anndata_info('test/data/test_small.h5ad')
+WHERE property = 'groups';
+----
+obs, var, X, obsm, varm, uns
+
+# Test tables property lists available SQL tables
+query I
+SELECT value LIKE 'obs, var, info, X%' as starts_correctly
+FROM anndata_info('test/data/test_small.h5ad')
+WHERE property = 'tables';
+----
+true
+
+# Test var_name_column and var_id_column default to _index (standalone, no ATTACH)
+query I
+SELECT value
+FROM anndata_info('test/data/test_small.h5ad')
+WHERE property = 'var_name_column';
+----
+_index
+
+query I
+SELECT value
+FROM anndata_info('test/data/test_small.h5ad')
+WHERE property = 'var_id_column';
+----
+_index
+
+# Test groups for obsp/varp file
+query I
+SELECT value
+FROM anndata_info('test/data/test_obsp_varp.h5ad')
+WHERE property = 'groups';
+----
+obs, var, X, obsp, varp
+
 # Test aggregation over multiple files (simulated with UNION)
 # KNOWN LIMITATION: UNION queries with multiple HDF5 files may fail due to HDF5 C++ API limitations
 # The HDF5 C++ API is not thread-safe, and the vcpkg build we use has the C++ feature enabled
@@ -111,9 +150,9 @@ false
 query I
 SELECT COUNT(*) FROM anndata_info('test/data/test_small.h5ad');
 ----
-7
+11
 
-query I  
+query I
 SELECT COUNT(*) FROM anndata_info('test/data/test_obsp_varp.h5ad');
 ----
-7
+11

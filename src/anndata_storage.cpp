@@ -55,7 +55,8 @@ string AnndataDefaultGenerator::GenerateViewSQL(const TableViewInfo &info) const
 	} else if (info.table_type == "uns") {
 		return StringUtil::Format("SELECT * FROM anndata_scan_uns(%s)", SQLString(file_path));
 	} else if (info.table_type == "info") {
-		return StringUtil::Format("SELECT * FROM anndata_info(%s)", SQLString(file_path));
+		return StringUtil::Format("SELECT * FROM anndata_info(%s, %s, %s)", SQLString(file_path),
+		                          SQLString(info.var_name_column), SQLString(info.var_id_column));
 	}
 
 	throw InternalException("Unknown table type: " + info.table_type);
