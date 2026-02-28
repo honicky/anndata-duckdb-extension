@@ -598,13 +598,21 @@ size_t H5ReaderMultithreaded::GetObsCount() {
 
 // Get number of variables (genes)
 size_t H5ReaderMultithreaded::GetVarCount() {
+	return GetVarCountAtPath("/var", "/X");
+}
+
+size_t H5ReaderMultithreaded::GetRawVarCount() {
+	return GetVarCountAtPath("/raw/var", "/raw/X");
+}
+
+size_t H5ReaderMultithreaded::GetVarCountAtPath(const std::string &var_path, const std::string &x_path) {
 	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
 	auto h5_lock = H5GlobalLock::Acquire();
 
 	try {
-		// Check if /var is a compound dataset (older AnnData format)
-		if (IsCompoundDataset("/var")) {
-			H5DatasetHandle dataset(*file_handle, "/var");
+		// Check if var is a compound dataset (older AnnData format)
+		if (IsCompoundDataset(var_path)) {
+			H5DatasetHandle dataset(*file_handle, var_path);
 			H5DataspaceHandle dataspace(dataset.get());
 			hsize_t dims[1];
 			H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
@@ -612,8 +620,8 @@ size_t H5ReaderMultithreaded::GetVarCount() {
 		}
 
 		// Try to get shape from var/_index first (standard location)
-		if (IsDatasetPresent("/var", "_index")) {
-			H5DatasetHandle dataset(*file_handle, "/var/_index");
+		if (IsDatasetPresent(var_path, "_index")) {
+			H5DatasetHandle dataset(*file_handle, var_path + "/_index");
 			H5DataspaceHandle dataspace(dataset.get());
 			hsize_t dims[1];
 			H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
@@ -621,8 +629,8 @@ size_t H5ReaderMultithreaded::GetVarCount() {
 		}
 
 		// Try index (alternative location)
-		if (IsDatasetPresent("/var", "index")) {
-			H5DatasetHandle dataset(*file_handle, "/var/index");
+		if (IsDatasetPresent(var_path, "index")) {
+			H5DatasetHandle dataset(*file_handle, var_path + "/index");
 			H5DataspaceHandle dataspace(dataset.get());
 			hsize_t dims[1];
 			H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
@@ -630,19 +638,19 @@ size_t H5ReaderMultithreaded::GetVarCount() {
 		}
 
 		// Try getting from X matrix shape
-		if (H5LinkExists(*file_handle, "/X")) {
-			if (H5GetObjectType(*file_handle, "/X") == H5O_TYPE_DATASET) {
+		if (H5LinkExists(*file_handle, x_path.c_str())) {
+			if (H5GetObjectType(*file_handle, x_path) == H5O_TYPE_DATASET) {
 				// Dense matrix
-				H5DatasetHandle dataset(*file_handle, "/X");
+				H5DatasetHandle dataset(*file_handle, x_path);
 				H5DataspaceHandle dataspace(dataset.get());
 				hsize_t dims[2];
 				int ndims = H5Sget_simple_extent_dims(dataspace.get(), dims, nullptr);
 				if (ndims == 2) {
 					return dims[1];
 				}
-			} else if (H5GetObjectType(*file_handle, "/X") == H5O_TYPE_GROUP) {
-				// Sparse matrix - check shape attribute on /X group
-				hid_t x_group = H5Gopen(*file_handle, "/X", H5P_DEFAULT);
+			} else if (H5GetObjectType(*file_handle, x_path) == H5O_TYPE_GROUP) {
+				// Sparse matrix - check shape attribute on X group
+				hid_t x_group = H5Gopen(*file_handle, x_path.c_str(), H5P_DEFAULT);
 				if (x_group >= 0) {
 					if (H5Aexists(x_group, "shape") > 0) {
 						hid_t shape_attr = H5Aopen(x_group, "shape", H5P_DEFAULT);
@@ -658,8 +666,9 @@ size_t H5ReaderMultithreaded::GetVarCount() {
 				}
 
 				// Check indptr for CSC format
-				if (IsDatasetPresent("/X", "indptr")) {
-					H5DatasetHandle indptr(*file_handle, "/X/indptr");
+				std::string indptr_path = x_path + "/indptr";
+				if (H5LinkExists(*file_handle, indptr_path.c_str())) {
+					H5DatasetHandle indptr(*file_handle, indptr_path);
 					H5DataspaceHandle indptr_space(indptr.get());
 					hsize_t indptr_dims[1];
 					H5Sget_simple_extent_dims(indptr_space.get(), indptr_dims, nullptr);
@@ -750,30 +759,39 @@ std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetObsColu
 }
 
 std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetVarColumns() {
+	return GetVarColumnsAtPath("/var", "var_idx");
+}
+
+std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetRawVarColumns() {
+	return GetVarColumnsAtPath("/raw/var", "var_idx");
+}
+
+std::vector<H5ReaderMultithreaded::ColumnInfo>
+H5ReaderMultithreaded::GetVarColumnsAtPath(const std::string &var_path, const std::string &idx_col_name) {
 	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
 	auto h5_lock = H5GlobalLock::Acquire();
 
-	// Check if /var is a compound dataset (older AnnData format)
-	if (IsCompoundDataset("/var")) {
-		return GetCompoundDatasetColumns("/var", "var_idx");
+	// Check if var is a compound dataset (older AnnData format)
+	if (IsCompoundDataset(var_path)) {
+		return GetCompoundDatasetColumns(var_path, idx_col_name);
 	}
 
-	// Newer format: /var is a group with separate datasets per column
+	// Newer format: var is a group with separate datasets per column
 
 	std::vector<ColumnInfo> columns;
 	std::unordered_set<std::string> seen_names;
 
-	// Add var_idx as the first column (row index)
+	// Add idx column as the first column (row index)
 	ColumnInfo idx_col;
-	idx_col.name = "var_idx";
-	idx_col.original_name = "var_idx";
+	idx_col.name = idx_col_name;
+	idx_col.original_name = idx_col_name;
 	idx_col.type = LogicalType::BIGINT;
 	idx_col.is_categorical = false;
 	columns.push_back(idx_col);
-	seen_names.insert("var_idx");
+	seen_names.insert(idx_col_name);
 
 	try {
-		auto members = GetGroupMembers("/var");
+		auto members = GetGroupMembers(var_path);
 
 		for (const auto &member : members) {
 			if (member == "__categories") {
@@ -793,14 +811,14 @@ std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetVarColu
 			seen_names.insert(lower_name);
 
 			// Check if it's categorical
-			std::string member_path = "/var/" + member;
+			std::string member_path = var_path + "/" + member;
 			if (H5GetObjectType(*file_handle, member_path) == H5O_TYPE_GROUP) {
 				col.is_categorical = true;
 				col.type = LogicalType::VARCHAR;
 				// Note: Categories are loaded lazily during query execution, not during schema discovery
-			} else if (IsDatasetPresent("/var", member)) {
+			} else if (IsDatasetPresent(var_path, member)) {
 				// Direct dataset
-				H5DatasetHandle dataset(*file_handle, "/var/" + member);
+				H5DatasetHandle dataset(*file_handle, var_path + "/" + member);
 				H5TypeHandle dtype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
 				col.type = H5TypeToDuckDBType(dtype.get());
 			}
@@ -1042,6 +1060,16 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 }
 
 void H5ReaderMultithreaded::ReadVarColumn(const std::string &column_name, Vector &result, idx_t offset, idx_t count) {
+	ReadVarColumnAtPath("/var", column_name, result, offset, count);
+}
+
+void H5ReaderMultithreaded::ReadRawVarColumn(const std::string &column_name, Vector &result, idx_t offset,
+                                             idx_t count) {
+	ReadVarColumnAtPath("/raw/var", column_name, result, offset, count);
+}
+
+void H5ReaderMultithreaded::ReadVarColumnAtPath(const std::string &var_path, const std::string &column_name,
+                                                Vector &result, idx_t offset, idx_t count) {
 	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
 	auto h5_lock = H5GlobalLock::Acquire();
 
@@ -1054,15 +1082,15 @@ void H5ReaderMultithreaded::ReadVarColumn(const std::string &column_name, Vector
 			return;
 		}
 
-		// Check if /var is a compound dataset (older AnnData format)
-		if (IsCompoundDataset("/var")) {
-			ReadCompoundDatasetColumn("/var", column_name, result, offset, count);
+		// Check if var is a compound dataset (older AnnData format)
+		if (IsCompoundDataset(var_path)) {
+			ReadCompoundDatasetColumn(var_path, column_name, result, offset, count);
 			return;
 		}
 
-		// Newer format: /var is a group with separate datasets per column
+		// Newer format: var is a group with separate datasets per column
 		// Check if it's a categorical column
-		std::string group_path = "/var/" + column_name;
+		std::string group_path = var_path + "/" + column_name;
 		if (H5GetObjectType(*file_handle, group_path) == H5O_TYPE_GROUP) {
 			// Handle categorical columns - same logic as obs
 			try {
@@ -1116,9 +1144,9 @@ void H5ReaderMultithreaded::ReadVarColumn(const std::string &column_name, Vector
 			} catch (...) {
 				// If reading as categorical fails, try as regular dataset
 			}
-		} else if (IsDatasetPresent("/var", column_name)) {
+		} else if (IsDatasetPresent(var_path, column_name)) {
 			// Direct dataset (non-categorical) - same logic as obs
-			H5DatasetHandle dataset(*file_handle, "/var/" + column_name);
+			H5DatasetHandle dataset(*file_handle, var_path + "/" + column_name);
 			H5DataspaceHandle dataspace(dataset.get());
 			H5TypeHandle dtype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
 
@@ -1269,6 +1297,11 @@ void H5ReaderMultithreaded::ReadVarColumn(const std::string &column_name, Vector
 }
 
 std::string H5ReaderMultithreaded::ReadVarColumnString(const std::string &column_name, idx_t index) {
+	return ReadVarColumnStringAtPath("/var", column_name, index);
+}
+
+std::string H5ReaderMultithreaded::ReadVarColumnStringAtPath(const std::string &var_path,
+                                                             const std::string &column_name, idx_t index) {
 	try {
 		// Special handling for var_idx
 		if (column_name == "var_idx") {
@@ -1276,7 +1309,7 @@ std::string H5ReaderMultithreaded::ReadVarColumnString(const std::string &column
 		}
 
 		Vector result(LogicalType::VARCHAR, 1);
-		ReadVarColumn(column_name, result, index, 1);
+		ReadVarColumnAtPath(var_path, column_name, result, index, 1);
 
 		Value val = result.GetValue(0);
 		if (val.IsNull()) {
@@ -1332,6 +1365,48 @@ H5ReaderMultithreaded::XMatrixInfo H5ReaderMultithreaded::GetXMatrixInfo() {
 	return info;
 }
 
+bool H5ReaderMultithreaded::HasRawData() {
+	return IsGroupPresent("/raw");
+}
+
+H5ReaderMultithreaded::XMatrixInfo H5ReaderMultithreaded::GetRawXMatrixInfo() {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
+	XMatrixInfo info;
+	info.n_obs = GetObsCount();    // raw shares obs with main
+	info.n_var = GetRawVarCount(); // raw has its own var
+
+	// Check if raw/X is sparse or dense
+	if (H5LinkExists(*file_handle, "/raw/X")) {
+		if (H5GetObjectType(*file_handle, "/raw/X") == H5O_TYPE_GROUP) {
+			// Sparse matrix
+			info.is_sparse = true;
+			// Try to determine format (CSR vs CSC)
+			if (IsDatasetPresent("/raw/X", "indptr") && IsDatasetPresent("/raw/X", "indices")) {
+				// Check indptr length to determine format
+				H5DatasetHandle indptr(*file_handle, "/raw/X/indptr");
+				H5DataspaceHandle indptr_space(indptr.get());
+				hsize_t indptr_dims[1];
+				H5Sget_simple_extent_dims(indptr_space.get(), indptr_dims, nullptr);
+
+				if (indptr_dims[0] == info.n_obs + 1) {
+					info.sparse_format = "csr";
+				} else if (indptr_dims[0] == info.n_var + 1) {
+					info.sparse_format = "csc";
+				} else {
+					info.sparse_format = "unknown";
+				}
+			}
+		} else {
+			// Dense matrix
+			info.is_sparse = false;
+		}
+	}
+
+	return info;
+}
+
 // Helper function to check if an attribute exists
 static bool H5AttributeExists(hid_t loc_id, const std::string &obj_name, const std::string &attr_name) {
 	try {
@@ -1352,22 +1427,30 @@ static bool H5AttributeExists(hid_t loc_id, const std::string &obj_name, const s
 }
 
 std::vector<std::string> H5ReaderMultithreaded::GetVarNames(const std::string &column_name) {
+	return GetVarNamesAtPath("/var", column_name, GetVarCount());
+}
+
+std::vector<std::string> H5ReaderMultithreaded::GetRawVarNames(const std::string &column_name) {
+	return GetVarNamesAtPath("/raw/var", column_name, GetRawVarCount());
+}
+
+std::vector<std::string> H5ReaderMultithreaded::GetVarNamesAtPath(const std::string &var_path,
+                                                                  const std::string &column_name, size_t var_count) {
 	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
 	auto h5_lock = H5GlobalLock::Acquire();
 
 	std::vector<std::string> names;
 	try {
-		auto var_count = GetVarCount();
 		names.reserve(var_count);
 
-		// Check if /var is a compound dataset (older AnnData format)
-		if (IsCompoundDataset("/var")) {
+		// Check if var is a compound dataset (older AnnData format)
+		if (IsCompoundDataset(var_path)) {
 			// For compound datasets, read from the specified column (or "_index" if not specified)
 			std::string col_to_read = column_name.empty() ? "_index" : column_name;
 
 			// Read values using ReadVarColumn
 			Vector result(LogicalType::VARCHAR, var_count);
-			ReadCompoundDatasetColumn("/var", col_to_read, result, 0, var_count);
+			ReadCompoundDatasetColumn(var_path, col_to_read, result, 0, var_count);
 
 			for (idx_t i = 0; i < var_count; i++) {
 				Value val = result.GetValue(i);
@@ -1382,9 +1465,9 @@ std::vector<std::string> H5ReaderMultithreaded::GetVarNames(const std::string &c
 
 		if (column_name.empty() || column_name == "var_names") {
 			// Try to get default var names from _index attribute
-			if (H5AttributeExists(*file_handle, "/var", "_index")) {
-				// Open the /var group
-				H5GroupHandle var_group(*file_handle, "/var");
+			if (H5AttributeExists(*file_handle, var_path, "_index")) {
+				// Open the var group
+				H5GroupHandle var_group(*file_handle, var_path);
 				H5AttributeHandle attr(var_group.get(), "_index");
 
 				// Get attribute dataspace
@@ -1423,8 +1506,8 @@ std::vector<std::string> H5ReaderMultithreaded::GetVarNames(const std::string &c
 			}
 		} else {
 			// Try to get specific column from var DataFrame
-			std::string dataset_path = "/var/" + column_name;
-			if (IsDatasetPresent("/var", column_name)) {
+			std::string dataset_path = var_path + "/" + column_name;
+			if (IsDatasetPresent(var_path, column_name)) {
 				H5DatasetHandle dataset(*file_handle, dataset_path);
 				H5DataspaceHandle dataspace(dataset.get());
 				hsize_t dims[1];
@@ -1458,7 +1541,7 @@ std::vector<std::string> H5ReaderMultithreaded::GetVarNames(const std::string &c
 				}
 			} else {
 				// Check if it's a categorical column (Group with codes/categories)
-				std::string group_path = "/var/" + column_name;
+				std::string group_path = var_path + "/" + column_name;
 				std::string codes_path = group_path + "/codes";
 				std::string categories_path = group_path + "/categories";
 
@@ -1559,8 +1642,7 @@ std::vector<std::string> H5ReaderMultithreaded::GetVarNames(const std::string &c
 		}
 	} catch (const std::exception &e) {
 		// On error, return generic names
-		auto var_count = GetVarCount();
-		for (idx_t i = 0; i < var_count; i++) {
+		for (size_t i = 0; i < var_count; i++) {
 			names.push_back("var_" + std::to_string(i));
 		}
 	}
@@ -1568,10 +1650,19 @@ std::vector<std::string> H5ReaderMultithreaded::GetVarNames(const std::string &c
 }
 
 H5ReaderMultithreaded::VarColumnDetection H5ReaderMultithreaded::DetectVarColumns() {
+	return DetectVarColumnsAtPath("/var", "/X");
+}
+
+H5ReaderMultithreaded::VarColumnDetection H5ReaderMultithreaded::DetectRawVarColumns() {
+	return DetectVarColumnsAtPath("/raw/var", "/raw/X");
+}
+
+H5ReaderMultithreaded::VarColumnDetection H5ReaderMultithreaded::DetectVarColumnsAtPath(const std::string &var_path,
+                                                                                        const std::string &x_path) {
 	VarColumnDetection result;
 
 	// Get list of var column names
-	auto columns = GetVarColumns();
+	auto columns = GetVarColumnsAtPath(var_path, "var_idx");
 	std::vector<std::string> column_names;
 	for (const auto &col : columns) {
 		column_names.push_back(col.name);
@@ -1623,8 +1714,8 @@ H5ReaderMultithreaded::VarColumnDetection H5ReaderMultithreaded::DetectVarColumn
 		bool found_high_conf_name = false;
 		bool found_high_conf_id = false;
 
-		auto var_count = GetVarCount();
-		auto sample_size = std::min(SAMPLE_SIZE, var_count);
+		auto vc = GetVarCountAtPath(var_path, x_path);
+		auto sample_size = std::min(SAMPLE_SIZE, vc);
 
 		for (const auto &col : columns) {
 			// Only check string columns (skip _index as it's the fallback)
@@ -1648,7 +1739,7 @@ H5ReaderMultithreaded::VarColumnDetection H5ReaderMultithreaded::DetectVarColumn
 
 			try {
 				for (size_t i = 0; i < sample_size; i++) {
-					auto value = ReadVarColumnString(col.original_name, i);
+					auto value = ReadVarColumnStringAtPath(var_path, col.original_name, i);
 					if (value.empty()) {
 						continue;
 					}
@@ -1932,19 +2023,28 @@ std::vector<H5ReaderMultithreaded::MatrixInfo> H5ReaderMultithreaded::GetObsmMat
 }
 
 std::vector<H5ReaderMultithreaded::MatrixInfo> H5ReaderMultithreaded::GetVarmMatrices() {
+	return GetVarmMatricesAtPath("/varm");
+}
+
+std::vector<H5ReaderMultithreaded::MatrixInfo> H5ReaderMultithreaded::GetRawVarmMatrices() {
+	return GetVarmMatricesAtPath("/raw/varm");
+}
+
+std::vector<H5ReaderMultithreaded::MatrixInfo>
+H5ReaderMultithreaded::GetVarmMatricesAtPath(const std::string &varm_path) {
 	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
 	auto h5_lock = H5GlobalLock::Acquire();
 
 	std::vector<MatrixInfo> matrices;
 
 	try {
-		if (IsGroupPresent("/varm")) {
+		if (IsGroupPresent(varm_path)) {
 			// Get list of members in the varm group
-			auto members = GetGroupMembers("/varm");
+			auto members = GetGroupMembers(varm_path);
 
 			for (const auto &matrix_name : members) {
 				// Check if it's a dataset
-				std::string path = "/varm/" + matrix_name;
+				std::string path = varm_path + "/" + matrix_name;
 				if (H5LinkExists(*file_handle, path) && H5GetObjectType(*file_handle, path) == H5O_TYPE_DATASET) {
 					// Open dataset and get dimensions
 					H5DatasetHandle dataset(*file_handle, path);
@@ -2054,11 +2154,21 @@ void H5ReaderMultithreaded::ReadObsmMatrix(const std::string &matrix_name, idx_t
 
 void H5ReaderMultithreaded::ReadVarmMatrix(const std::string &matrix_name, idx_t row_start, idx_t row_count,
                                            idx_t col_idx, Vector &result) {
+	ReadVarmMatrixAtPath("/varm", matrix_name, row_start, row_count, col_idx, result);
+}
+
+void H5ReaderMultithreaded::ReadRawVarmMatrix(const std::string &matrix_name, idx_t row_start, idx_t row_count,
+                                              idx_t col_idx, Vector &result) {
+	ReadVarmMatrixAtPath("/raw/varm", matrix_name, row_start, row_count, col_idx, result);
+}
+
+void H5ReaderMultithreaded::ReadVarmMatrixAtPath(const std::string &varm_path, const std::string &matrix_name,
+                                                 idx_t row_start, idx_t row_count, idx_t col_idx, Vector &result) {
 	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
 	auto h5_lock = H5GlobalLock::Acquire();
 
 	try {
-		std::string dataset_path = "/varm/" + matrix_name;
+		std::string dataset_path = varm_path + "/" + matrix_name;
 		H5DatasetHandle dataset(*file_handle, dataset_path);
 		H5DataspaceHandle dataspace(dataset.get());
 
@@ -2496,12 +2606,39 @@ void H5ReaderMultithreaded::ReadMatrixBatch(const std::string &path, idx_t row_s
 			H5Sget_simple_extent_dims(indptr_space.get(), &indptr_dims, nullptr);
 
 			if (is_layer) {
-				// For layers, they should match X matrix dimensions
-				auto x_info = GetXMatrixInfo();
-				if (indptr_dims - 1 == x_info.n_obs) {
-					format = "CSR";
-				} else if (indptr_dims - 1 == x_info.n_var) {
-					format = "CSC";
+				// Try to read shape attribute from the sparse group itself
+				// This is path-independent and works for /raw/X, /layers/*, etc.
+				htri_t shape_exists = H5Aexists(group.get(), "shape");
+				if (shape_exists > 0) {
+					H5AttributeHandle shape_attr(group.get(), "shape");
+					hid_t shape_space = H5Aget_space(shape_attr.get());
+					hsize_t shape_dims;
+					H5Sget_simple_extent_dims(shape_space, &shape_dims, nullptr);
+					H5Sclose(shape_space);
+
+					if (shape_dims >= 2) {
+						std::vector<hsize_t> shape_vals(shape_dims);
+						H5Aread(shape_attr.get(), H5T_NATIVE_HSIZE, shape_vals.data());
+						hsize_t n_rows = shape_vals[0];
+						hsize_t n_cols = shape_vals[1];
+
+						if (indptr_dims - 1 == n_rows) {
+							format = "CSR";
+						} else if (indptr_dims - 1 == n_cols) {
+							format = "CSC";
+						}
+						format_determined = true;
+					}
+				}
+
+				// Fall back to main X dimensions only for actual layers (not raw)
+				if (!format_determined) {
+					auto x_info = GetXMatrixInfo();
+					if (indptr_dims - 1 == x_info.n_obs) {
+						format = "CSR";
+					} else if (indptr_dims - 1 == x_info.n_var) {
+						format = "CSC";
+					}
 				}
 			}
 		}

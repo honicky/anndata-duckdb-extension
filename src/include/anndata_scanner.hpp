@@ -58,6 +58,19 @@ public:
 	                                         vector<LogicalType> &return_types, vector<string> &names);
 	static void VarpScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
+	// Table functions for raw section
+	static unique_ptr<FunctionData> RawXBind(ClientContext &context, TableFunctionBindInput &input,
+	                                         vector<LogicalType> &return_types, vector<string> &names);
+	static void RawXScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
+
+	static unique_ptr<FunctionData> RawVarBind(ClientContext &context, TableFunctionBindInput &input,
+	                                           vector<LogicalType> &return_types, vector<string> &names);
+	static void RawVarScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
+
+	static unique_ptr<FunctionData> RawVarmBind(ClientContext &context, TableFunctionBindInput &input,
+	                                            vector<LogicalType> &return_types, vector<string> &names);
+	static void RawVarmScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
+
 	// Table function for file info
 	static unique_ptr<FunctionData> InfoBind(ClientContext &context, TableFunctionBindInput &input,
 	                                         vector<LogicalType> &return_types, vector<string> &names);
@@ -106,6 +119,11 @@ struct AnndataBindData : public TableFunctionData {
 	bool is_varp_scan = false;
 	string pairwise_matrix_name;
 	idx_t nnz = 0; // number of non-zero elements
+
+	// For raw section scanning
+	bool is_raw_x_scan = false;
+	bool is_raw_var_scan = false;
+	bool is_raw_varm_scan = false;
 
 	// For info scanning
 	bool is_info_scan = false;

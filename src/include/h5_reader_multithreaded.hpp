@@ -125,6 +125,18 @@ public:
 	void ReadVarmMatrix(const std::string &matrix_name, idx_t row_start, idx_t row_count, idx_t col_idx,
 	                    Vector &result);
 
+	// Raw section support (/raw group in h5ad files)
+	bool HasRawData();
+	XMatrixInfo GetRawXMatrixInfo();
+	size_t GetRawVarCount();
+	std::vector<ColumnInfo> GetRawVarColumns();
+	std::vector<std::string> GetRawVarNames(const std::string &column_name = "_index");
+	void ReadRawVarColumn(const std::string &column_name, Vector &result, idx_t offset, idx_t count);
+	VarColumnDetection DetectRawVarColumns();
+	std::vector<MatrixInfo> GetRawVarmMatrices();
+	void ReadRawVarmMatrix(const std::string &matrix_name, idx_t row_start, idx_t row_count, idx_t col_idx,
+	                       Vector &result);
+
 	// Layer information structure
 	struct LayerInfo {
 		std::string name;
@@ -239,6 +251,19 @@ private:
 
 	// Get cached categories for a categorical column (reads from HDF5 only once)
 	const std::vector<std::string> &GetCachedCategories(const std::string &group_path);
+
+	// Path-parameterized helpers for var/varm (shared between main and raw)
+	size_t GetVarCountAtPath(const std::string &var_path, const std::string &x_path);
+	std::vector<ColumnInfo> GetVarColumnsAtPath(const std::string &var_path, const std::string &idx_col_name);
+	void ReadVarColumnAtPath(const std::string &var_path, const std::string &column_name, Vector &result, idx_t offset,
+	                         idx_t count);
+	std::string ReadVarColumnStringAtPath(const std::string &var_path, const std::string &column_name, idx_t index);
+	std::vector<std::string> GetVarNamesAtPath(const std::string &var_path, const std::string &column_name,
+	                                           size_t var_count);
+	VarColumnDetection DetectVarColumnsAtPath(const std::string &var_path, const std::string &x_path);
+	std::vector<MatrixInfo> GetVarmMatricesAtPath(const std::string &varm_path);
+	void ReadVarmMatrixAtPath(const std::string &varm_path, const std::string &matrix_name, idx_t row_start,
+	                          idx_t row_count, idx_t col_idx, Vector &result);
 
 	// Cache for categorical mappings
 	struct CategoricalCache {

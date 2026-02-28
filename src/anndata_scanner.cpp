@@ -847,6 +847,283 @@ void DummyScan(ClientContext &context, TableFunctionInput &data, DataChunk &outp
 	// Never called, bind function throws error
 }
 
+// ============================================================================
+// Raw section scanning implementations
+// ============================================================================
+
+unique_ptr<FunctionData> AnndataScanner::RawXBind(ClientContext &context, TableFunctionBindInput &input,
+                                                  vector<LogicalType> &return_types, vector<string> &names) {
+	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
+
+	// Check for optional var_name_column parameter
+	if (input.inputs.size() > 1) {
+		bind_data->var_name_column = input.inputs[1].GetValue<string>();
+	}
+
+	if (!IsAnndataFile(context, bind_data->file_path)) {
+		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
+	}
+
+	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
+	auto &reader = *reader_ptr;
+
+	if (!reader.HasRawData()) {
+		throw InvalidInputException("File does not contain a raw section: " + bind_data->file_path);
+	}
+
+	// Get raw matrix info
+	auto raw_x_info = reader.GetRawXMatrixInfo();
+	bind_data->n_obs = raw_x_info.n_obs;
+	bind_data->n_var = raw_x_info.n_var;
+	bind_data->is_raw_x_scan = true;
+
+	// Get variable names from /raw/var
+	bind_data->var_names = reader.GetRawVarNames(bind_data->var_name_column);
+
+	// Set up columns: obs_idx + one column per gene
+	names.push_back("obs_idx");
+	return_types.push_back(LogicalType::BIGINT);
+
+	// Add one column for each gene, handling duplicate names
+	std::unordered_set<std::string> used_names;
+	used_names.insert("obs_idx");
+
+	for (size_t i = 0; i < bind_data->n_var && i < bind_data->var_names.size(); i++) {
+		std::string base_name = bind_data->var_names[i];
+		std::string unique_name = base_name;
+
+		int suffix = 1;
+		while (used_names.count(unique_name) > 0) {
+			unique_name = base_name + "_" + std::to_string(suffix);
+			suffix++;
+		}
+
+		used_names.insert(unique_name);
+		names.push_back(unique_name);
+		return_types.push_back(LogicalType::DOUBLE);
+	}
+
+	bind_data->row_count = bind_data->n_obs;
+	bind_data->column_count = names.size();
+	bind_data->column_names = names;
+	bind_data->column_types = return_types;
+
+	return std::move(bind_data);
+}
+
+void AnndataScanner::RawXScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
+	auto &bind_data = data.bind_data->Cast<AnndataBindData>();
+	auto &gstate = data.global_state->Cast<AnndataGlobalState>();
+
+	if (!gstate.h5_reader) {
+		gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
+	}
+
+	idx_t remaining = bind_data.n_obs - gstate.current_row;
+	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, remaining);
+
+	if (count == 0) {
+		return;
+	}
+
+	// Use is_layer=true so ReadMatrixBatch checks object type at the given path
+	if (!gstate.column_ids.empty()) {
+		// Projection pushdown: only read requested columns
+		vector<idx_t> matrix_col_indices;
+
+		for (idx_t i = 0; i < gstate.column_ids.size(); i++) {
+			idx_t col_id = gstate.column_ids[i];
+			if (col_id == 0) {
+				auto &obs_idx_vec = output.data[i];
+				for (idx_t row = 0; row < count; row++) {
+					obs_idx_vec.SetValue(row, Value::BIGINT(gstate.current_row + row));
+				}
+			} else {
+				matrix_col_indices.push_back(col_id - 1);
+			}
+		}
+
+		if (!matrix_col_indices.empty()) {
+			vector<idx_t> output_col_mapping;
+			for (idx_t i = 0; i < gstate.column_ids.size(); i++) {
+				if (gstate.column_ids[i] != 0) {
+					output_col_mapping.push_back(i);
+				}
+			}
+
+			DataChunk matrix_output;
+			vector<LogicalType> matrix_types;
+			for (idx_t i = 0; i < matrix_col_indices.size(); i++) {
+				matrix_types.push_back(LogicalType::DOUBLE);
+			}
+			matrix_output.Initialize(Allocator::DefaultAllocator(), matrix_types);
+
+			gstate.h5_reader->ReadMatrixColumns("/raw/X", gstate.current_row, count, matrix_col_indices, matrix_output,
+			                                    true);
+
+			for (idx_t m = 0; m < matrix_col_indices.size(); m++) {
+				idx_t out_col = output_col_mapping[m];
+				auto &src = matrix_output.data[m];
+				auto &dst = output.data[out_col];
+				for (idx_t row = 0; row < count; row++) {
+					dst.SetValue(row, src.GetValue(row));
+				}
+			}
+		}
+
+		output.SetCardinality(count);
+	} else {
+		gstate.h5_reader->ReadMatrixBatch("/raw/X", gstate.current_row, count, 0, bind_data.n_var, output, true);
+	}
+
+	gstate.current_row += count;
+}
+
+unique_ptr<FunctionData> AnndataScanner::RawVarBind(ClientContext &context, TableFunctionBindInput &input,
+                                                    vector<LogicalType> &return_types, vector<string> &names) {
+	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
+	bind_data->is_raw_var_scan = true;
+
+	if (!IsAnndataFile(context, bind_data->file_path)) {
+		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
+	}
+
+	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
+	auto &reader = *reader_ptr;
+
+	if (!reader.HasRawData()) {
+		throw InvalidInputException("File does not contain a raw section: " + bind_data->file_path);
+	}
+
+	auto columns = reader.GetRawVarColumns();
+
+	vector<string> original_names;
+	for (const auto &col : columns) {
+		names.push_back(col.name);
+		original_names.push_back(col.original_name);
+		return_types.push_back(col.type);
+	}
+
+	bind_data->row_count = reader.GetRawVarCount();
+	bind_data->column_count = names.size();
+	bind_data->column_names = names;
+	bind_data->original_names = original_names;
+	bind_data->column_types = return_types;
+
+	return std::move(bind_data);
+}
+
+void AnndataScanner::RawVarScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
+	auto &bind_data = data.bind_data->Cast<AnndataBindData>();
+	auto &gstate = data.global_state->Cast<AnndataGlobalState>();
+
+	if (!gstate.h5_reader) {
+		gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
+	}
+
+	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
+	if (count == 0) {
+		return;
+	}
+
+	for (idx_t col = 0; col < bind_data.column_count; col++) {
+		auto &vec = output.data[col];
+		gstate.h5_reader->ReadRawVarColumn(bind_data.original_names[col], vec, gstate.current_row, count);
+	}
+
+	gstate.current_row += count;
+	output.SetCardinality(count);
+}
+
+unique_ptr<FunctionData> AnndataScanner::RawVarmBind(ClientContext &context, TableFunctionBindInput &input,
+                                                     vector<LogicalType> &return_types, vector<string> &names) {
+	if (input.inputs.size() < 2) {
+		throw InvalidInputException("anndata_scan_raw_varm requires file path and matrix name");
+	}
+
+	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
+	bind_data->obsm_varm_matrix_name = input.inputs[1].GetValue<string>();
+	bind_data->is_raw_varm_scan = true;
+
+	if (!IsAnndataFile(context, bind_data->file_path)) {
+		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
+	}
+
+	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
+	auto &reader = *reader_ptr;
+
+	if (!reader.HasRawData()) {
+		throw InvalidInputException("File does not contain a raw section: " + bind_data->file_path);
+	}
+
+	auto matrices = reader.GetRawVarmMatrices();
+	bool found = false;
+
+	for (const auto &matrix : matrices) {
+		if (matrix.name == bind_data->obsm_varm_matrix_name) {
+			bind_data->matrix_rows = matrix.rows;
+			bind_data->matrix_cols = matrix.cols;
+			bind_data->row_count = matrix.rows;
+
+			names.push_back("var_idx");
+			return_types.push_back(LogicalType::BIGINT);
+
+			for (idx_t i = 0; i < matrix.cols; i++) {
+				names.push_back(bind_data->obsm_varm_matrix_name + "_" + to_string(i));
+				return_types.push_back(matrix.dtype);
+			}
+
+			bind_data->column_count = names.size();
+			bind_data->column_names = names;
+			bind_data->column_types = return_types;
+
+			found = true;
+			break;
+		}
+	}
+
+	if (!found) {
+		throw InvalidInputException("raw varm matrix '%s' not found in file", bind_data->obsm_varm_matrix_name.c_str());
+	}
+
+	return std::move(bind_data);
+}
+
+void AnndataScanner::RawVarmScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
+	auto &bind_data = data.bind_data->Cast<AnndataBindData>();
+	auto &gstate = data.global_state->Cast<AnndataGlobalState>();
+
+	if (!gstate.h5_reader) {
+		gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
+	}
+
+	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
+	if (count == 0) {
+		return;
+	}
+
+	// First column is var_idx
+	auto &var_idx_vec = output.data[0];
+	for (idx_t i = 0; i < count; i++) {
+		var_idx_vec.SetValue(i, Value::BIGINT(gstate.current_row + i));
+	}
+
+	// Read each column of the matrix
+	for (idx_t col = 0; col < bind_data.matrix_cols; col++) {
+		auto &vec = output.data[col + 1];
+		gstate.h5_reader->ReadRawVarmMatrix(bind_data.obsm_varm_matrix_name, gstate.current_row, count, col, vec);
+	}
+
+	gstate.current_row += count;
+	output.SetCardinality(count);
+}
+
+// Error handling functions for raw varm
+unique_ptr<FunctionData> RawVarmBindError(ClientContext &context, TableFunctionBindInput &input,
+                                          vector<LogicalType> &return_types, vector<string> &names) {
+	throw InvalidInputException("anndata_scan_raw_varm requires file path and matrix name");
+}
+
 // Table function implementations for uns (unstructured) data
 unique_ptr<FunctionData> AnndataScanner::UnsBind(ClientContext &context, TableFunctionBindInput &input,
                                                  vector<LogicalType> &return_types, vector<string> &names) {
@@ -1431,6 +1708,39 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 		info_rows.emplace_back("var_name_column", bind_data.var_name_column);
 		info_rows.emplace_back("var_id_column", bind_data.var_id_column);
 
+		// Raw section info
+		if (gstate.h5_reader->HasRawData()) {
+			info_rows.emplace_back("raw", "true");
+			try {
+				info_rows.emplace_back("raw_n_vars", to_string(gstate.h5_reader->GetRawVarCount()));
+			} catch (...) {
+			}
+			try {
+				auto raw_x_info = gstate.h5_reader->GetRawXMatrixInfo();
+				info_rows.emplace_back("raw_x_shape",
+				                       to_string(raw_x_info.n_obs) + " x " + to_string(raw_x_info.n_var));
+				info_rows.emplace_back("raw_x_sparse", raw_x_info.is_sparse ? "true" : "false");
+				if (raw_x_info.is_sparse) {
+					info_rows.emplace_back("raw_x_format", raw_x_info.sparse_format);
+				}
+			} catch (...) {
+			}
+			try {
+				auto raw_varm = gstate.h5_reader->GetRawVarmMatrices();
+				if (!raw_varm.empty()) {
+					string raw_varm_list;
+					for (size_t i = 0; i < raw_varm.size(); ++i) {
+						if (i > 0) {
+							raw_varm_list += ", ";
+						}
+						raw_varm_list += raw_varm[i].name;
+					}
+					info_rows.emplace_back("raw_varm_keys", raw_varm_list);
+				}
+			} catch (...) {
+			}
+		}
+
 		// Output rows
 		for (const auto &row : info_rows) {
 			if (result_idx >= STANDARD_VECTOR_SIZE) {
@@ -1557,6 +1867,40 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 	    AnndataScanner::InfoBind, AnndataInitGlobal, AnndataInitLocal);
 	info_func_with_params.name = "anndata_info";
 	loader.RegisterFunction(info_func_with_params);
+
+	// Register anndata_scan_raw_x function with projection pushdown
+	TableFunction raw_x_func("anndata_scan_raw_x", {LogicalType::VARCHAR}, AnndataScanner::RawXScan,
+	                         AnndataScanner::RawXBind, AnndataInitGlobalWithProjection, AnndataInitLocal);
+	raw_x_func.name = "anndata_scan_raw_x";
+	raw_x_func.projection_pushdown = true;
+	loader.RegisterFunction(raw_x_func);
+
+	// Register anndata_scan_raw_x with optional var_name_column parameter
+	TableFunction raw_x_func_param("anndata_scan_raw_x", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                               AnndataScanner::RawXScan, AnndataScanner::RawXBind, AnndataInitGlobalWithProjection,
+	                               AnndataInitLocal);
+	raw_x_func_param.name = "anndata_scan_raw_x";
+	raw_x_func_param.projection_pushdown = true;
+	loader.RegisterFunction(raw_x_func_param);
+
+	// Register anndata_scan_raw_var function
+	TableFunction raw_var_func("anndata_scan_raw_var", {LogicalType::VARCHAR}, AnndataScanner::RawVarScan,
+	                           AnndataScanner::RawVarBind, AnndataInitGlobal, AnndataInitLocal);
+	raw_var_func.name = "anndata_scan_raw_var";
+	loader.RegisterFunction(raw_var_func);
+
+	// Register anndata_scan_raw_varm function (2 parameters)
+	TableFunction raw_varm_func("anndata_scan_raw_varm", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                            AnndataScanner::RawVarmScan, AnndataScanner::RawVarmBind, AnndataInitGlobal,
+	                            AnndataInitLocal);
+	raw_varm_func.name = "anndata_scan_raw_varm";
+	loader.RegisterFunction(raw_varm_func);
+
+	// Register anndata_scan_raw_varm function (1 parameter - error message)
+	TableFunction raw_varm_func_error("anndata_scan_raw_varm", {LogicalType::VARCHAR}, DummyScan, RawVarmBindError,
+	                                  AnndataInitGlobal, AnndataInitLocal);
+	raw_varm_func_error.name = "anndata_scan_raw_varm";
+	loader.RegisterFunction(raw_varm_func_error);
 }
 
 } // namespace duckdb

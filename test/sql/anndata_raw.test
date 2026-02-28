@@ -1,0 +1,161 @@
+# name: test/sql/anndata_raw.test
+# description: Test raw section reading functionality
+# group: [sql]
+
+require anndata
+
+statement ok
+LOAD 'build/release/extension/anndata/anndata.duckdb_extension';
+
+# Test raw info from anndata_info
+query I
+SELECT value FROM anndata_info('test/data/test_raw.h5ad') WHERE property = 'raw';
+----
+true
+
+query I
+SELECT value FROM anndata_info('test/data/test_raw.h5ad') WHERE property = 'raw_n_vars';
+----
+12
+
+query I
+SELECT value FROM anndata_info('test/data/test_raw.h5ad') WHERE property = 'raw_x_sparse';
+----
+true
+
+query I
+SELECT value FROM anndata_info('test/data/test_raw.h5ad') WHERE property = 'raw_x_shape';
+----
+10 x 12
+
+query I
+SELECT value FROM anndata_info('test/data/test_raw.h5ad') WHERE property = 'raw_varm_keys';
+----
+PCs
+
+# Test raw_var table function - row count
+query I
+SELECT COUNT(*) FROM anndata_scan_raw_var('test/data/test_raw.h5ad');
+----
+12
+
+# Test raw_var has more genes than main var
+query II
+SELECT
+    (SELECT COUNT(*) FROM anndata_scan_var('test/data/test_raw.h5ad')) as main_var_count,
+    (SELECT COUNT(*) FROM anndata_scan_raw_var('test/data/test_raw.h5ad')) as raw_var_count;
+----
+8	12
+
+# Test raw_var column values
+query III
+SELECT _index, gene_id, is_expressed FROM anndata_scan_raw_var('test/data/test_raw.h5ad') LIMIT 3;
+----
+raw_gene_0	ENSG00000100	True
+raw_gene_1	ENSG00000101	True
+raw_gene_2	ENSG00000102	True
+
+# Test raw_X table function - row count (should equal n_obs)
+query I
+SELECT COUNT(*) FROM anndata_scan_raw_x('test/data/test_raw.h5ad');
+----
+10
+
+# Test raw_X uses raw gene names as columns (not main gene names)
+query III
+SELECT obs_idx, raw_gene_0, raw_gene_1 FROM anndata_scan_raw_x('test/data/test_raw.h5ad') WHERE obs_idx = 0;
+----
+0	6	8
+
+# Test raw_X data values for first 3 rows
+query IIII
+SELECT obs_idx, raw_gene_0, raw_gene_1, raw_gene_2 FROM anndata_scan_raw_x('test/data/test_raw.h5ad') WHERE obs_idx < 3 ORDER BY obs_idx;
+----
+0	6	8	0
+1	0	2	0
+2	14	9	12
+
+# Test raw_X with custom var_name_column
+query III
+SELECT obs_idx, raw_gene_0, raw_gene_11 FROM anndata_scan_raw_x('test/data/test_raw.h5ad', '_index') WHERE obs_idx = 0;
+----
+0	6	2
+
+# Test raw_X projection pushdown - select specific columns
+query II
+SELECT obs_idx, raw_gene_5 FROM anndata_scan_raw_x('test/data/test_raw.h5ad') WHERE obs_idx < 3 ORDER BY obs_idx;
+----
+0	0
+1	2
+2	0
+
+# Test raw_X aggregation
+query I
+SELECT SUM(raw_gene_0) FROM anndata_scan_raw_x('test/data/test_raw.h5ad');
+----
+51
+
+# Test raw_varm table function
+query IRRR
+SELECT var_idx, ROUND(PCs_0, 2), ROUND(PCs_1, 2), ROUND(PCs_2, 2) FROM anndata_scan_raw_varm('test/data/test_raw.h5ad', 'PCs') WHERE var_idx < 3 ORDER BY var_idx;
+----
+0	0.84	0.19	0.41
+1	0.7	0.14	0.13
+2	0.97	0.71	0.04
+
+# Test raw_varm row count
+query I
+SELECT COUNT(*) FROM anndata_scan_raw_varm('test/data/test_raw.h5ad', 'PCs');
+----
+12
+
+# Test ATTACH interface with raw tables
+statement ok
+ATTACH 'test/data/test_raw.h5ad' AS raw_test (TYPE ANNDATA);
+
+query I
+SELECT COUNT(*) FROM raw_test.raw_X;
+----
+10
+
+query I
+SELECT COUNT(*) FROM raw_test.raw_var;
+----
+12
+
+query III
+SELECT obs_idx, raw_gene_0, raw_gene_1 FROM raw_test.raw_X WHERE obs_idx = 0;
+----
+0	6	8
+
+query III
+SELECT _index, gene_id, is_expressed FROM raw_test.raw_var LIMIT 3;
+----
+raw_gene_0	ENSG00000100	True
+raw_gene_1	ENSG00000101	True
+raw_gene_2	ENSG00000102	True
+
+query I
+SELECT COUNT(*) FROM raw_test.raw_varm_PCs;
+----
+12
+
+statement ok
+DETACH raw_test;
+
+# Test file without raw section doesn't expose raw tables
+statement error
+SELECT * FROM anndata_scan_raw_x('test/data/test_small.h5ad');
+----
+does not contain a raw section
+
+statement error
+SELECT * FROM anndata_scan_raw_var('test/data/test_small.h5ad');
+----
+does not contain a raw section
+
+# Test raw_varm error for non-existent matrix
+statement error
+SELECT * FROM anndata_scan_raw_varm('test/data/test_raw.h5ad', 'non_existent');
+----
+not found

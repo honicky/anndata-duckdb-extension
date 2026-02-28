@@ -57,6 +57,14 @@ string AnndataDefaultGenerator::GenerateViewSQL(const TableViewInfo &info) const
 	} else if (info.table_type == "info") {
 		return StringUtil::Format("SELECT * FROM anndata_info(%s, %s, %s)", SQLString(file_path),
 		                          SQLString(info.var_name_column), SQLString(info.var_id_column));
+	} else if (info.table_type == "raw_X") {
+		return StringUtil::Format("SELECT * FROM anndata_scan_raw_x(%s, %s)", SQLString(file_path),
+		                          SQLString(info.var_name_column));
+	} else if (info.table_type == "raw_var") {
+		return StringUtil::Format("SELECT * FROM anndata_scan_raw_var(%s)", SQLString(file_path));
+	} else if (info.table_type == "raw_varm") {
+		return StringUtil::Format("SELECT * FROM anndata_scan_raw_varm(%s, %s)", SQLString(file_path),
+		                          SQLString(info.param));
 	}
 
 	throw InternalException("Unknown table type: " + info.table_type);
@@ -262,6 +270,50 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const strin
 		}
 	} catch (...) {
 		// uns may not exist
+	}
+
+	// Check for raw section
+	try {
+		if (reader->HasRawData()) {
+			// Auto-detect raw var column independently
+			string raw_var_name_column = "_index";
+			try {
+				auto raw_detection = reader->DetectRawVarColumns();
+				if (!raw_detection.name_column.empty()) {
+					raw_var_name_column = raw_detection.name_column;
+				}
+			} catch (...) {
+			}
+
+			// Add raw_X table
+			try {
+				auto raw_x_info = reader->GetRawXMatrixInfo();
+				if (raw_x_info.n_obs > 0 && raw_x_info.n_var > 0) {
+					tables.push_back({"raw_X", "raw_X", "", raw_var_name_column, var_id_column});
+				}
+			} catch (...) {
+			}
+
+			// Add raw_var table
+			try {
+				auto raw_var_columns = reader->GetRawVarColumns();
+				if (!raw_var_columns.empty()) {
+					tables.push_back({"raw_var", "raw_var", "", raw_var_name_column, var_id_column});
+				}
+			} catch (...) {
+			}
+
+			// Add raw_varm_<name> tables
+			try {
+				auto raw_varm_matrices = reader->GetRawVarmMatrices();
+				for (const auto &m : raw_varm_matrices) {
+					tables.push_back({"raw_varm_" + m.name, "raw_varm", m.name, raw_var_name_column, var_id_column});
+				}
+			} catch (...) {
+			}
+		}
+	} catch (...) {
+		// raw section may not exist
 	}
 
 	return tables;
