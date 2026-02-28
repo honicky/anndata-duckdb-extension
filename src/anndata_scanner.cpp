@@ -2082,76 +2082,219 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 	if (gstate.current_row == 0) {
 		vector<pair<string, string>> info_rows;
 
+		bool has_obs = gstate.h5_reader->HasObs();
+		bool has_var = gstate.h5_reader->HasVar();
+		bool has_X = gstate.h5_reader->HasX();
+
+		// Declare at outer scope so groups/tables blocks can reference them
+		H5ReaderMultithreaded::XMatrixInfo x_info;
+		vector<H5ReaderMultithreaded::MatrixInfo> obsm_matrices;
+		vector<H5ReaderMultithreaded::MatrixInfo> varm_matrices;
+		vector<H5ReaderMultithreaded::LayerInfo> layers;
+		vector<string> obsp_keys;
+		vector<string> varp_keys;
+
 		// Basic file info
 		info_rows.emplace_back("file_path", bind_data.file_path);
-		info_rows.emplace_back("n_obs", to_string(gstate.h5_reader->GetObsCount()));
-		info_rows.emplace_back("n_vars", to_string(gstate.h5_reader->GetVarCount()));
+		info_rows.emplace_back("n_obs", has_obs ? to_string(gstate.h5_reader->GetObsCount()) : "N/A");
+		info_rows.emplace_back("n_vars", has_var ? to_string(gstate.h5_reader->GetVarCount()) : "N/A");
 
 		// X matrix info
-		auto x_info = gstate.h5_reader->GetXMatrixInfo();
-		info_rows.emplace_back("x_shape", to_string(x_info.n_obs) + " x " + to_string(x_info.n_var));
-		info_rows.emplace_back("x_sparse", x_info.is_sparse ? "true" : "false");
-		if (x_info.is_sparse) {
-			info_rows.emplace_back("x_format", x_info.sparse_format);
+		if (has_X) {
+			try {
+				x_info = gstate.h5_reader->GetXMatrixInfo();
+				info_rows.emplace_back("x_shape", to_string(x_info.n_obs) + " x " + to_string(x_info.n_var));
+				info_rows.emplace_back("x_sparse", x_info.is_sparse ? "true" : "false");
+				if (x_info.is_sparse) {
+					info_rows.emplace_back("x_format", x_info.sparse_format);
+				}
+			} catch (...) {
+			}
 		}
 
 		// Count obsm matrices
-		auto obsm_matrices = gstate.h5_reader->GetObsmMatrices();
-		if (!obsm_matrices.empty()) {
-			string obsm_list;
-			for (size_t i = 0; i < obsm_matrices.size(); ++i) {
-				if (i > 0)
-					obsm_list += ", ";
-				obsm_list += obsm_matrices[i].name;
+		if (has_obs) {
+			try {
+				obsm_matrices = gstate.h5_reader->GetObsmMatrices();
+				if (!obsm_matrices.empty()) {
+					string obsm_list;
+					for (size_t i = 0; i < obsm_matrices.size(); ++i) {
+						if (i > 0) {
+							obsm_list += ", ";
+						}
+						obsm_list += obsm_matrices[i].name;
+					}
+					info_rows.emplace_back("obsm_keys", obsm_list);
+				}
+			} catch (...) {
 			}
-			info_rows.emplace_back("obsm_keys", obsm_list);
 		}
 
 		// Count varm matrices
-		auto varm_matrices = gstate.h5_reader->GetVarmMatrices();
-		if (!varm_matrices.empty()) {
-			string varm_list;
-			for (size_t i = 0; i < varm_matrices.size(); ++i) {
-				if (i > 0)
-					varm_list += ", ";
-				varm_list += varm_matrices[i].name;
+		if (has_var) {
+			try {
+				varm_matrices = gstate.h5_reader->GetVarmMatrices();
+				if (!varm_matrices.empty()) {
+					string varm_list;
+					for (size_t i = 0; i < varm_matrices.size(); ++i) {
+						if (i > 0) {
+							varm_list += ", ";
+						}
+						varm_list += varm_matrices[i].name;
+					}
+					info_rows.emplace_back("varm_keys", varm_list);
+				}
+			} catch (...) {
 			}
-			info_rows.emplace_back("varm_keys", varm_list);
 		}
 
 		// Count layers
-		auto layers = gstate.h5_reader->GetLayers();
-		if (!layers.empty()) {
-			string layer_list;
-			for (size_t i = 0; i < layers.size(); ++i) {
-				if (i > 0)
-					layer_list += ", ";
-				layer_list += layers[i].name;
+		if (has_obs && has_var) {
+			try {
+				layers = gstate.h5_reader->GetLayers();
+				if (!layers.empty()) {
+					string layer_list;
+					for (size_t i = 0; i < layers.size(); ++i) {
+						if (i > 0) {
+							layer_list += ", ";
+						}
+						layer_list += layers[i].name;
+					}
+					info_rows.emplace_back("layers", layer_list);
+				}
+			} catch (...) {
 			}
-			info_rows.emplace_back("layers", layer_list);
 		}
 
 		// Count obsp/varp
-		auto obsp_keys = gstate.h5_reader->GetObspKeys();
-		if (!obsp_keys.empty()) {
-			string obsp_list;
-			for (size_t i = 0; i < obsp_keys.size(); ++i) {
-				if (i > 0)
-					obsp_list += ", ";
-				obsp_list += obsp_keys[i];
+		if (has_obs) {
+			try {
+				obsp_keys = gstate.h5_reader->GetObspKeys();
+				if (!obsp_keys.empty()) {
+					string obsp_list;
+					for (size_t i = 0; i < obsp_keys.size(); ++i) {
+						if (i > 0) {
+							obsp_list += ", ";
+						}
+						obsp_list += obsp_keys[i];
+					}
+					info_rows.emplace_back("obsp_keys", obsp_list);
+				}
+			} catch (...) {
 			}
-			info_rows.emplace_back("obsp_keys", obsp_list);
 		}
 
-		auto varp_keys = gstate.h5_reader->GetVarpKeys();
-		if (!varp_keys.empty()) {
-			string varp_list;
-			for (size_t i = 0; i < varp_keys.size(); ++i) {
-				if (i > 0)
-					varp_list += ", ";
-				varp_list += varp_keys[i];
+		if (has_var) {
+			try {
+				varp_keys = gstate.h5_reader->GetVarpKeys();
+				if (!varp_keys.empty()) {
+					string varp_list;
+					for (size_t i = 0; i < varp_keys.size(); ++i) {
+						if (i > 0) {
+							varp_list += ", ";
+						}
+						varp_list += varp_keys[i];
+					}
+					info_rows.emplace_back("varp_keys", varp_list);
+				}
+			} catch (...) {
 			}
-			info_rows.emplace_back("varp_keys", varp_list);
+		}
+
+		// Check for uns data
+		auto uns_keys = gstate.h5_reader->GetUnsKeys();
+
+		// Build list of available groups (HDF5 top-level groups present in the file)
+		{
+			string groups_list;
+			// obs and var are always present in valid AnnData
+			groups_list = "obs, var";
+			if (x_info.n_obs > 0 && x_info.n_var > 0) {
+				groups_list += ", X";
+			}
+			if (!obsm_matrices.empty()) {
+				groups_list += ", obsm";
+			}
+			if (!varm_matrices.empty()) {
+				groups_list += ", varm";
+			}
+			if (!layers.empty()) {
+				groups_list += ", layers";
+			}
+			if (!obsp_keys.empty()) {
+				groups_list += ", obsp";
+			}
+			if (!varp_keys.empty()) {
+				groups_list += ", varp";
+			}
+			if (!uns_keys.empty()) {
+				groups_list += ", uns";
+			}
+			info_rows.emplace_back("groups", groups_list);
+		}
+
+		// Build list of available tables (SQL-accessible views)
+		{
+			string tables_list = "obs, var, info";
+			if (x_info.n_obs > 0 && x_info.n_var > 0) {
+				tables_list += ", X";
+			}
+			for (const auto &m : obsm_matrices) {
+				tables_list += ", obsm_" + m.name;
+			}
+			for (const auto &m : varm_matrices) {
+				tables_list += ", varm_" + m.name;
+			}
+			for (const auto &l : layers) {
+				tables_list += ", layers_" + l.name;
+			}
+			for (const auto &k : obsp_keys) {
+				tables_list += ", obsp_" + k;
+			}
+			for (const auto &k : varp_keys) {
+				tables_list += ", varp_" + k;
+			}
+			if (!uns_keys.empty()) {
+				tables_list += ", uns";
+			}
+			info_rows.emplace_back("tables", tables_list);
+		}
+
+		// Var columns: read from bind data (same source as anndata_scan_x)
+		info_rows.emplace_back("var_name_column", bind_data.var_name_column);
+		info_rows.emplace_back("var_id_column", bind_data.var_id_column);
+
+		// Raw section info
+		if (gstate.h5_reader->HasRawData()) {
+			info_rows.emplace_back("raw", "true");
+			try {
+				info_rows.emplace_back("raw_n_vars", to_string(gstate.h5_reader->GetRawVarCount()));
+			} catch (...) {
+			}
+			try {
+				auto raw_x_info = gstate.h5_reader->GetRawXMatrixInfo();
+				info_rows.emplace_back("raw_x_shape",
+				                       to_string(raw_x_info.n_obs) + " x " + to_string(raw_x_info.n_var));
+				info_rows.emplace_back("raw_x_sparse", raw_x_info.is_sparse ? "true" : "false");
+				if (raw_x_info.is_sparse) {
+					info_rows.emplace_back("raw_x_format", raw_x_info.sparse_format);
+				}
+			} catch (...) {
+			}
+			try {
+				auto raw_varm = gstate.h5_reader->GetRawVarmMatrices();
+				if (!raw_varm.empty()) {
+					string raw_varm_list;
+					for (size_t i = 0; i < raw_varm.size(); ++i) {
+						if (i > 0) {
+							raw_varm_list += ", ";
+						}
+						raw_varm_list += raw_varm[i].name;
+					}
+					info_rows.emplace_back("raw_varm_keys", raw_varm_list);
+				}
+			} catch (...) {
+			}
 		}
 
 		// Output rows
