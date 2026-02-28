@@ -998,8 +998,12 @@ void AnndataScanner::ObsmScan(ClientContext &context, TableFunctionInput &data, 
 
 	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, rows_remaining);
 
-	// Get actual columns in this file
-	idx_t file_cols = static_cast<idx_t>(bind_data.harmonized_schema.file_column_mappings[gstate.current_file_idx][0]);
+	// Get actual columns in this file (with bounds checking)
+	idx_t file_cols = 0;
+	if (gstate.current_file_idx < bind_data.harmonized_schema.file_column_mappings.size() &&
+	    !bind_data.harmonized_schema.file_column_mappings[gstate.current_file_idx].empty()) {
+		file_cols = static_cast<idx_t>(bind_data.harmonized_schema.file_column_mappings[gstate.current_file_idx][0]);
+	}
 
 	// Column 0: _file_name
 	auto &file_name_vec = output.data[0];
@@ -1180,7 +1184,13 @@ void AnndataScanner::VarmScan(ClientContext &context, TableFunctionInput &data, 
 	}
 
 	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, rows_remaining);
-	idx_t file_cols = static_cast<idx_t>(bind_data.harmonized_schema.file_column_mappings[gstate.current_file_idx][0]);
+
+	// Get actual columns in this file (with bounds checking)
+	idx_t file_cols = 0;
+	if (gstate.current_file_idx < bind_data.harmonized_schema.file_column_mappings.size() &&
+	    !bind_data.harmonized_schema.file_column_mappings[gstate.current_file_idx].empty()) {
+		file_cols = static_cast<idx_t>(bind_data.harmonized_schema.file_column_mappings[gstate.current_file_idx][0]);
+	}
 
 	auto &file_name_vec = output.data[0];
 	for (idx_t i = 0; i < count; i++) {
