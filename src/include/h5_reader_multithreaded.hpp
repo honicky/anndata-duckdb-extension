@@ -63,8 +63,8 @@ public:
 
 	// Read X matrix
 	struct XMatrixInfo {
-		size_t n_obs;
-		size_t n_var;
+		size_t n_obs = 0;
+		size_t n_var = 0;
 		bool is_sparse = false;
 		std::string sparse_format; // "csr" or "csc" if sparse
 		LogicalType dtype = LogicalType::DOUBLE;

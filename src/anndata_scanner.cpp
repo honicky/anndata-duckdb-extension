@@ -1253,6 +1253,14 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 		bool has_var = gstate.h5_reader->HasVar();
 		bool has_X = gstate.h5_reader->HasX();
 
+		// Declare at outer scope so groups/tables blocks can reference them
+		H5ReaderMultithreaded::XMatrixInfo x_info;
+		vector<H5ReaderMultithreaded::MatrixInfo> obsm_matrices;
+		vector<H5ReaderMultithreaded::MatrixInfo> varm_matrices;
+		vector<H5ReaderMultithreaded::LayerInfo> layers;
+		vector<string> obsp_keys;
+		vector<string> varp_keys;
+
 		// Basic file info
 		info_rows.emplace_back("file_path", bind_data.file_path);
 		info_rows.emplace_back("n_obs", has_obs ? to_string(gstate.h5_reader->GetObsCount()) : "N/A");
@@ -1261,7 +1269,7 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 		// X matrix info
 		if (has_X) {
 			try {
-				auto x_info = gstate.h5_reader->GetXMatrixInfo();
+				x_info = gstate.h5_reader->GetXMatrixInfo();
 				info_rows.emplace_back("x_shape", to_string(x_info.n_obs) + " x " + to_string(x_info.n_var));
 				info_rows.emplace_back("x_sparse", x_info.is_sparse ? "true" : "false");
 				if (x_info.is_sparse) {
@@ -1274,7 +1282,7 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 		// Count obsm matrices
 		if (has_obs) {
 			try {
-				auto obsm_matrices = gstate.h5_reader->GetObsmMatrices();
+				obsm_matrices = gstate.h5_reader->GetObsmMatrices();
 				if (!obsm_matrices.empty()) {
 					string obsm_list;
 					for (size_t i = 0; i < obsm_matrices.size(); ++i) {
@@ -1292,7 +1300,7 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 		// Count varm matrices
 		if (has_var) {
 			try {
-				auto varm_matrices = gstate.h5_reader->GetVarmMatrices();
+				varm_matrices = gstate.h5_reader->GetVarmMatrices();
 				if (!varm_matrices.empty()) {
 					string varm_list;
 					for (size_t i = 0; i < varm_matrices.size(); ++i) {
@@ -1310,7 +1318,7 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 		// Count layers
 		if (has_obs && has_var) {
 			try {
-				auto layers = gstate.h5_reader->GetLayers();
+				layers = gstate.h5_reader->GetLayers();
 				if (!layers.empty()) {
 					string layer_list;
 					for (size_t i = 0; i < layers.size(); ++i) {
@@ -1328,7 +1336,7 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 		// Count obsp/varp
 		if (has_obs) {
 			try {
-				auto obsp_keys = gstate.h5_reader->GetObspKeys();
+				obsp_keys = gstate.h5_reader->GetObspKeys();
 				if (!obsp_keys.empty()) {
 					string obsp_list;
 					for (size_t i = 0; i < obsp_keys.size(); ++i) {
@@ -1345,7 +1353,7 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 
 		if (has_var) {
 			try {
-				auto varp_keys = gstate.h5_reader->GetVarpKeys();
+				varp_keys = gstate.h5_reader->GetVarpKeys();
 				if (!varp_keys.empty()) {
 					string varp_list;
 					for (size_t i = 0; i < varp_keys.size(); ++i) {
