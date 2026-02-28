@@ -26,8 +26,14 @@ public:
 	H5ReaderMultithreaded(H5ReaderMultithreaded &&) = default;
 	H5ReaderMultithreaded &operator=(H5ReaderMultithreaded &&) = default;
 
-	// Check if file is valid AnnData format
+	// Check if file is valid AnnData format (at least obs or var must exist)
 	bool IsValidAnnData();
+
+	// Check which core components are present
+	bool HasObs();
+	bool HasVar();
+	bool HasX();
+	bool HasGroup(const std::string &group_name);
 
 	// Get dimensions
 	size_t GetObsCount();

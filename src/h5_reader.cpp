@@ -86,8 +86,24 @@ H5Reader::~H5Reader() {
 }
 
 bool H5Reader::IsValidAnnData() {
-	// Check for required groups
-	return IsGroupPresent("/obs") && IsGroupPresent("/var") && (IsGroupPresent("/X") || IsDatasetPresent("/", "X"));
+	// At least obs or var must exist for a valid AnnData file
+	return HasObs() || HasVar();
+}
+
+bool H5Reader::HasObs() {
+	return IsGroupPresent("/obs");
+}
+
+bool H5Reader::HasVar() {
+	return IsGroupPresent("/var");
+}
+
+bool H5Reader::HasX() {
+	return IsGroupPresent("/X") || IsDatasetPresent("/", "X");
+}
+
+bool H5Reader::HasGroup(const std::string &group_name) {
+	return IsGroupPresent(group_name);
 }
 
 size_t H5Reader::GetObsCount() {

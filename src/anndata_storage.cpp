@@ -129,76 +129,132 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const strin
 
 	if (!reader->IsValidAnnData()) {
 		throw IOException("File is not a valid AnnData (.h5ad) file. "
-		                  "AnnData files must contain /obs, /var, and /X groups: " +
+		                  "AnnData files must contain at least /obs or /var: " +
 		                  file_path);
 	}
 
-	// Always add obs, var, and info
-	tables.push_back({"obs", "obs", "", var_name_column, var_id_column});
-	tables.push_back({"var", "var", "", var_name_column, var_id_column});
+	bool has_obs = reader->HasObs();
+	bool has_var = reader->HasVar();
+	bool has_X = reader->HasX();
+
+	// Warn only about tables that exist in the file but can't be registered due to missing dependencies
+	if (!has_obs && has_X) {
+		fprintf(stderr, "Warning: AnnData file '%s' has /X but no /obs group. X table will not be available.\n",
+		        file_path.c_str());
+	}
+	if (!has_var && has_X) {
+		fprintf(stderr, "Warning: AnnData file '%s' has /X but no /var group. X table will not be available.\n",
+		        file_path.c_str());
+	}
+	if (!has_obs && reader->HasGroup("/obsm")) {
+		fprintf(stderr, "Warning: AnnData file '%s' has /obsm but no /obs group. obsm tables will not be available.\n",
+		        file_path.c_str());
+	}
+	if (!has_obs && reader->HasGroup("/obsp")) {
+		fprintf(stderr, "Warning: AnnData file '%s' has /obsp but no /obs group. obsp tables will not be available.\n",
+		        file_path.c_str());
+	}
+	if (!has_var && reader->HasGroup("/varm")) {
+		fprintf(stderr, "Warning: AnnData file '%s' has /varm but no /var group. varm tables will not be available.\n",
+		        file_path.c_str());
+	}
+	if (!has_var && reader->HasGroup("/varp")) {
+		fprintf(stderr, "Warning: AnnData file '%s' has /varp but no /var group. varp tables will not be available.\n",
+		        file_path.c_str());
+	}
+	if ((!has_obs || !has_var) && reader->HasGroup("/layers")) {
+		fprintf(
+		    stderr,
+		    "Warning: AnnData file '%s' has /layers but missing /obs or /var. layers tables will not be available.\n",
+		    file_path.c_str());
+	}
+
+	// Always add info table
 	tables.push_back({"info", "info", "", var_name_column, var_id_column});
 
-	// Check for X matrix
-	try {
-		auto x_info = reader->GetXMatrixInfo();
-		if (x_info.n_obs > 0 && x_info.n_var > 0) {
-			tables.push_back({"X", "X", "", var_name_column, var_id_column});
-		}
-	} catch (...) {
-		// X matrix may not exist, that's ok
+	// Add obs table only if /obs exists
+	if (has_obs) {
+		tables.push_back({"obs", "obs", "", var_name_column, var_id_column});
 	}
 
-	// Get obsm matrices
-	try {
-		auto obsm_matrices = reader->GetObsmMatrices();
-		for (const auto &m : obsm_matrices) {
-			tables.push_back({"obsm_" + m.name, "obsm", m.name, var_name_column, var_id_column});
-		}
-	} catch (...) {
-		// obsm may not exist
+	// Add var table only if /var exists
+	if (has_var) {
+		tables.push_back({"var", "var", "", var_name_column, var_id_column});
 	}
 
-	// Get varm matrices
-	try {
-		auto varm_matrices = reader->GetVarmMatrices();
-		for (const auto &m : varm_matrices) {
-			tables.push_back({"varm_" + m.name, "varm", m.name, var_name_column, var_id_column});
+	// X matrix requires both obs and var
+	if (has_obs && has_var && has_X) {
+		try {
+			auto x_info = reader->GetXMatrixInfo();
+			if (x_info.n_obs > 0 && x_info.n_var > 0) {
+				tables.push_back({"X", "X", "", var_name_column, var_id_column});
+			}
+		} catch (...) {
+			// X matrix info not readable
 		}
-	} catch (...) {
-		// varm may not exist
 	}
 
-	// Get layers
-	try {
-		auto layers = reader->GetLayers();
-		for (const auto &l : layers) {
-			tables.push_back({"layers_" + l.name, "layers", l.name, var_name_column, var_id_column});
+	// obsm requires obs
+	if (has_obs) {
+		try {
+			auto obsm_matrices = reader->GetObsmMatrices();
+			for (const auto &m : obsm_matrices) {
+				tables.push_back({"obsm_" + m.name, "obsm", m.name, var_name_column, var_id_column});
+			}
+		} catch (...) {
+			// obsm may not exist
 		}
-	} catch (...) {
-		// layers may not exist
 	}
 
-	// Get obsp matrices
-	try {
-		auto obsp_keys = reader->GetObspKeys();
-		for (const auto &k : obsp_keys) {
-			tables.push_back({"obsp_" + k, "obsp", k, var_name_column, var_id_column});
+	// varm requires var
+	if (has_var) {
+		try {
+			auto varm_matrices = reader->GetVarmMatrices();
+			for (const auto &m : varm_matrices) {
+				tables.push_back({"varm_" + m.name, "varm", m.name, var_name_column, var_id_column});
+			}
+		} catch (...) {
+			// varm may not exist
 		}
-	} catch (...) {
-		// obsp may not exist
 	}
 
-	// Get varp matrices
-	try {
-		auto varp_keys = reader->GetVarpKeys();
-		for (const auto &k : varp_keys) {
-			tables.push_back({"varp_" + k, "varp", k, var_name_column, var_id_column});
+	// Layers require both obs and var (like X)
+	if (has_obs && has_var) {
+		try {
+			auto layers = reader->GetLayers();
+			for (const auto &l : layers) {
+				tables.push_back({"layers_" + l.name, "layers", l.name, var_name_column, var_id_column});
+			}
+		} catch (...) {
+			// layers may not exist
 		}
-	} catch (...) {
-		// varp may not exist
 	}
 
-	// Check for uns data
+	// obsp requires obs
+	if (has_obs) {
+		try {
+			auto obsp_keys = reader->GetObspKeys();
+			for (const auto &k : obsp_keys) {
+				tables.push_back({"obsp_" + k, "obsp", k, var_name_column, var_id_column});
+			}
+		} catch (...) {
+			// obsp may not exist
+		}
+	}
+
+	// varp requires var
+	if (has_var) {
+		try {
+			auto varp_keys = reader->GetVarpKeys();
+			for (const auto &k : varp_keys) {
+				tables.push_back({"varp_" + k, "varp", k, var_name_column, var_id_column});
+			}
+		} catch (...) {
+			// varp may not exist
+		}
+	}
+
+	// Check for uns data (independent of obs/var)
 	try {
 		auto uns_keys = reader->GetUnsKeys();
 		if (!uns_keys.empty()) {

@@ -535,6 +535,16 @@ public:
 		}                                                                                                              \
 	} while (0)
 
+// Compatibility wrapper for H5Oget_info_by_name across HDF5 versions.
+// HDF5 1.12+ added a 'fields' parameter; 1.10.x uses a 4-argument form.
+inline herr_t H5Oget_info_by_name_compat(hid_t loc_id, const char *name, H5O_info_t *oinfo, hid_t lapl_id) {
+#if H5_VERSION_GE(1, 12, 0)
+	return H5Oget_info_by_name(loc_id, name, oinfo, H5O_INFO_BASIC, lapl_id);
+#else
+	return H5Oget_info_by_name(loc_id, name, oinfo, lapl_id);
+#endif
+}
+
 // Helper function to check if a link exists
 inline bool H5LinkExists(hid_t loc_id, const std::string &name) {
 	htri_t exists = H5Lexists(loc_id, name.c_str(), H5P_DEFAULT);
@@ -545,7 +555,7 @@ inline bool H5LinkExists(hid_t loc_id, const std::string &name) {
 inline H5O_type_t H5GetObjectType(hid_t loc_id, const std::string &name) {
 	H5O_info_t info;
 	memset(&info, 0, sizeof(info));
-	herr_t status = H5Oget_info_by_name(loc_id, name.c_str(), &info, H5O_INFO_BASIC, H5P_DEFAULT);
+	herr_t status = H5Oget_info_by_name_compat(loc_id, name.c_str(), &info, H5P_DEFAULT);
 	if (status < 0) {
 		return H5O_TYPE_UNKNOWN;
 	}
