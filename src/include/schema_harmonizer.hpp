@@ -34,6 +34,9 @@ struct FileSchema {
 	vector<string> var_names;
 	unordered_map<string, idx_t> var_name_to_idx;
 
+	// For obsm/varm: matrix dtype
+	LogicalType matrix_dtype = LogicalType::DOUBLE;
+
 	FileSchema() = default;
 	FileSchema(const string &path) : file_path(path) {
 	}
@@ -47,6 +50,10 @@ struct HarmonizedSchema {
 	// Per-file column mappings: for each file, maps harmonized column index -> file column index
 	// -1 means the column doesn't exist in that file (union mode only)
 	vector<vector<int>> file_column_mappings;
+
+	// Per-file original names: for each file, stores the HDF5 original name for each harmonized column
+	// Empty string means the column doesn't exist in that file (union mode only)
+	vector<vector<string>> file_original_names;
 
 	// For X/layers: per-file var mappings
 	// Maps harmonized var index -> file var index

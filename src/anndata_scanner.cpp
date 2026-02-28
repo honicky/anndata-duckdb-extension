@@ -74,6 +74,11 @@ void AnndataGlobalState::OpenCurrentFile(ClientContext &context, const AnndataBi
 		current_column_mapping = bind_data.harmonized_schema.file_column_mappings[current_file_idx];
 	}
 
+	// Set up per-file original names for this file
+	if (current_file_idx < bind_data.harmonized_schema.file_original_names.size()) {
+		current_original_names = bind_data.harmonized_schema.file_original_names[current_file_idx];
+	}
+
 	// Set up var mapping for this file (for X/layers)
 	if (current_file_idx < bind_data.harmonized_schema.file_var_mappings.size()) {
 		current_var_mapping = bind_data.harmonized_schema.file_var_mappings[current_file_idx];
@@ -332,9 +337,9 @@ void AnndataScanner::ObsScan(ClientContext &context, TableFunctionInput &data, D
 
 		int file_col_idx = gstate.current_column_mapping[col];
 		if (file_col_idx >= 0) {
-			// Column exists in this file - read it
-			gstate.h5_reader->ReadObsColumn(bind_data.harmonized_schema.columns[col].original_name, vec,
-			                                gstate.current_row_in_file, rows_to_read);
+			// Column exists in this file - use per-file original name
+			gstate.h5_reader->ReadObsColumn(gstate.current_original_names[col], vec, gstate.current_row_in_file,
+			                                rows_to_read);
 		} else {
 			// Column doesn't exist - fill with NULL (union mode)
 			auto &validity = FlatVector::Validity(vec);
@@ -494,9 +499,9 @@ void AnndataScanner::VarScan(ClientContext &context, TableFunctionInput &data, D
 
 		int file_col_idx = gstate.current_column_mapping[col];
 		if (file_col_idx >= 0) {
-			// Column exists in this file - read it
-			gstate.h5_reader->ReadVarColumn(bind_data.harmonized_schema.columns[col].original_name, vec,
-			                                gstate.current_row_in_file, rows_to_read);
+			// Column exists in this file - use per-file original name
+			gstate.h5_reader->ReadVarColumn(gstate.current_original_names[col], vec, gstate.current_row_in_file,
+			                                rows_to_read);
 		} else {
 			// Column doesn't exist - fill with NULL (union mode)
 			auto &validity = FlatVector::Validity(vec);
@@ -881,10 +886,11 @@ unique_ptr<FunctionData> AnndataScanner::ObsmBind(ClientContext &context, TableF
 		names.push_back("obs_idx");
 		return_types.push_back(LogicalType::BIGINT);
 
-		// Add columns for each dimension
+		// Add columns for each dimension, preserving the matrix's dtype
+		LogicalType matrix_dtype = file_schemas[0].matrix_dtype;
 		for (idx_t i = 0; i < bind_data->matrix_cols; i++) {
 			names.push_back(matrix_name + "_" + to_string(i));
-			return_types.push_back(LogicalType::DOUBLE);
+			return_types.push_back(matrix_dtype);
 		}
 
 		bind_data->column_count = names.size();
@@ -1067,9 +1073,11 @@ unique_ptr<FunctionData> AnndataScanner::VarmBind(ClientContext &context, TableF
 		names.push_back("var_idx");
 		return_types.push_back(LogicalType::BIGINT);
 
+		// Preserve the matrix's dtype
+		LogicalType matrix_dtype = file_schemas[0].matrix_dtype;
 		for (idx_t i = 0; i < bind_data->matrix_cols; i++) {
 			names.push_back(matrix_name + "_" + to_string(i));
-			return_types.push_back(LogicalType::DOUBLE);
+			return_types.push_back(matrix_dtype);
 		}
 
 		bind_data->column_count = names.size();

@@ -136,18 +136,22 @@ HarmonizedSchema SchemaHarmonizer::ComputeObsVarSchema(const vector<FileSchema> 
 		}
 	}
 
-	// Build per-file column mappings
+	// Build per-file column mappings and original names
 	for (size_t f = 0; f < file_schemas.size(); f++) {
 		vector<int> mapping;
+		vector<string> original_names;
 		for (const auto &col : result.columns) {
 			auto it = file_column_maps[f].find(col.name);
 			if (it != file_column_maps[f].end()) {
 				mapping.push_back(static_cast<int>(it->second.first));
+				original_names.push_back(it->second.second.original_name);
 			} else {
-				mapping.push_back(-1); // Column not present in this file
+				mapping.push_back(-1);        // Column not present in this file
+				original_names.push_back(""); // No original name
 			}
 		}
 		result.file_column_mappings.push_back(std::move(mapping));
+		result.file_original_names.push_back(std::move(original_names));
 
 		// Track row counts
 		idx_t row_count = file_schemas[f].n_obs > 0 ? file_schemas[f].n_obs : file_schemas[f].n_var;
@@ -316,6 +320,10 @@ FileSchema SchemaHarmonizer::GetObsSchema(ClientContext &context, const string &
 	FileSchema schema(file_path);
 	auto reader = CreateReader(context, file_path);
 
+	if (!reader->HasObs()) {
+		throw InvalidInputException("AnnData file '%s' has no /obs group", file_path.c_str());
+	}
+
 	auto columns = reader->GetObsColumns();
 	for (const auto &col : columns) {
 		schema.columns.emplace_back(col.name, col.original_name, col.type);
@@ -328,6 +336,10 @@ FileSchema SchemaHarmonizer::GetObsSchema(ClientContext &context, const string &
 FileSchema SchemaHarmonizer::GetVarSchema(ClientContext &context, const string &file_path) {
 	FileSchema schema(file_path);
 	auto reader = CreateReader(context, file_path);
+
+	if (!reader->HasVar()) {
+		throw InvalidInputException("AnnData file '%s' has no /var group", file_path.c_str());
+	}
 
 	auto columns = reader->GetVarColumns();
 	for (const auto &col : columns) {
@@ -342,6 +354,16 @@ FileSchema SchemaHarmonizer::GetXSchema(ClientContext &context, const string &fi
                                         const string &var_name_column) {
 	FileSchema schema(file_path);
 	auto reader = CreateReader(context, file_path);
+
+	if (!reader->HasObs()) {
+		throw InvalidInputException("AnnData file '%s' has no /obs group (required for X matrix)", file_path.c_str());
+	}
+	if (!reader->HasVar()) {
+		throw InvalidInputException("AnnData file '%s' has no /var group (required for X matrix)", file_path.c_str());
+	}
+	if (!reader->HasX()) {
+		throw InvalidInputException("AnnData file '%s' has no /X matrix", file_path.c_str());
+	}
 
 	auto x_info = reader->GetXMatrixInfo();
 	schema.n_obs = x_info.n_obs;
@@ -394,6 +416,7 @@ FileSchema SchemaHarmonizer::GetObsmSchema(ClientContext &context, const string 
 		if (mat.name == matrix_name) {
 			schema.n_obs = mat.rows;
 			schema.n_var = mat.cols; // Store cols in n_var for obsm/varm
+			schema.matrix_dtype = mat.dtype;
 			found = true;
 			break;
 		}
@@ -415,6 +438,7 @@ FileSchema SchemaHarmonizer::GetVarmSchema(ClientContext &context, const string 
 		if (mat.name == matrix_name) {
 			schema.n_obs = mat.rows; // Actually var count
 			schema.n_var = mat.cols;
+			schema.matrix_dtype = mat.dtype;
 			found = true;
 			break;
 		}

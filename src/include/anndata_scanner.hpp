@@ -156,8 +156,9 @@ struct AnndataGlobalState : public GlobalTableFunctionState {
 	idx_t current_file_idx = 0;
 	idx_t current_row_in_file = 0;
 	string current_file_name;
-	vector<int> current_column_mapping; // Maps result columns to file columns
-	vector<idx_t> current_var_mapping;  // Maps result var indices to file var indices (for X/layers)
+	vector<int> current_column_mapping;    // Maps result columns to file columns
+	vector<string> current_original_names; // Per-file original names for each harmonized column
+	vector<idx_t> current_var_mapping;     // Maps result var indices to file var indices (for X/layers)
 
 	AnndataGlobalState() : current_row(0) {
 	}
