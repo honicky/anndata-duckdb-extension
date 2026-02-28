@@ -2318,6 +2318,14 @@ unique_ptr<FunctionData> AnndataScanner::InfoBind(ClientContext &context, TableF
 	// to avoid opening the file twice
 	bind_data->is_info_scan = true;
 
+	// Check for optional var_name_column and var_id_column parameters
+	if (input.inputs.size() > 1) {
+		bind_data->var_name_column = input.inputs[1].GetValue<string>();
+	}
+	if (input.inputs.size() > 2) {
+		bind_data->var_id_column = input.inputs[2].GetValue<string>();
+	}
+
 	// Define output schema for info table
 	names.emplace_back("property");
 	return_types.emplace_back(LogicalType::VARCHAR);
