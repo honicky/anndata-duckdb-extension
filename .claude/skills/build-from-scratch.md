@@ -1,106 +1,114 @@
 # Build From Scratch
 
-This skill describes how to build the AnnData DuckDB extension from a fresh checkout.
+How to build and test the AnnData DuckDB extension from a fresh checkout.
 
 ## Prerequisites
 
 - Python 3.x with `uv` package manager
-- Docker (for production builds and testing)
 - Git
+- HDF5 library (installed via Homebrew on macOS: `brew install hdf5`)
+- Docker (optional, for Linux cross-compilation)
 
-## Quick Build (Development)
+## Step 1: Initialize Submodules
 
-For local development builds, the extension requires HDF5 libraries. The easiest approach is to use Docker:
+After cloning or entering a new worktree, submodules must be initialized:
 
 ```bash
-# Build using Docker (recommended)
-docker run --env-file=docker_env.txt -v `pwd`:/duckdb_build_dir -v `pwd`/ccache_dir:/ccache_dir duckdb/linux_amd64 make
+git submodule update --init --recursive
 ```
 
-If HDF5 is installed locally:
+This pulls in `duckdb/` and `extension-ci-tools/` which are required for building.
+
+## Step 2: Build
+
+### Local Build (macOS with HDF5 installed)
 
 ```bash
-# Build with vcpkg (if vcpkg is set up)
-VCPKG_TOOLCHAIN_PATH=$(pwd)/vcpkg/scripts/buildsystems/vcpkg.cmake uv run make
-
-# Or if HDF5 is installed system-wide
 uv run make
 ```
 
-## Running Tests
+This will:
+- Use cmake to configure and build in `build/release/`
+- Produce the extension at `build/release/extension/anndata/anndata.duckdb_extension`
+
+### Docker Build (Linux)
 
 ```bash
-# Run all tests using Docker
+mkdir -p ccache_dir
+docker run --env-file=docker_env.txt -v `pwd`:/duckdb_build_dir -v `pwd`/ccache_dir:/ccache_dir duckdb/linux_amd64 make
+```
+
+## Step 3: Run Tests
+
+### Local Tests
+
+```bash
+uv run make test_release
+```
+
+This runs the DuckDB sqllogictest runner against all `test/sql/*.test` files.
+Tests requiring `httpfs` extension will be skipped.
+
+### Docker Tests (Linux)
+
+```bash
 docker run --env-file=docker_env.txt -v `pwd`:/duckdb_build_dir -v `pwd`/ccache_dir:/ccache_dir duckdb/linux_amd64 make test_release
 ```
 
-## Code Quality Checks (REQUIRED before committing)
-
-Always run these checks before committing:
+### Running a Single Test
 
 ```bash
-# Check code formatting
+# Run the unittest binary directly with a filter
+./build/release/test/unittest "test/sql/wildcard_local.test"
+```
+
+## Step 4: Code Quality Checks (REQUIRED before committing)
+
+```bash
+# Check code formatting (reports issues)
 uv run make format
 
-# If formatting changes are needed, fix them:
+# Auto-fix formatting issues
 uv run make format-fix
 
 # Check for clang-tidy issues
 uv run make tidy-check
 ```
 
-## Docker Environment File
-
-The `docker_env.txt` file should contain environment variables for the build. If it doesn't exist, create it:
+## Step 5: Run with DuckDB CLI
 
 ```bash
-# Minimal docker_env.txt
-echo "" > docker_env.txt
+./build/release/duckdb -unsigned
 ```
 
-## Common Build Issues
-
-### HDF5 Not Found
-
-If you see "Could NOT find HDF5", use the Docker build method instead.
-
-### Submodule Issues
-
-If duckdb or extension-ci-tools are missing:
-
-```bash
-git submodule update --init --recursive
+Then in the DuckDB shell:
+```sql
+LOAD anndata;
+SELECT * FROM anndata_info('test/data/test_small.h5ad');
 ```
 
-### ccache Directory
+## Common Issues
 
-Create the ccache directory if it doesn't exist:
+### "No such file: extension-ci-tools/makefiles/duckdb_extension.Makefile"
+
+Submodules not initialized. Run: `git submodule update --init --recursive`
+
+### "Could NOT find HDF5"
+
+HDF5 not installed or not found. On macOS: `brew install hdf5`
+
+### Test Data Generation
+
+Test `.h5ad` files are tracked in git under `test/data/`. To regenerate:
 
 ```bash
-mkdir -p ccache_dir
+uv run python test/python/create_test_wildcard.py    # wildcard test files
+uv run python test/python/create_test_comprehensive.py  # comprehensive test file
 ```
 
-## Version Management
-
-Use the bump_version.py script:
+## Clean Build
 
 ```bash
-# Bump patch version
-uv run python scripts/bump_version.py patch
-
-# Bump minor version
-uv run python scripts/bump_version.py minor
-
-# Set specific version
-uv run python scripts/bump_version.py set 0.14.0
-```
-
-## Full Clean Build
-
-```bash
-# Clean everything
 rm -rf build/
-
-# Rebuild
-docker run --env-file=docker_env.txt -v `pwd`:/duckdb_build_dir -v `pwd`/ccache_dir:/ccache_dir duckdb/linux_amd64 make
+uv run make
 ```
