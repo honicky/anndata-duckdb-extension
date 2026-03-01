@@ -137,6 +137,8 @@ set(EXTENSION_SOURCES
     src/anndata_scanner.cpp
     src/anndata_storage.cpp
     src/h5_reader_multithreaded.cpp
+    src/glob_handler.cpp
+    src/schema_harmonizer.cpp
     ${LZF_SOURCES}
     ${VFD_SOURCES}
 )

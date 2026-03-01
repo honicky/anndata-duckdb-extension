@@ -145,11 +145,44 @@ SELECT * FROM anndata_scan_var('data.h5ad');
 SELECT * FROM anndata_scan_x('data.h5ad');
 ```
 
+### Multi-File Wildcard Queries
+
+Query multiple AnnData files at once using glob patterns. Works with both local and remote (S3) files.
+
+```sql
+-- Query all .h5ad files matching a pattern (intersection mode - default)
+-- Only columns/genes common to ALL files are returned
+SELECT * FROM anndata_scan_obs('samples/*.h5ad');
+
+-- Union mode - all columns from all files, NULL where missing
+SELECT * FROM anndata_scan_obs('samples/*.h5ad', schema_mode := 'union');
+
+-- A _file_name column is automatically added to identify source files
+SELECT _file_name, cell_type, COUNT(*)
+FROM anndata_scan_obs('samples/*.h5ad')
+GROUP BY _file_name, cell_type;
+
+-- Works with all scan functions
+SELECT * FROM anndata_scan_x('samples/*.h5ad');
+SELECT * FROM anndata_scan_x('samples/*.h5ad', schema_mode := 'union');
+SELECT * FROM anndata_scan_layers('samples/*.h5ad', 'raw');
+SELECT * FROM anndata_scan_obsm('samples/*.h5ad', 'X_pca');
+SELECT * FROM anndata_scan_obsp('samples/*.h5ad', 'distances');
+
+-- Works with S3 paths
+SELECT * FROM anndata_scan_obs('s3://bucket/project/*.h5ad');
+```
+
+**Schema modes:**
+- **`intersection`** (default): Only columns/genes present in ALL files are included. Safest for analysis across heterogeneous datasets.
+- **`union`**: All columns/genes from all files are included. Missing values are filled with NULL.
+
 
 ## Features
 
 - Read-only access to AnnData HDF5 files
 - **Remote file support** for HTTP/HTTPS and S3 (including authenticated S3)
+- **Multi-file wildcard queries** with glob patterns (`*.h5ad`) and schema harmonization
 - Attach to an AnnData file like a database
 - Query observation (cell) metadata from `.obs`
 - Query variable (gene) metadata from `.var`
@@ -166,7 +199,6 @@ SELECT * FROM anndata_scan_x('data.h5ad');
 ## Limitations
 
 - Read only
-- Single file access (for now)
 - Windows HDF5 library limitations mean that we don't support threading on Windows. This limits the throughput of more complicated queries on Windows.
 
 ## Usage
@@ -271,10 +303,8 @@ JOIN anndata_scan_obs('data.h5ad') o
   ON x.obs_idx = o.obs_idx
 GROUP BY o.cell_type;
 
--- Combine data from multiple files
-SELECT 'sample1' as source, * FROM anndata_scan_obs('sample1.h5ad')
-UNION ALL
-SELECT 'sample2' as source, * FROM anndata_scan_obs('sample2.h5ad');
+-- Combine data from multiple files using wildcard patterns
+SELECT _file_name, * FROM anndata_scan_obs('sample*.h5ad');
 
 -- Export to Parquet
 COPY (SELECT * FROM anndata_scan_obs('data.h5ad'))
@@ -394,9 +424,13 @@ The script updates the VERSION file and adds a new section to CHANGELOG.md. **No
 │   ├── anndata_extension.cpp        # Extension entry point
 │   ├── anndata_scanner.cpp          # Table function implementations
 │   ├── h5_reader_multithreaded.cpp  # Thread-safe HDF5 data reading
+│   ├── glob_handler.cpp             # Wildcard pattern expansion (local & S3)
+│   ├── schema_harmonizer.cpp        # Multi-file schema union/intersection
 │   └── include/
 │       ├── h5_reader_multithreaded.hpp  # HDF5 reader interface
-│       └── h5_file_cache.hpp            # File handle caching & thread safety
+│       ├── h5_file_cache.hpp            # File handle caching & thread safety
+│       ├── glob_handler.hpp             # Glob pattern handling
+│       └── schema_harmonizer.hpp        # Schema harmonization
 ├── spec/                        # Design specifications
 ├── test/sql/                    # SQL-based tests
 ├── vcpkg.json                   # VCPKG manifest (HDF5 dependency)

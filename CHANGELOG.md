@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.13.4] - 2026-02-05
+## [0.14.0] - 2026-02-28
+
+### Added
+- **Multi-file wildcard query support** for all `anndata_scan_*` functions using glob patterns (e.g., `'data/*.h5ad'`, `'s3://bucket/*.h5ad'`)
+- Schema harmonization with two modes: `intersection` (default, common columns only) and `union` (all columns, NULL for missing)
+- Automatic `_file_name` column added to multi-file query results for source tracking
+- Glob handler for expanding local and S3 file patterns
+- Schema harmonizer with type coercion across files (numeric promotion, VARCHAR fallback)
+- Projection pushdown support for multi-file X matrix and layer queries
+- `schema_mode` named parameter for obs, var, X, layers, obsm, and varm scan functions
+- File-scoped pair concatenation for obsp/varp multi-file queries
+- Test data generator (`test/python/create_test_wildcard.py`) and comprehensive wildcard test suites for local and S3
 
 ### Fixed
 - Duplicate variable name warning no longer prints twice during DESCRIBE operations
