@@ -642,6 +642,7 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 		if (to_read == 0) {
 			// Try to advance to next file
 			if (!gstate.AdvanceToNextFile(context, bind_data)) {
+				output.SetCardinality(0);
 				return; // All files exhausted
 			}
 			// Update var mapping for new file
@@ -652,6 +653,7 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 		}
 
 		if (to_read == 0) {
+			output.SetCardinality(0);
 			return;
 		}
 
@@ -1360,6 +1362,7 @@ void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data,
 		if (to_read == 0) {
 			// Try to advance to next file
 			if (!state.AdvanceToNextFile(context, bind_data)) {
+				output.SetCardinality(0);
 				return; // All files exhausted
 			}
 			// Update var mapping for new file
@@ -1370,6 +1373,7 @@ void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data,
 		}
 
 		if (to_read == 0) {
+			output.SetCardinality(0);
 			return;
 		}
 
@@ -2110,6 +2114,7 @@ void AnndataScanner::ObspScan(ClientContext &context, TableFunctionInput &data, 
 		if (to_read == 0) {
 			// Try to advance to next file
 			if (!gstate.AdvanceToNextFile(context, bind_data)) {
+				output.SetCardinality(0);
 				return; // All files exhausted
 			}
 			current_file_nnz = bind_data.harmonized_schema.file_row_counts[gstate.current_file_idx];
@@ -2118,6 +2123,7 @@ void AnndataScanner::ObspScan(ClientContext &context, TableFunctionInput &data, 
 		}
 
 		if (to_read == 0) {
+			output.SetCardinality(0);
 			return;
 		}
 
@@ -2258,6 +2264,7 @@ void AnndataScanner::VarpScan(ClientContext &context, TableFunctionInput &data, 
 		if (to_read == 0) {
 			// Try to advance to next file
 			if (!gstate.AdvanceToNextFile(context, bind_data)) {
+				output.SetCardinality(0);
 				return; // All files exhausted
 			}
 			current_file_nnz = bind_data.harmonized_schema.file_row_counts[gstate.current_file_idx];
@@ -2266,6 +2273,7 @@ void AnndataScanner::VarpScan(ClientContext &context, TableFunctionInput &data, 
 		}
 
 		if (to_read == 0) {
+			output.SetCardinality(0);
 			return;
 		}
 
