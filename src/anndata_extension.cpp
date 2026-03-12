@@ -6,6 +6,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/main/config.hpp"
+#include "duckdb/storage/storage_extension.hpp"
 
 // LZF filter for reading LZF-compressed HDF5 datasets (common in h5ad files)
 #ifndef DUCKDB_NO_HDF5
@@ -57,7 +58,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	// Register the AnnData storage extension for ATTACH support
 	auto &config = DBConfig::GetConfig(db);
-	config.storage_extensions["anndata"] = CreateAnndataStorageExtension();
+	StorageExtension::Register(config, "anndata", CreateAnndataStorageExtension());
 
 	// Log that the extension is loaded
 	std::cout << "AnnData DuckDB Extension loaded successfully!" << std::endl;

@@ -17,7 +17,6 @@ namespace duckdb {
 H5ReaderMultithreaded::H5ReaderMultithreaded(const std::string &file_path,
                                              const H5FileCache::RemoteConfig *remote_config)
     : file_path(file_path) {
-
 	// Initialize HDF5 library and set up thread safety
 	// Use a function-level static to ensure thread-safe initialization (C++11 guarantees this)
 	static std::once_flag hdf5_init_flag;

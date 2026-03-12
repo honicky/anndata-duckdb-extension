@@ -94,7 +94,6 @@ const void *H5PLget_plugin_info(void) {
 
 /* Try to register the filter, passing on the HDF5 return value */
 int register_lzf(void) {
-
 	int retval;
 
 	retval = H5Zregister(&filter_class);
@@ -112,7 +111,6 @@ int register_lzf(void) {
     2. Compute the chunk size in bytes and store it in slot 2.
 */
 herr_t lzf_set_local(hid_t dcpl, hid_t type, hid_t space) {
-
 	int ndims;
 	int i;
 	herr_t r;
@@ -171,7 +169,6 @@ herr_t lzf_set_local(hid_t dcpl, hid_t type, hid_t space) {
 /* The filter function */
 size_t lzf_filter(unsigned flags, size_t cd_nelmts, const unsigned cd_values[], size_t nbytes, size_t *buf_size,
                   void **buf) {
-
 	void *outbuf = NULL;
 	size_t outbuf_size = 0;
 
@@ -179,7 +176,6 @@ size_t lzf_filter(unsigned flags, size_t cd_nelmts, const unsigned cd_values[], 
 
 	/* We're compressing */
 	if (!(flags & H5Z_FLAG_REVERSE)) {
-
 		/* Allocate an output buffer exactly as long as the input data; if
 		   the result is larger, we simply return 0.  The filter is flagged
 		   as optional, so HDF5 marks the chunk as uncompressed and
@@ -198,7 +194,6 @@ size_t lzf_filter(unsigned flags, size_t cd_nelmts, const unsigned cd_values[], 
 
 		/* We're decompressing */
 	} else {
-
 		if ((cd_nelmts >= 3) && (cd_values[2] != 0)) {
 			outbuf_size = cd_values[2]; /* Precomputed buffer guess */
 		} else {
@@ -210,7 +205,6 @@ size_t lzf_filter(unsigned flags, size_t cd_nelmts, const unsigned cd_values[], 
 #endif
 
 		while (!status) {
-
 			free(outbuf);
 			outbuf = malloc(outbuf_size);
 
@@ -229,7 +223,6 @@ size_t lzf_filter(unsigned flags, size_t cd_nelmts, const unsigned cd_values[], 
 					fprintf(stderr, "    Too small: %d\n", outbuf_size);
 #endif
 				} else if (errno == EINVAL) {
-
 					PUSH_ERR("lzf_filter", H5E_CALLBACK, "Invalid data for LZF decompression");
 					goto failed;
 
@@ -245,7 +238,6 @@ size_t lzf_filter(unsigned flags, size_t cd_nelmts, const unsigned cd_values[], 
 	} /* compressing vs decompressing */
 
 	if (status != 0) {
-
 		free(*buf);
 		*buf = outbuf;
 		*buf_size = outbuf_size;
