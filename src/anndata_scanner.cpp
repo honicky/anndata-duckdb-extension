@@ -211,12 +211,15 @@ unique_ptr<FunctionData> AnndataScanner::ObsBind(ClientContext &context, TableFu
 
 	// Expand glob pattern
 	auto glob_result = GlobHandler::ExpandGlobPattern(context, file_pattern);
+	fprintf(stderr, "[DEBUG] ObsBind: glob returned %zu files\n", glob_result.matched_files.size());
 
 	// Validate files
 	for (const auto &file_path : glob_result.matched_files) {
+		fprintf(stderr, "[DEBUG] ObsBind: validating file '%s'\n", file_path.c_str());
 		if (!IsAnndataFile(context, file_path)) {
 			throw InvalidInputException("File is not a valid AnnData file: " + file_path);
 		}
+		fprintf(stderr, "[DEBUG] ObsBind: file valid\n");
 	}
 
 	auto bind_data = make_uniq<AnndataBindData>(glob_result.matched_files, file_pattern);

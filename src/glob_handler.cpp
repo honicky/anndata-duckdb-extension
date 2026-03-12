@@ -33,8 +33,11 @@ vector<string> GlobHandler::ExpandLocalGlob(ClientContext &context, const string
 	// Use DuckDB's built-in glob functionality
 	auto matches = fs.GlobFiles(pattern, context);
 	for (const auto &match : matches) {
-		fprintf(stderr, "[DEBUG] ExpandLocalGlob: matched='%s'\n", match.path.c_str());
-		result.push_back(match.path);
+		// Normalize backslashes to forward slashes for cross-platform HDF5 compatibility
+		string normalized = match.path;
+		std::replace(normalized.begin(), normalized.end(), '\\', '/');
+		fprintf(stderr, "[DEBUG] ExpandLocalGlob: matched='%s' -> '%s'\n", match.path.c_str(), normalized.c_str());
+		result.push_back(normalized);
 	}
 
 	fprintf(stderr, "[DEBUG] ExpandLocalGlob: %zu matches\n", result.size());
