@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.5] - 2026-03-12
+
+### Fixed
+- S3 errors now show the real error message (e.g., "Access denied", "File not found") instead of misleading "not a valid AnnData file"
+- Credentials set via `load_aws_credentials()` or `SET s3_access_key_id` now work with ATTACH and `anndata_scan_*()` functions
+- Remote test files now use `INSTALL/LOAD httpfs` instead of `require httpfs` so they run in the unittest runner
+- Updated info table row counts in S3 and HTTP tests to match current output (15 properties)
+
 ## [0.13.4] - 2026-02-05
 
 ### Fixed
