@@ -1,0 +1,33 @@
+# name: test/sql/error_messages.test
+# description: Test that error messages are accurate for various failure modes
+# group: [sql]
+
+require anndata
+
+# =============================================================================
+# Test 1: Non-existent local file should report file not found
+# =============================================================================
+
+statement error
+SELECT * FROM anndata_scan_obs('test/data/does_not_exist.h5ad');
+----
+not a valid AnnData file
+
+statement error
+ATTACH 'test/data/does_not_exist.h5ad' AS missing (TYPE ANNDATA);
+----
+File not found
+
+# =============================================================================
+# Test 2: Non-HDF5 file should report not valid AnnData
+# =============================================================================
+
+statement error
+SELECT * FROM anndata_scan_obs('test/sql/anndata_basic.test');
+----
+not a valid AnnData
+
+statement error
+ATTACH 'test/sql/anndata_basic.test' AS notanndata (TYPE ANNDATA);
+----
+not a valid
