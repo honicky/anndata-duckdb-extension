@@ -76,27 +76,95 @@ anndata_duckdb/
 - use the documents in the `spec/` folder to guide the development process
 - keep the specs in the `spec/implementation-plan.md` up to date as design decisions change
 - use `uv` for all python package management. Prefer `uv add` over `uv pip install` in order to manage the package list with pyproject.toml
-- use `uv run make` to build
 - use `uv run python3` for all python actions
 
+## Building from a Clean Environment
+
+### Prerequisites
+
+The build requires system-installed C/C++ libraries that are NOT managed by vcpkg in local dev (vcpkg.json is only used by CI):
+
+```bash
+apt-get install -y libhdf5-dev libcurl4-openssl-dev libssl-dev
+```
+
+You also need: `cmake`, `make`, `g++`, `git`, and `uv` (for Python tooling / running make targets).
+
+### Submodule initialization
+
+The repo has two git submodules (`duckdb/` and `extension-ci-tools/`) that must be populated before building. If these directories are empty:
+
+```bash
+git submodule init
+git submodule update
+```
+
+### Building
+
+The standard build command is:
+
+```bash
+uv run make          # builds the release target
+```
+
+This runs cmake configure + build via the Makefile in `extension-ci-tools/makefiles/duckdb_extension.Makefile`. The first build takes several minutes (it compiles all of DuckDB). Subsequent builds after source changes are incremental and fast.
+
+For faster iteration when fixing compile errors, you can split configure and build:
+
+```bash
+# One-time configure:
+rm -rf build/release
+mkdir -p build/release
+cmake -DEXTENSION_STATIC_BUILD=1 \
+  -DDUCKDB_EXTENSION_CONFIGS="$(pwd)/extension_config.cmake" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -S ./duckdb/ -B build/release
+
+# Rebuild (run this after each source edit):
+cmake --build build/release --parallel $(nproc)
+```
+
+This avoids re-running cmake configure on each iteration, which is the default behavior of `uv run make`.
+
+### Build outputs
+
+- `build/release/duckdb` — DuckDB CLI with the extension statically linked
+- `build/release/test/unittest` — test runner binary
+- `build/release/extension/anndata/anndata.duckdb_extension` — loadable extension
+
+### Smoke test
+
+```bash
+./build/release/duckdb -c "SELECT anndata_version();"
+```
+
+### Running tests
+
+```bash
+# Run a single test file
+build/release/test/unittest "test/sql/anndata_basic.test" --test-dir .
+
+# Run all extension tests
+build/release/test/unittest "test/*" --test-dir .
+```
 
 ## Code Quality Checks Before Committing
 
 **IMPORTANT**: Always run these checks before committing and pushing code to ensure CI/CD passes:
 
-1. **Format Check**: 
+1. **Format Check**:
    - Run `uv run make format` to check code formatting
    - If it reports changes needed, run `uv run make format-fix` to automatically fix formatting issues
    - The CI/CD uses DuckDB's formatting standards (tabs for indentation, specific spacing rules)
 
-2. **Tidy Check**: 
+2. **Tidy Check**:
    - Run `uv run make tidy-check` to check for clang-tidy issues
    - Fix any reported issues before committing
+   - The tidy-check build uses a separate build directory (`build/tidy/`) and skips HDF5 (defines `DUCKDB_NO_HDF5`), so it doesn't need HDF5 installed
    - Common issues include: missing explicit casts, using push_back instead of emplace_back, missing braces
 
 3. **Build Verification**:
-   - Ensure the extension builds successfully: `make`
-   - For WASM builds, test locally if possible: `VCPKG_TOOLCHAIN_PATH="" make wasm_mvp`
+   - Ensure the extension builds successfully: `uv run make`
 
 Only commit and push after all checks pass locally. The CI/CD pipeline will fail if format or tidy checks don't pass.
 
@@ -163,17 +231,11 @@ When upgrading DuckDB to a new version (e.g., v1.4.4 → v1.5.0), ALL of these m
 ### 1. Update submodules
 
 ```bash
-# Update DuckDB submodule
-cd duckdb
-git fetch origin tag vX.Y.Z
-git checkout vX.Y.Z
-cd ..
+# Update DuckDB submodule to the target version tag
+cd duckdb && git fetch origin tag vX.Y.Z && git checkout vX.Y.Z && cd ..
 
 # Update extension-ci-tools submodule to latest main
-cd extension-ci-tools
-git fetch origin
-git checkout origin/main
-cd ..
+cd extension-ci-tools && git fetch origin && git checkout origin/main && cd ..
 
 git add duckdb extension-ci-tools
 ```
@@ -194,44 +256,6 @@ DuckDB frequently changes internal C++ APIs between versions. Common breaking ch
 - **Function signatures**: Check `attach_function_t`, `create_transaction_manager_t` typedefs in `duckdb/storage/storage_extension.hpp`
 - **Catalog APIs**: `DuckCatalog`, `DefaultGenerator`, `CatalogTransaction` methods may change
 
-### 4. Build and verify
+### 4. Clean build, test, and run quality checks
 
-```bash
-# System dependencies required (not provided by vcpkg in local dev):
-# apt-get install -y libhdf5-dev libcurl4-openssl-dev libssl-dev
-
-# Clean build (required after submodule changes):
-rm -rf build/release
-
-# Configure
-mkdir -p build/release
-cmake -DEXTENSION_STATIC_BUILD=1 \
-  -DDUCKDB_EXTENSION_CONFIGS="$(pwd)/extension_config.cmake" \
-  -DCMAKE_BUILD_TYPE=Release \
-  -S ./duckdb/ -B build/release
-
-# Build
-cmake --build build/release --parallel $(nproc)
-
-# Quick smoke test
-./build/release/duckdb -c "SELECT anndata_version();"
-
-# Run a test
-build/release/test/unittest "test/sql/anndata_basic.test" --test-dir .
-```
-
-### 5. Run quality checks
-
-```bash
-uv run make format      # Check formatting
-uv run make format-fix  # Fix formatting if needed
-uv run make tidy-check  # Run clang-tidy
-```
-
-### Build tips
-
-- The `uv run make` command works but the initial cmake + parallel build approach above is faster for iterating on compile errors since it avoids re-running cmake each time.
-- If cmake can't find HDF5, install system packages: `apt-get install -y libhdf5-dev libcurl4-openssl-dev libssl-dev`
-- The vcpkg.json defines dependencies for CI builds; local builds use system-installed libraries.
-- The tidy-check build skips HDF5 (`DUCKDB_NO_HDF5` define) so it doesn't need HDF5 installed.
-- After fixing compile errors, you only need to re-run the `cmake --build` step, not the full cmake configure.
+A clean build is required after submodule changes (`rm -rf build/release`). Then follow the steps in "Building from a Clean Environment" and "Code Quality Checks Before Committing" above.
