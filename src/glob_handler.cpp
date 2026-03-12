@@ -28,11 +28,16 @@ vector<string> GlobHandler::ExpandLocalGlob(ClientContext &context, const string
 	auto &fs = FileSystem::GetFileSystem(context);
 	vector<string> result;
 
+	fprintf(stderr, "[DEBUG] ExpandLocalGlob: pattern='%s'\n", pattern.c_str());
+
 	// Use DuckDB's built-in glob functionality
 	auto matches = fs.GlobFiles(pattern, context);
 	for (const auto &match : matches) {
+		fprintf(stderr, "[DEBUG] ExpandLocalGlob: matched='%s'\n", match.path.c_str());
 		result.push_back(match.path);
 	}
+
+	fprintf(stderr, "[DEBUG] ExpandLocalGlob: %zu matches\n", result.size());
 
 	// Sort for consistent ordering
 	std::sort(result.begin(), result.end());

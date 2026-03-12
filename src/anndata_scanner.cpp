@@ -36,12 +36,15 @@ static SchemaMode ParseSchemaMode(TableFunctionBindInput &input) {
 
 // Implementation of AnndataGlobalState methods for multi-file support
 bool AnndataGlobalState::AdvanceToNextFile(ClientContext &context, const AnndataBindData &bind_data) {
+	fprintf(stderr, "[DEBUG] AdvanceToNextFile: idx=%zu, num_files=%zu\n", current_file_idx,
+	        bind_data.file_paths.size());
 	if (!bind_data.is_multi_file) {
 		return false;
 	}
 
 	current_file_idx++;
 	if (current_file_idx >= bind_data.file_paths.size()) {
+		fprintf(stderr, "[DEBUG] AdvanceToNextFile: no more files\n");
 		return false;
 	}
 
@@ -50,11 +53,13 @@ bool AnndataGlobalState::AdvanceToNextFile(ClientContext &context, const Anndata
 	h5_reader.reset();
 
 	// Open the new file
+	fprintf(stderr, "[DEBUG] AdvanceToNextFile: opening file %zu\n", current_file_idx);
 	OpenCurrentFile(context, bind_data);
 	return true;
 }
 
 void AnndataGlobalState::OpenCurrentFile(ClientContext &context, const AnndataBindData &bind_data) {
+	fprintf(stderr, "[DEBUG] OpenCurrentFile: is_multi=%d, idx=%zu\n", bind_data.is_multi_file, current_file_idx);
 	if (!bind_data.is_multi_file) {
 		current_file_name = GlobHandler::GetBaseName(bind_data.file_path);
 		h5_reader = CreateH5Reader(context, bind_data.file_path);
@@ -62,16 +67,20 @@ void AnndataGlobalState::OpenCurrentFile(ClientContext &context, const AnndataBi
 	}
 
 	if (current_file_idx >= bind_data.file_paths.size()) {
+		fprintf(stderr, "[DEBUG] OpenCurrentFile: idx out of range\n");
 		return;
 	}
 
 	const string &file_path = bind_data.file_paths[current_file_idx];
 	current_file_name = GlobHandler::GetBaseName(file_path);
+	fprintf(stderr, "[DEBUG] OpenCurrentFile: path='%s'\n", file_path.c_str());
 	h5_reader = CreateH5Reader(context, file_path);
+	fprintf(stderr, "[DEBUG] OpenCurrentFile: reader=%p\n", (void *)h5_reader.get());
 
 	// Set up column mapping for this file
 	if (current_file_idx < bind_data.harmonized_schema.file_column_mappings.size()) {
 		current_column_mapping = bind_data.harmonized_schema.file_column_mappings[current_file_idx];
+		fprintf(stderr, "[DEBUG] OpenCurrentFile: col_mapping size=%zu\n", current_column_mapping.size());
 	}
 
 	// Set up per-file original names for this file
@@ -82,6 +91,7 @@ void AnndataGlobalState::OpenCurrentFile(ClientContext &context, const AnndataBi
 	// Set up var mapping for this file (for X/layers)
 	if (current_file_idx < bind_data.harmonized_schema.file_var_mappings.size()) {
 		current_var_mapping = bind_data.harmonized_schema.file_var_mappings[current_file_idx];
+		fprintf(stderr, "[DEBUG] OpenCurrentFile: var_mapping size=%zu\n", current_var_mapping.size());
 	}
 }
 
@@ -196,6 +206,7 @@ string AnndataScanner::GetAnndataInfo(const string &path) {
 unique_ptr<FunctionData> AnndataScanner::ObsBind(ClientContext &context, TableFunctionBindInput &input,
                                                  vector<LogicalType> &return_types, vector<string> &names) {
 	string file_pattern = input.inputs[0].GetValue<string>();
+	fprintf(stderr, "[DEBUG] ObsBind: pattern='%s'\n", file_pattern.c_str());
 	SchemaMode schema_mode = ParseSchemaMode(input);
 
 	// Expand glob pattern
@@ -274,6 +285,7 @@ unique_ptr<FunctionData> AnndataScanner::ObsBind(ClientContext &context, TableFu
 void AnndataScanner::ObsScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &bind_data = (AnndataBindData &)*data.bind_data;
 	auto &gstate = (AnndataGlobalState &)*data.global_state;
+	fprintf(stderr, "[DEBUG] ObsScan: multi=%d, row=%zu\n", bind_data.is_multi_file, gstate.current_row);
 
 	if (!bind_data.is_multi_file) {
 		// Single file mode - original logic
@@ -358,6 +370,7 @@ void AnndataScanner::ObsScan(ClientContext &context, TableFunctionInput &data, D
 unique_ptr<FunctionData> AnndataScanner::VarBind(ClientContext &context, TableFunctionBindInput &input,
                                                  vector<LogicalType> &return_types, vector<string> &names) {
 	string file_pattern = input.inputs[0].GetValue<string>();
+	fprintf(stderr, "[DEBUG] VarBind: pattern='%s'\n", file_pattern.c_str());
 	SchemaMode schema_mode = ParseSchemaMode(input);
 
 	// Expand glob pattern
@@ -436,6 +449,7 @@ unique_ptr<FunctionData> AnndataScanner::VarBind(ClientContext &context, TableFu
 void AnndataScanner::VarScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &bind_data = (AnndataBindData &)*data.bind_data;
 	auto &gstate = (AnndataGlobalState &)*data.global_state;
+	fprintf(stderr, "[DEBUG] VarScan: multi=%d, row=%zu\n", bind_data.is_multi_file, gstate.current_row);
 
 	if (!bind_data.is_multi_file) {
 		// Single file mode - original logic
@@ -540,6 +554,7 @@ static unique_ptr<LocalTableFunctionState> AnndataInitLocal(ExecutionContext &co
 unique_ptr<FunctionData> AnndataScanner::XBind(ClientContext &context, TableFunctionBindInput &input,
                                                vector<LogicalType> &return_types, vector<string> &names) {
 	string file_pattern = input.inputs[0].GetValue<string>();
+	fprintf(stderr, "[DEBUG] XBind: pattern='%s'\n", file_pattern.c_str());
 	string var_name_column = "_index"; // Default
 
 	// Check for optional var_name_column parameter
@@ -624,6 +639,8 @@ unique_ptr<FunctionData> AnndataScanner::XBind(ClientContext &context, TableFunc
 void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &bind_data = (AnndataBindData &)*data.bind_data;
 	auto &gstate = (AnndataGlobalState &)*data.global_state;
+	fprintf(stderr, "[DEBUG] XScan: multi=%d, row=%zu, reader=%p\n", bind_data.is_multi_file, gstate.current_row,
+	        (void *)gstate.h5_reader.get());
 
 	if (bind_data.is_multi_file) {
 		// Multi-file X scan with projection pushdown
@@ -851,6 +868,7 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 // Table function implementations for obsm matrices
 unique_ptr<FunctionData> AnndataScanner::ObsmBind(ClientContext &context, TableFunctionBindInput &input,
                                                   vector<LogicalType> &return_types, vector<string> &names) {
+	fprintf(stderr, "[DEBUG] ObsmBind\n");
 	// Require file path and matrix name
 	if (input.inputs.size() < 2) {
 		throw InvalidInputException("anndata_scan_obsm requires file path and matrix name");
@@ -949,6 +967,8 @@ unique_ptr<FunctionData> AnndataScanner::ObsmBind(ClientContext &context, TableF
 void AnndataScanner::ObsmScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &bind_data = (AnndataBindData &)*data.bind_data;
 	auto &gstate = (AnndataGlobalState &)*data.global_state;
+	fprintf(stderr, "[DEBUG] ObsmScan: multi=%d, row=%zu, matrix='%s'\n", bind_data.is_multi_file, gstate.current_row,
+	        bind_data.obsm_varm_matrix_name.c_str());
 
 	if (!bind_data.is_multi_file) {
 		// Single file mode - original logic
@@ -1043,6 +1063,7 @@ void AnndataScanner::ObsmScan(ClientContext &context, TableFunctionInput &data, 
 // Table function implementations for varm matrices
 unique_ptr<FunctionData> AnndataScanner::VarmBind(ClientContext &context, TableFunctionBindInput &input,
                                                   vector<LogicalType> &return_types, vector<string> &names) {
+	fprintf(stderr, "[DEBUG] VarmBind\n");
 	// Require file path and matrix name
 	if (input.inputs.size() < 2) {
 		throw InvalidInputException("anndata_scan_varm requires file path and matrix name");
@@ -1136,6 +1157,7 @@ unique_ptr<FunctionData> AnndataScanner::VarmBind(ClientContext &context, TableF
 void AnndataScanner::VarmScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &bind_data = (AnndataBindData &)*data.bind_data;
 	auto &gstate = (AnndataGlobalState &)*data.global_state;
+	fprintf(stderr, "[DEBUG] VarmScan: multi=%d, row=%zu\n", bind_data.is_multi_file, gstate.current_row);
 
 	if (!bind_data.is_multi_file) {
 		// Single file mode
@@ -1239,6 +1261,7 @@ unique_ptr<FunctionData> AnndataScanner::LayerBind(ClientContext &context, Table
                                                    vector<LogicalType> &return_types, vector<string> &names) {
 	string file_pattern = input.inputs[0].GetValue<string>();
 	string layer_name = input.inputs[1].GetValue<string>();
+	fprintf(stderr, "[DEBUG] LayerBind: pattern='%s', layer='%s'\n", file_pattern.c_str(), layer_name.c_str());
 
 	// Get variable name column - allow custom column selection
 	// Default to "_index" which is standard AnnData var_names column (same as XBind)
@@ -1344,6 +1367,8 @@ unique_ptr<FunctionData> AnndataScanner::LayerBind(ClientContext &context, Table
 void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &bind_data = data.bind_data->Cast<AnndataBindData>();
 	auto &state = data.global_state->Cast<AnndataGlobalState>();
+	fprintf(stderr, "[DEBUG] LayerScan: multi=%d, row=%zu, layer='%s'\n", bind_data.is_multi_file, state.current_row,
+	        bind_data.layer_name.c_str());
 
 	if (bind_data.is_multi_file) {
 		// Multi-file layer scan with projection pushdown
@@ -2020,6 +2045,7 @@ void AnndataScanner::UnsScan(ClientContext &context, TableFunctionInput &data, D
 // Table function implementations for obsp (observation pairwise matrices)
 unique_ptr<FunctionData> AnndataScanner::ObspBind(ClientContext &context, TableFunctionBindInput &input,
                                                   vector<LogicalType> &return_types, vector<string> &names) {
+	fprintf(stderr, "[DEBUG] ObspBind\n");
 	// Validate input parameters
 	if (input.inputs.size() != 2) {
 		throw InvalidInputException("anndata_scan_obsp requires 2 parameters: file_path and matrix_name");
@@ -2091,6 +2117,8 @@ unique_ptr<FunctionData> AnndataScanner::ObspBind(ClientContext &context, TableF
 void AnndataScanner::ObspScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &bind_data = (AnndataBindData &)*data.bind_data;
 	auto &gstate = (AnndataGlobalState &)*data.global_state;
+	fprintf(stderr, "[DEBUG] ObspScan: multi=%d, row=%zu, nnz=%zu\n", bind_data.is_multi_file, gstate.current_row,
+	        bind_data.nnz);
 
 	if (bind_data.nnz == 0) {
 		return;
@@ -2170,6 +2198,7 @@ void AnndataScanner::ObspScan(ClientContext &context, TableFunctionInput &data, 
 // Table function implementations for varp (variable pairwise matrices)
 unique_ptr<FunctionData> AnndataScanner::VarpBind(ClientContext &context, TableFunctionBindInput &input,
                                                   vector<LogicalType> &return_types, vector<string> &names) {
+	fprintf(stderr, "[DEBUG] VarpBind\n");
 	// Validate input parameters
 	if (input.inputs.size() != 2) {
 		throw InvalidInputException("anndata_scan_varp requires 2 parameters: file_path and matrix_name");
@@ -2241,6 +2270,8 @@ unique_ptr<FunctionData> AnndataScanner::VarpBind(ClientContext &context, TableF
 void AnndataScanner::VarpScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &bind_data = (AnndataBindData &)*data.bind_data;
 	auto &gstate = (AnndataGlobalState &)*data.global_state;
+	fprintf(stderr, "[DEBUG] VarpScan: multi=%d, row=%zu, nnz=%zu\n", bind_data.is_multi_file, gstate.current_row,
+	        bind_data.nnz);
 
 	if (bind_data.nnz == 0) {
 		return;
