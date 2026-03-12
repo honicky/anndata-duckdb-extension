@@ -317,19 +317,29 @@ HarmonizedSchema SchemaHarmonizer::ComputeObsmVarmSchema(const vector<FileSchema
 }
 
 FileSchema SchemaHarmonizer::GetObsSchema(ClientContext &context, const string &file_path) {
+	fprintf(stderr, "[DEBUG] GetObsSchema: opening '%s'\n", file_path.c_str());
+	fflush(stderr);
 	FileSchema schema(file_path);
 	auto reader = CreateReader(context, file_path);
+	fprintf(stderr, "[DEBUG] GetObsSchema: reader created, reader=%p\n", (void *)reader.get());
+	fflush(stderr);
 
 	if (!reader->HasObs()) {
 		throw InvalidInputException("AnnData file '%s' has no /obs group", file_path.c_str());
 	}
+	fprintf(stderr, "[DEBUG] GetObsSchema: HasObs=true\n");
+	fflush(stderr);
 
 	auto columns = reader->GetObsColumns();
+	fprintf(stderr, "[DEBUG] GetObsSchema: GetObsColumns returned %zu columns\n", columns.size());
+	fflush(stderr);
 	for (const auto &col : columns) {
 		schema.columns.emplace_back(col.name, col.original_name, col.type);
 	}
 
 	schema.n_obs = reader->GetObsCount();
+	fprintf(stderr, "[DEBUG] GetObsSchema: n_obs=%zu, schema.columns=%zu\n", schema.n_obs, schema.columns.size());
+	fflush(stderr);
 	return schema;
 }
 

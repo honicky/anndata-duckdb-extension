@@ -260,9 +260,11 @@ unique_ptr<FunctionData> AnndataScanner::ObsBind(ClientContext &context, TableFu
 		vector<FileSchema> file_schemas;
 		for (const auto &file_path : glob_result.matched_files) {
 			fprintf(stderr, "[DEBUG] ObsBind: getting schema for '%s'\n", file_path.c_str());
+			fflush(stderr);
 			file_schemas.push_back(SchemaHarmonizer::GetObsSchema(context, file_path));
 			fprintf(stderr, "[DEBUG] ObsBind: schema ok, cols=%zu, n_obs=%zu\n", file_schemas.back().columns.size(),
 			        file_schemas.back().n_obs);
+			fflush(stderr);
 		}
 
 		// Compute harmonized schema
