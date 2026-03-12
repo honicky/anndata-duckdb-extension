@@ -13,20 +13,20 @@ namespace duckdb {
 enum class SchemaMode { INTERSECTION, UNION };
 
 // Information about a single column
-struct ColumnInfo {
+struct AnndataColumnInfo {
 	string name;
 	string original_name; // HDF5 name (for mangled names)
 	LogicalType type;
 
-	ColumnInfo() = default;
-	ColumnInfo(const string &n, const string &orig, LogicalType t) : name(n), original_name(orig), type(t) {
+	AnndataColumnInfo() = default;
+	AnndataColumnInfo(const string &n, const string &orig, LogicalType t) : name(n), original_name(orig), type(t) {
 	}
 };
 
 // Schema information for a single file
 struct FileSchema {
 	string file_path;
-	vector<ColumnInfo> columns;
+	vector<AnndataColumnInfo> columns;
 
 	// For X/layers: var information
 	idx_t n_obs = 0;
@@ -45,7 +45,7 @@ struct FileSchema {
 // Result of schema harmonization
 struct HarmonizedSchema {
 	// The final schema to use
-	vector<ColumnInfo> columns;
+	vector<AnndataColumnInfo> columns;
 
 	// Per-file column mappings: for each file, maps harmonized column index -> file column index
 	// -1 means the column doesn't exist in that file (union mode only)

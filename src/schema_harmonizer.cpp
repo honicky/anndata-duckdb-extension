@@ -62,9 +62,9 @@ HarmonizedSchema SchemaHarmonizer::ComputeObsVarSchema(const vector<FileSchema> 
 	}
 
 	// Build column name -> info map for each file
-	vector<unordered_map<string, pair<idx_t, ColumnInfo>>> file_column_maps;
+	vector<unordered_map<string, pair<idx_t, AnndataColumnInfo>>> file_column_maps;
 	for (const auto &fs : file_schemas) {
-		unordered_map<string, pair<idx_t, ColumnInfo>> col_map;
+		unordered_map<string, pair<idx_t, AnndataColumnInfo>> col_map;
 		for (idx_t i = 0; i < fs.columns.size(); i++) {
 			col_map[fs.columns[i].name] = {i, fs.columns[i]};
 		}
@@ -116,7 +116,7 @@ HarmonizedSchema SchemaHarmonizer::ComputeObsVarSchema(const vector<FileSchema> 
 		}
 	} else {
 		// Union mode - include all columns from all files
-		unordered_map<string, ColumnInfo> all_columns;
+		unordered_map<string, AnndataColumnInfo> all_columns;
 		vector<string> column_order; // Preserve order
 
 		for (const auto &fs : file_schemas) {
@@ -317,35 +317,19 @@ HarmonizedSchema SchemaHarmonizer::ComputeObsmVarmSchema(const vector<FileSchema
 }
 
 FileSchema SchemaHarmonizer::GetObsSchema(ClientContext &context, const string &file_path) {
-	fprintf(stderr, "[DEBUG] GetObsSchema: opening '%s'\n", file_path.c_str());
-	fflush(stderr);
 	FileSchema schema(file_path);
 	auto reader = CreateReader(context, file_path);
-	fprintf(stderr, "[DEBUG] GetObsSchema: reader created, reader=%p\n", (void *)reader.get());
-	fflush(stderr);
 
 	if (!reader->HasObs()) {
 		throw InvalidInputException("AnnData file '%s' has no /obs group", file_path.c_str());
 	}
-	fprintf(stderr, "[DEBUG] GetObsSchema: HasObs=true\n");
-	fflush(stderr);
 
 	auto columns = reader->GetObsColumns();
-	fprintf(stderr, "[DEBUG] GetObsSchema: GetObsColumns returned %zu columns\n", columns.size());
-	fflush(stderr);
-	for (idx_t i = 0; i < columns.size(); i++) {
-		fprintf(stderr, "[DEBUG] GetObsSchema: col[%zu] name='%s' orig='%s' type=%s\n", i, columns[i].name.c_str(),
-		        columns[i].original_name.c_str(), columns[i].type.ToString().c_str());
-		fflush(stderr);
-		schema.columns.emplace_back(columns[i].name, columns[i].original_name, columns[i].type);
-		fprintf(stderr, "[DEBUG] GetObsSchema: after emplace_back, schema.columns.size()=%zu\n",
-		        schema.columns.size());
-		fflush(stderr);
+	for (const auto &col : columns) {
+		schema.columns.emplace_back(col.name, col.original_name, col.type);
 	}
 
 	schema.n_obs = reader->GetObsCount();
-	fprintf(stderr, "[DEBUG] GetObsSchema: n_obs=%zu, schema.columns=%zu\n", schema.n_obs, schema.columns.size());
-	fflush(stderr);
 	return schema;
 }
 
