@@ -222,6 +222,8 @@ unique_ptr<FunctionData> AnndataScanner::ObsBind(ClientContext &context, TableFu
 		fprintf(stderr, "[DEBUG] ObsBind: file valid\n");
 	}
 
+	fprintf(stderr, "[DEBUG] ObsBind: creating bind_data, num_files=%zu, is_pattern=%d\n",
+	        glob_result.matched_files.size(), glob_result.is_pattern);
 	auto bind_data = make_uniq<AnndataBindData>(glob_result.matched_files, file_pattern);
 	bind_data->schema_mode = schema_mode;
 
@@ -251,16 +253,23 @@ unique_ptr<FunctionData> AnndataScanner::ObsBind(ClientContext &context, TableFu
 		bind_data->column_types = return_types;
 	} else {
 		// Multi-file mode
+		fprintf(stderr, "[DEBUG] ObsBind: entering multi-file mode\n");
 		bind_data->is_multi_file = true;
 
 		// Collect schemas from all files
 		vector<FileSchema> file_schemas;
 		for (const auto &file_path : glob_result.matched_files) {
+			fprintf(stderr, "[DEBUG] ObsBind: getting schema for '%s'\n", file_path.c_str());
 			file_schemas.push_back(SchemaHarmonizer::GetObsSchema(context, file_path));
+			fprintf(stderr, "[DEBUG] ObsBind: schema ok, cols=%zu, n_obs=%zu\n", file_schemas.back().columns.size(),
+			        file_schemas.back().n_obs);
 		}
 
 		// Compute harmonized schema
+		fprintf(stderr, "[DEBUG] ObsBind: computing harmonized schema\n");
 		bind_data->harmonized_schema = SchemaHarmonizer::ComputeObsVarSchema(file_schemas, schema_mode);
+		fprintf(stderr, "[DEBUG] ObsBind: harmonized schema ok, cols=%zu, total_rows=%zu\n",
+		        bind_data->harmonized_schema.columns.size(), bind_data->harmonized_schema.total_row_count);
 
 		// Add _file_name column first
 		names.push_back("_file_name");
