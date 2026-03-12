@@ -258,12 +258,16 @@ unique_ptr<FunctionData> AnndataScanner::ObsBind(ClientContext &context, TableFu
 
 		// Collect schemas from all files
 		vector<FileSchema> file_schemas;
-		for (const auto &file_path : glob_result.matched_files) {
-			fprintf(stderr, "[DEBUG] ObsBind: getting schema for '%s'\n", file_path.c_str());
+		for (idx_t fi = 0; fi < glob_result.matched_files.size(); fi++) {
+			const auto &file_path = glob_result.matched_files[fi];
+			fprintf(stderr, "[DEBUG] ObsBind: getting schema for file[%zu]='%s'\n", fi, file_path.c_str());
 			fflush(stderr);
-			file_schemas.push_back(SchemaHarmonizer::GetObsSchema(context, file_path));
-			fprintf(stderr, "[DEBUG] ObsBind: schema ok, cols=%zu, n_obs=%zu\n", file_schemas.back().columns.size(),
-			        file_schemas.back().n_obs);
+			auto schema = SchemaHarmonizer::GetObsSchema(context, file_path);
+			fprintf(stderr, "[DEBUG] ObsBind: GetObsSchema returned, cols=%zu, n_obs=%zu\n", schema.columns.size(),
+			        schema.n_obs);
+			fflush(stderr);
+			file_schemas.push_back(std::move(schema));
+			fprintf(stderr, "[DEBUG] ObsBind: pushed to file_schemas, total=%zu\n", file_schemas.size());
 			fflush(stderr);
 		}
 

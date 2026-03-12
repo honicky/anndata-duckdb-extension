@@ -333,8 +333,14 @@ FileSchema SchemaHarmonizer::GetObsSchema(ClientContext &context, const string &
 	auto columns = reader->GetObsColumns();
 	fprintf(stderr, "[DEBUG] GetObsSchema: GetObsColumns returned %zu columns\n", columns.size());
 	fflush(stderr);
-	for (const auto &col : columns) {
-		schema.columns.emplace_back(col.name, col.original_name, col.type);
+	for (idx_t i = 0; i < columns.size(); i++) {
+		fprintf(stderr, "[DEBUG] GetObsSchema: col[%zu] name='%s' orig='%s' type=%s\n", i, columns[i].name.c_str(),
+		        columns[i].original_name.c_str(), columns[i].type.ToString().c_str());
+		fflush(stderr);
+		schema.columns.emplace_back(columns[i].name, columns[i].original_name, columns[i].type);
+		fprintf(stderr, "[DEBUG] GetObsSchema: after emplace_back, schema.columns.size()=%zu\n",
+		        schema.columns.size());
+		fflush(stderr);
 	}
 
 	schema.n_obs = reader->GetObsCount();
