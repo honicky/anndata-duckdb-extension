@@ -426,8 +426,8 @@ static unique_ptr<TransactionManager> AnndataStorageTransactionManager(optional_
 // Factory Function
 //===--------------------------------------------------------------------===//
 
-unique_ptr<StorageExtension> CreateAnndataStorageExtension() {
-	auto result = make_uniq<StorageExtension>();
+shared_ptr<StorageExtension> CreateAnndataStorageExtension() {
+	auto result = make_shared_ptr<StorageExtension>();
 	result->attach = AnndataStorageAttach;
 	result->create_transaction_manager = AnndataStorageTransactionManager;
 	return result;
