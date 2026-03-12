@@ -4,7 +4,11 @@
 
 require anndata
 
-require httpfs
+statement ok
+INSTALL httpfs;
+
+statement ok
+LOAD httpfs;
 
 # These tests require an HTTP server with test data
 # Set environment variable before running:
@@ -23,7 +27,7 @@ ATTACH '${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad' AS httpdata (TYPE
 query I
 SELECT COUNT(*) FROM (SELECT * FROM httpdata.info);
 ----
-11
+15
 
 # =============================================================================
 # Test 2: obs table (cell metadata)
@@ -203,7 +207,7 @@ DETACH httpdata;
 query I
 SELECT COUNT(*) FROM anndata_info('${ANNDATA_TEST_HTTP_ENDPOINT}/test_comprehensive.h5ad');
 ----
-11
+15
 
 # =============================================================================
 # Test 12: Function interface - anndata_scan_obs

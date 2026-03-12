@@ -4,7 +4,11 @@
 
 require anndata
 
-require httpfs
+statement ok
+INSTALL httpfs;
+
+statement ok
+LOAD httpfs;
 
 # These tests require MinIO to be running with test data
 # Set environment variables before running:
@@ -40,7 +44,7 @@ ATTACH 's3://data/test_comprehensive.h5ad' AS s3data (TYPE ANNDATA);
 query I
 SELECT COUNT(*) FROM (SELECT * FROM s3data.info);
 ----
-11
+15
 
 # =============================================================================
 # Test 2: obs table (cell metadata)
@@ -220,7 +224,7 @@ DETACH s3data;
 query I
 SELECT COUNT(*) FROM anndata_info('s3://data/test_comprehensive.h5ad');
 ----
-11
+15
 
 # =============================================================================
 # Test 12: Function interface - anndata_scan_obs
