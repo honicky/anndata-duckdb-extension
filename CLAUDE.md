@@ -155,3 +155,83 @@ git commit -m "chore: update extension-ci-tools to <version>"
 ```
 
 **Why both?** The submodule provides Makefile targets for local development, while the CI workflow pulls extension-ci-tools directly from GitHub for builds.
+
+## Upgrading DuckDB Version
+
+When upgrading DuckDB to a new version (e.g., v1.4.4 → v1.5.0), ALL of these must be updated together:
+
+### 1. Update submodules
+
+```bash
+# Update DuckDB submodule
+cd duckdb
+git fetch origin tag vX.Y.Z
+git checkout vX.Y.Z
+cd ..
+
+# Update extension-ci-tools submodule to latest main
+cd extension-ci-tools
+git fetch origin
+git checkout origin/main
+cd ..
+
+git add duckdb extension-ci-tools
+```
+
+### 2. Update CI workflow
+
+In `.github/workflows/MainDistributionPipeline.yml`, update ALL occurrences of the old version to the new version. This includes:
+- `duckdb_version:` in build and code-quality jobs
+- Artifact names (e.g., `anndata-vX.Y.Z-extension-*`)
+- DuckDB CLI download URL
+- Extension directory paths (`~/.duckdb/extensions/vX.Y.Z/`)
+- `git checkout vX.Y.Z` in the deploy job
+
+### 3. Fix API breaking changes
+
+DuckDB frequently changes internal C++ APIs between versions. Common breaking changes to watch for:
+- **Storage extension registration** (changed in v1.5.0): Use `StorageExtension::Register(config, name, extension)` instead of `config.storage_extensions[name] = extension`. The factory function must return `shared_ptr<StorageExtension>` instead of `unique_ptr`.
+- **Function signatures**: Check `attach_function_t`, `create_transaction_manager_t` typedefs in `duckdb/storage/storage_extension.hpp`
+- **Catalog APIs**: `DuckCatalog`, `DefaultGenerator`, `CatalogTransaction` methods may change
+
+### 4. Build and verify
+
+```bash
+# System dependencies required (not provided by vcpkg in local dev):
+# apt-get install -y libhdf5-dev libcurl4-openssl-dev libssl-dev
+
+# Clean build (required after submodule changes):
+rm -rf build/release
+
+# Configure
+mkdir -p build/release
+cmake -DEXTENSION_STATIC_BUILD=1 \
+  -DDUCKDB_EXTENSION_CONFIGS="$(pwd)/extension_config.cmake" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -S ./duckdb/ -B build/release
+
+# Build
+cmake --build build/release --parallel $(nproc)
+
+# Quick smoke test
+./build/release/duckdb -c "SELECT anndata_version();"
+
+# Run a test
+build/release/test/unittest "test/sql/anndata_basic.test" --test-dir .
+```
+
+### 5. Run quality checks
+
+```bash
+uv run make format      # Check formatting
+uv run make format-fix  # Fix formatting if needed
+uv run make tidy-check  # Run clang-tidy
+```
+
+### Build tips
+
+- The `uv run make` command works but the initial cmake + parallel build approach above is faster for iterating on compile errors since it avoids re-running cmake each time.
+- If cmake can't find HDF5, install system packages: `apt-get install -y libhdf5-dev libcurl4-openssl-dev libssl-dev`
+- The vcpkg.json defines dependencies for CI builds; local builds use system-installed libraries.
+- The tidy-check build skips HDF5 (`DUCKDB_NO_HDF5` define) so it doesn't need HDF5 installed.
+- After fixing compile errors, you only need to re-run the `cmake --build` step, not the full cmake configure.
