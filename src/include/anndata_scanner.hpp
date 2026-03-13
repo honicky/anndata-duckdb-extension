@@ -4,6 +4,7 @@
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "h5_reader_multithreaded.hpp"
+#include "schema_harmonizer.hpp"
 #include <string>
 #include <memory>
 
@@ -91,6 +92,13 @@ struct AnndataBindData : public TableFunctionData {
 	vector<string> original_names; // Original HDF5 dataset names
 	vector<LogicalType> column_types;
 
+	// Multi-file support
+	bool is_multi_file = false;
+	vector<string> file_paths; // All files to scan (from glob expansion)
+	string original_pattern;   // Original glob pattern
+	SchemaMode schema_mode = SchemaMode::INTERSECTION;
+	HarmonizedSchema harmonized_schema;
+
 	// For X matrix scanning
 	bool is_x_scan = false;
 	idx_t n_obs = 0;
@@ -130,6 +138,12 @@ struct AnndataBindData : public TableFunctionData {
 
 	AnndataBindData(const string &path) : file_path(path), row_count(0), column_count(0) {
 	}
+
+	// Constructor for multi-file
+	AnndataBindData(const vector<string> &paths, const string &pattern)
+	    : file_path(paths.empty() ? "" : paths[0]), row_count(0), column_count(0), is_multi_file(paths.size() > 1),
+	      file_paths(paths), original_pattern(pattern) {
+	}
 };
 
 // Global scan state
@@ -138,12 +152,27 @@ struct AnndataGlobalState : public GlobalTableFunctionState {
 	unique_ptr<H5ReaderMultithreaded> h5_reader;
 	vector<column_t> column_ids; // Column indices requested by DuckDB (for projection pushdown)
 
+	// Multi-file state
+	idx_t current_file_idx = 0;
+	idx_t current_row_in_file = 0;
+	string current_file_name;
+	vector<int> current_column_mapping;    // Maps result columns to file columns
+	vector<string> current_original_names; // Per-file original names for each harmonized column
+	vector<idx_t> current_var_mapping;     // Maps result var indices to file var indices (for X/layers)
+
 	AnndataGlobalState() : current_row(0) {
 	}
 
 	idx_t MaxThreads() const override {
 		return 1; // Single-threaded for now
 	}
+
+	// Advance to the next file in multi-file mode
+	// Returns true if there's a next file, false if all files are exhausted
+	bool AdvanceToNextFile(ClientContext &context, const AnndataBindData &bind_data);
+
+	// Open the current file and set up mappings
+	void OpenCurrentFile(ClientContext &context, const AnndataBindData &bind_data);
 };
 
 // Local scan state

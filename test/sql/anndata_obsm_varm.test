@@ -203,13 +203,13 @@ WHERE module_assignment_0 = 2;
 statement error
 SELECT * FROM anndata_scan_obsm('test/data/test_obsm_varm_types.h5ad', 'nonexistent');
 ----
-obsm matrix 'nonexistent' not found in file
+Matrix 'obsm/nonexistent' not found in file
 
 # Error test: non-existent varm matrix
 statement error
 SELECT * FROM anndata_scan_varm('test/data/test_obsm_varm_types.h5ad', 'nonexistent');
 ----
-varm matrix 'nonexistent' not found in file
+Matrix 'varm/nonexistent' not found in file
 
 # Error test: missing matrix name parameter
 statement error

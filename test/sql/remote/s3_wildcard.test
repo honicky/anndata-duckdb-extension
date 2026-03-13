@@ -1,0 +1,221 @@
+# name: test/sql/remote/s3_wildcard.test
+# description: Test S3 wildcard query support for AnnData files using MinIO
+# group: [remote]
+
+require anndata
+
+require httpfs
+
+# These tests require MinIO to be running with test data
+# Set environment variables before running:
+#   ANNDATA_TEST_S3_ENDPOINT=localhost:9000
+#   ANNDATA_TEST_S3_ACCESS_KEY=minioadmin
+#   ANNDATA_TEST_S3_SECRET_KEY=minioadmin
+#
+# Test files needed in MinIO bucket 'data':
+#   wildcard_sample1.h5ad
+#   wildcard_sample2.h5ad
+#   wildcard_sample3.h5ad
+
+require-env ANNDATA_TEST_S3_ENDPOINT
+
+require-env ANNDATA_TEST_S3_ACCESS_KEY
+
+require-env ANNDATA_TEST_S3_SECRET_KEY
+
+# Create S3 secret for MinIO
+statement ok
+CREATE SECRET minio_secret (
+    TYPE S3,
+    KEY_ID '${ANNDATA_TEST_S3_ACCESS_KEY}',
+    SECRET '${ANNDATA_TEST_S3_SECRET_KEY}',
+    ENDPOINT '${ANNDATA_TEST_S3_ENDPOINT}',
+    URL_STYLE 'path',
+    USE_SSL false
+);
+
+# =============================================================================
+# Test 1: anndata_scan_obs with S3 wildcards - intersection mode
+# =============================================================================
+
+# Total observations across 3 files (20 each)
+query I
+SELECT COUNT(*) FROM anndata_scan_obs('s3://data/wildcard_sample*.h5ad');
+----
+60
+
+# Check _file_name column is present
+query I
+SELECT COUNT(DISTINCT _file_name) FROM anndata_scan_obs('s3://data/wildcard_sample*.h5ad');
+----
+3
+
+# Intersection mode: shared columns should be queryable
+query I
+SELECT COUNT(*) FROM anndata_scan_obs('s3://data/wildcard_sample*.h5ad')
+WHERE cell_type IS NOT NULL AND n_counts IS NOT NULL AND sample_id IS NOT NULL;
+----
+60
+
+# =============================================================================
+# Test 2: anndata_scan_obs with S3 wildcards - union mode
+# =============================================================================
+
+query I
+SELECT COUNT(*) FROM anndata_scan_obs('s3://data/wildcard_sample*.h5ad', schema_mode := 'union')
+WHERE metric_alpha IS NOT NULL;
+----
+20
+
+# =============================================================================
+# Test 3: anndata_scan_var with S3 wildcards
+# =============================================================================
+
+# All vars returned from all files = 12 rows
+query I
+SELECT COUNT(*) FROM anndata_scan_var('s3://data/wildcard_sample*.h5ad');
+----
+12
+
+# 6 distinct genes across 3 files
+query I
+SELECT COUNT(DISTINCT _index) FROM anndata_scan_var('s3://data/wildcard_sample*.h5ad');
+----
+6
+
+# =============================================================================
+# Test 4: anndata_scan_x with S3 wildcards - intersection mode
+# =============================================================================
+
+query I
+SELECT COUNT(*) FROM anndata_scan_x('s3://data/wildcard_sample*.h5ad');
+----
+60
+
+# Intersection genes should be queryable
+query I
+SELECT COUNT(*) FROM anndata_scan_x('s3://data/wildcard_sample*.h5ad')
+WHERE Gene_C IS NOT NULL AND Gene_D IS NOT NULL;
+----
+60
+
+# =============================================================================
+# Test 5: anndata_scan_x with S3 wildcards - union mode
+# =============================================================================
+
+# Gene_A only in sample1 (20 non-null, 40 null)
+query I
+SELECT COUNT(*) FROM anndata_scan_x('s3://data/wildcard_sample*.h5ad', schema_mode := 'union')
+WHERE Gene_A IS NOT NULL;
+----
+20
+
+# =============================================================================
+# Test 6: anndata_scan_layers with S3 wildcards
+# =============================================================================
+
+query I
+SELECT COUNT(*) FROM anndata_scan_layers('s3://data/wildcard_sample*.h5ad', 'raw');
+----
+60
+
+# Intersection genes should be queryable
+query I
+SELECT COUNT(*) FROM anndata_scan_layers('s3://data/wildcard_sample*.h5ad', 'raw')
+WHERE Gene_C IS NOT NULL;
+----
+60
+
+# Union mode - Gene_A only in sample1
+query I
+SELECT COUNT(*) FROM anndata_scan_layers('s3://data/wildcard_sample*.h5ad', 'raw', schema_mode := 'union')
+WHERE Gene_A IS NOT NULL;
+----
+20
+
+# =============================================================================
+# Test 7: anndata_scan_obsm with S3 wildcards
+# =============================================================================
+
+query I
+SELECT COUNT(*) FROM anndata_scan_obsm('s3://data/wildcard_sample*.h5ad', 'X_pca');
+----
+60
+
+# X_pca_10 should exist in intersection (min 11 dims)
+query I
+SELECT COUNT(*) FROM anndata_scan_obsm('s3://data/wildcard_sample*.h5ad', 'X_pca')
+WHERE X_pca_10 IS NOT NULL;
+----
+60
+
+# Union mode - X_pca_12 only in sample3 (20 non-null)
+query I
+SELECT COUNT(*) FROM anndata_scan_obsm('s3://data/wildcard_sample*.h5ad', 'X_pca', schema_mode := 'union')
+WHERE X_pca_12 IS NOT NULL;
+----
+20
+
+# X_umap (same dims in all files)
+query I
+SELECT COUNT(*) FROM anndata_scan_obsm('s3://data/wildcard_sample*.h5ad', 'X_umap');
+----
+60
+
+# =============================================================================
+# Test 8: anndata_scan_varm with S3 wildcards
+# =============================================================================
+
+query I
+SELECT COUNT(*) FROM anndata_scan_varm('s3://data/wildcard_sample*.h5ad', 'loadings');
+----
+12
+
+# =============================================================================
+# Test 9: anndata_scan_obsp with S3 wildcards (file-scoped pairs)
+# =============================================================================
+
+query I
+SELECT COUNT(*) > 0 FROM anndata_scan_obsp('s3://data/wildcard_sample*.h5ad', 'distances');
+----
+true
+
+query I
+SELECT COUNT(DISTINCT _file_name) FROM anndata_scan_obsp('s3://data/wildcard_sample*.h5ad', 'distances');
+----
+3
+
+# =============================================================================
+# Test 10: anndata_scan_varp with S3 wildcards (file-scoped pairs)
+# =============================================================================
+
+query I
+SELECT COUNT(*) > 0 FROM anndata_scan_varp('s3://data/wildcard_sample*.h5ad', 'correlations');
+----
+true
+
+query I
+SELECT COUNT(DISTINCT _file_name) FROM anndata_scan_varp('s3://data/wildcard_sample*.h5ad', 'correlations');
+----
+3
+
+# =============================================================================
+# Test 11: Projection pushdown with S3 wildcards
+# =============================================================================
+
+# Select only specific genes - should use projection pushdown
+query I
+SELECT COUNT(*) FROM (
+    SELECT _file_name, obs_idx, Gene_C
+    FROM anndata_scan_x('s3://data/wildcard_sample*.h5ad')
+    WHERE obs_idx < 5
+);
+----
+15
+
+# =============================================================================
+# Cleanup
+# =============================================================================
+
+statement ok
+DROP SECRET minio_secret;

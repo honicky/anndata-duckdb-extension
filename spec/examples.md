@@ -315,11 +315,11 @@ WHERE o.pseudotime IS NOT NULL
 ORDER BY o.pseudotime;
 ```
 
-### 3. Multi-Sample Analysis
+### 3. Multi-Sample Analysis (Single File)
 
 ```sql
--- Compare expression across samples
-SELECT 
+-- Compare expression across samples within a single file
+SELECT
     o.sample_id,
     o.batch,
     m.var_id,
@@ -329,15 +329,15 @@ SELECT
 FROM pbmc.main m
 JOIN pbmc.obs o ON m.obs_id = o.obs_id
 WHERE m.var_id IN (
-    SELECT var_id FROM pbmc.var 
-    WHERE highly_variable = true 
+    SELECT var_id FROM pbmc.var
+    WHERE highly_variable = true
     LIMIT 100
 )
 GROUP BY o.sample_id, o.batch, m.var_id;
 
 -- Batch effect assessment
 WITH batch_stats AS (
-    SELECT 
+    SELECT
         batch,
         var_id,
         AVG(value) as batch_mean,
@@ -346,7 +346,7 @@ WITH batch_stats AS (
     JOIN pbmc.obs o ON m.obs_id = o.obs_id
     GROUP BY batch, var_id
 )
-SELECT 
+SELECT
     var_id,
     MAX(batch_mean) - MIN(batch_mean) as max_batch_difference,
     STDDEV(batch_mean) as batch_std
@@ -355,6 +355,91 @@ GROUP BY var_id
 HAVING COUNT(DISTINCT batch) > 1
 ORDER BY max_batch_difference DESC
 LIMIT 20;
+```
+
+## Multi-File Wildcard Queries
+
+### 1. Querying Across Multiple Files
+
+```sql
+-- Query obs metadata from all samples using a glob pattern
+-- Intersection mode (default): only columns common to ALL files
+SELECT _file_name, cell_type, COUNT(*) as n_cells
+FROM anndata_scan_obs('samples/*.h5ad')
+GROUP BY _file_name, cell_type
+ORDER BY _file_name, n_cells DESC;
+
+-- Union mode: all columns from all files, NULL where missing
+SELECT _file_name, cell_type, batch_id, treatment
+FROM anndata_scan_obs('samples/*.h5ad', schema_mode := 'union')
+LIMIT 100;
+```
+
+### 2. Cross-File Expression Analysis
+
+```sql
+-- Compare gene expression across multiple files
+-- Only genes present in ALL files are included (intersection mode)
+SELECT _file_name,
+       AVG(Gene_A) as mean_Gene_A,
+       AVG(Gene_B) as mean_Gene_B
+FROM anndata_scan_x('experiment_*.h5ad')
+GROUP BY _file_name;
+
+-- Union mode: include all genes, NULL for files missing a gene
+SELECT _file_name, obs_idx, Gene_A, Gene_B, Gene_C
+FROM anndata_scan_x('experiment_*.h5ad', schema_mode := 'union')
+WHERE obs_idx < 10;
+```
+
+### 3. Multi-File Dimensional Reductions
+
+```sql
+-- Combine PCA coordinates from multiple files
+-- Intersection: uses minimum dimensions across files
+SELECT _file_name, obs_idx, X_pca_0, X_pca_1, X_pca_2
+FROM anndata_scan_obsm('samples/*.h5ad', 'X_pca')
+LIMIT 100;
+
+-- Union: uses maximum dimensions, NULL for shorter files
+SELECT _file_name, obs_idx, X_pca_0, X_pca_1, X_pca_12
+FROM anndata_scan_obsm('samples/*.h5ad', 'X_pca', schema_mode := 'union')
+LIMIT 100;
+```
+
+### 4. Multi-File S3 Queries
+
+```sql
+-- Query across multiple h5ad files on S3
+CREATE SECRET my_secret (
+    TYPE S3,
+    KEY_ID 'your-key-id',
+    SECRET 'your-secret-key',
+    REGION 'us-west-2'
+);
+
+SELECT _file_name, cell_type, COUNT(*) as n_cells
+FROM anndata_scan_obs('s3://my-bucket/project/*.h5ad')
+GROUP BY _file_name, cell_type;
+
+-- Expression data from S3 with projection pushdown
+SELECT _file_name, obs_idx, Gene_A, Gene_B
+FROM anndata_scan_x('s3://my-bucket/project/*.h5ad')
+WHERE obs_idx < 100;
+```
+
+### 5. Combining obs and X Across Files
+
+```sql
+-- Join cell metadata with expression data across multiple files
+SELECT o._file_name, o.cell_type,
+       AVG(x.Gene_C) as mean_Gene_C,
+       AVG(x.Gene_D) as mean_Gene_D
+FROM anndata_scan_obs('samples/*.h5ad') o
+JOIN anndata_scan_x('samples/*.h5ad') x
+  ON o.obs_idx = x.obs_idx AND o._file_name = x._file_name
+GROUP BY o._file_name, o.cell_type
+ORDER BY o._file_name, o.cell_type;
 ```
 
 ### 4. Gene Set Analysis
