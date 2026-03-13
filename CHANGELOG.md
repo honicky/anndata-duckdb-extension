@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-03-13
+
+### Fixed
+- Fix deploy pipeline: v0.14.0 deploy failed because `linux_amd64_musl` artifact was missing (build added after tag was created)
+
 ## [0.14.0] - 2026-03-12
 
 ### Added
