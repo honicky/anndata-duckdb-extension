@@ -39,7 +39,7 @@ private:
 };
 
 //! Create the AnnData storage extension
-unique_ptr<StorageExtension> CreateAnndataStorageExtension();
+shared_ptr<StorageExtension> CreateAnndataStorageExtension();
 
 //! Discover available tables from an AnnData file
 //! If existing_reader is provided, it will be used instead of creating a new one

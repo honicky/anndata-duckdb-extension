@@ -101,10 +101,22 @@ bool AnndataScanner::IsAnndataFile(const string &path) {
 
 	// Try to open as HDF5 and validate it's an AnnData file
 	// This allows files without .h5ad extension to work (e.g., UUID-named files)
+	// For remote files, let errors propagate so callers see the real error
+	// (e.g., 403 Forbidden) instead of a misleading "not a valid AnnData file"
 	try {
 		H5ReaderMultithreaded reader(path);
 		return reader.IsValidAnnData();
+	} catch (const IOException &e) {
+		// IOException from H5FileCache::Open contains specific remote errors
+		// (HTTP 403, 404, timeout, etc.) - let these propagate for remote files
+		if (is_remote) {
+			throw;
+		}
+		return false;
 	} catch (...) {
+		if (is_remote) {
+			throw;
+		}
 		return false;
 	}
 }
@@ -124,7 +136,8 @@ bool AnndataScanner::IsAnndataFile(ClientContext &context, const string &path) {
 	}
 
 	// Try to open as HDF5 and validate it's an AnnData file
-	// For S3 URLs, get credentials from DuckDB's secret manager
+	// For S3 URLs, get credentials from DuckDB's secret manager or global settings
+	// For remote files, let errors propagate so callers see the real error
 	try {
 		H5FileCache::RemoteConfig config;
 		if (GetS3ConfigFromSecrets(context, path, config)) {
@@ -133,7 +146,15 @@ bool AnndataScanner::IsAnndataFile(ClientContext &context, const string &path) {
 		}
 		H5ReaderMultithreaded reader(path);
 		return reader.IsValidAnnData();
+	} catch (const IOException &e) {
+		if (is_remote) {
+			throw;
+		}
+		return false;
 	} catch (...) {
+		if (is_remote) {
+			throw;
+		}
 		return false;
 	}
 }

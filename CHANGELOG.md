@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.14.0] - 2026-02-28
+## [0.14.0] - 2026-03-12
 
 ### Added
 - **Multi-file wildcard query support** for all `anndata_scan_*` functions using glob patterns (e.g., `'data/*.h5ad'`, `'s3://bucket/*.h5ad'`)
@@ -19,6 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `schema_mode` named parameter for obs, var, X, layers, obsm, and varm scan functions
 - File-scoped pair concatenation for obsp/varp multi-file queries
 - Test data generator (`test/python/create_test_wildcard.py`) and comprehensive wildcard test suites for local and S3
+
+### Fixed
+- Windows SIGSEGV caused by ODR violation: renamed internal `ColumnInfo` to `AnndataColumnInfo` to avoid conflict with DuckDB's `duckdb::ColumnInfo`
+- Windows path normalization for glob results (backslash to forward slash for HDF5 compatibility)
+- Skip `anndata_union.test` on Windows where HDF5 is not built with thread-safety
+
+## [0.13.5] - 2026-03-12
+
+### Fixed
+- S3 errors now show the real error message (e.g., "Access denied", "File not found") instead of misleading "not a valid AnnData file"
+- Credentials set via `load_aws_credentials()` or `SET s3_access_key_id` now work with ATTACH and `anndata_scan_*()` functions
+- Remote test files now use `INSTALL/LOAD httpfs` instead of `require httpfs` so they run in the unittest runner
+- Updated info table row counts in S3 and HTTP tests to match current output (15 properties)
+
+## [0.13.4] - 2026-02-05
 
 ### Fixed
 - Duplicate variable name warning no longer prints twice during DESCRIBE operations
