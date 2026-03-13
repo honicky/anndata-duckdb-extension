@@ -29,7 +29,7 @@ vector<string> GlobHandler::ExpandLocalGlob(ClientContext &context, const string
 	vector<string> result;
 
 	// Use DuckDB's built-in glob functionality
-	auto matches = fs.GlobFiles(pattern, context);
+	auto matches = fs.GlobFiles(pattern);
 	for (const auto &match : matches) {
 		// Normalize backslashes to forward slashes for cross-platform HDF5 compatibility
 		string normalized = match.path;
@@ -73,7 +73,7 @@ vector<string> GlobHandler::ExpandS3Glob(ClientContext &context, const string &p
 	vector<string> result;
 
 	try {
-		auto matches = fs.GlobFiles(pattern, context);
+		auto matches = fs.GlobFiles(pattern);
 		for (const auto &match : matches) {
 			result.push_back(match.path);
 		}
