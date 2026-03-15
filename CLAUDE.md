@@ -259,3 +259,28 @@ DuckDB frequently changes internal C++ APIs between versions. Common breaking ch
 ### 4. Clean build, test, and run quality checks
 
 A clean build is required after submodule changes (`rm -rf build/release`). Then follow the steps in "Building from a Clean Environment" and "Code Quality Checks Before Committing" above.
+
+## DuckDB Next Compatibility
+
+The CI includes a **DuckDB Next** compatibility system to catch breaking changes before new DuckDB releases:
+
+### How it works
+
+1. **Scheduled workflow** (`DuckDBNextBuild.yml`): Runs weekly (Monday 06:00 UTC) and builds+tests against DuckDB `main`. Automatically opens a GitHub issue if the build fails and closes it when fixed.
+2. **Main CI next-build job**: Every PR also runs a non-blocking `duckdb-next-build` job against DuckDB `main` (with `continue-on-error: true`). Failures are visible but don't block merging.
+3. **Release check script**: `scripts/check-duckdb-release.sh` compares the current DuckDB version in CI against the latest release. Use `--update` flag to print upgrade commands.
+
+### Responding to a next-build failure
+
+1. Check the [workflow logs](../../actions/workflows/DuckDBNextBuild.yml) for the specific error
+2. Create a branch to fix compatibility issues
+3. Common fixes: API signature changes, new required methods, renamed types
+4. Once fixed, update `ref_next` in `community-extension/description.yml` if the extension is published as a community extension
+5. The scheduled workflow will auto-close the tracking issue when the fix lands
+
+### Checking for new releases locally
+
+```bash
+./scripts/check-duckdb-release.sh           # Check current vs latest
+./scripts/check-duckdb-release.sh --update   # Print upgrade commands
+```

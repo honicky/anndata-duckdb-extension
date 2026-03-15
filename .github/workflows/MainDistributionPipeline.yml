@@ -22,6 +22,17 @@ jobs:
       extension_name: anndata
       opt_in_archs: 'linux_amd64_musl'
 
+  # Non-blocking build against DuckDB main to catch upcoming breaking changes early
+  duckdb-next-build:
+    name: Build against DuckDB next
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
+    with:
+      duckdb_version: main
+      ci_tools_version: main
+      extension_name: anndata
+    # This job is informational - failures don't block merging
+    continue-on-error: true
+
   code-quality-check:
     name: Code Quality Check
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main

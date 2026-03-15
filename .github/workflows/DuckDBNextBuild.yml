@@ -1,0 +1,194 @@
+#
+# Scheduled workflow to build and test against DuckDB's main branch (upcoming release).
+# This catches breaking API changes early, giving us lead time to fix compatibility
+# before the next DuckDB release ships.
+#
+# See: https://duckdb.org/docs/extensions/community_extensions.html
+# The ref_next mechanism in community-extensions lets us publish a commit compatible
+# with the upcoming DuckDB while maintaining a stable ref for the current release.
+#
+name: DuckDB Next Compatibility Check
+
+on:
+  # Run weekly on Monday at 06:00 UTC
+  schedule:
+    - cron: '0 6 * * 1'
+  # Also allow manual triggering for on-demand checks
+  workflow_dispatch:
+    inputs:
+      duckdb_ref:
+        description: 'DuckDB ref to build against (default: main)'
+        required: false
+        default: 'main'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Check if there's a new DuckDB release we haven't updated to yet
+  check-latest-release:
+    name: Check Latest DuckDB Release
+    runs-on: ubuntu-latest
+    outputs:
+      current_version: ${{ steps.check.outputs.current_version }}
+      latest_version: ${{ steps.check.outputs.latest_version }}
+      needs_update: ${{ steps.check.outputs.needs_update }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for new DuckDB release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Extract the DuckDB version we currently build against from the main CI workflow
+          CURRENT_VERSION=$(grep -m1 'duckdb_version:' .github/workflows/MainDistributionPipeline.yml | sed 's/.*duckdb_version: *//' | tr -d "'\"")
+          echo "current_version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+          echo "Currently building against: ${CURRENT_VERSION}"
+
+          # Get the latest stable DuckDB release from GitHub
+          LATEST_VERSION=$(gh api repos/duckdb/duckdb/releases/latest --jq '.tag_name')
+          echo "latest_version=${LATEST_VERSION}" >> $GITHUB_OUTPUT
+          echo "Latest DuckDB release: ${LATEST_VERSION}"
+
+          if [ "${CURRENT_VERSION}" != "${LATEST_VERSION}" ]; then
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "::warning::DuckDB update available: ${CURRENT_VERSION} -> ${LATEST_VERSION}"
+          else
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "Already on latest DuckDB release"
+          fi
+
+  # Build against DuckDB main branch (upcoming release)
+  duckdb-next-build:
+    name: Build against DuckDB main
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
+    with:
+      duckdb_version: ${{ inputs.duckdb_ref || 'main' }}
+      ci_tools_version: main
+      extension_name: anndata
+
+  # Run our test suite against the DuckDB-next build
+  duckdb-next-test:
+    name: Test against DuckDB main
+    needs: duckdb-next-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'recursive'
+
+      - name: Install HDF5
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libhdf5-dev
+
+      - name: Build DuckDB from main with extension
+        run: |
+          cd duckdb
+          git fetch origin main
+          git checkout ${{ inputs.duckdb_ref || 'main' }}
+          cd ..
+
+          # Clean build against DuckDB main
+          rm -rf build/release
+          mkdir -p build/release
+          cmake -DEXTENSION_STATIC_BUILD=1 \
+            -DDUCKDB_EXTENSION_CONFIGS="$(pwd)/extension_config.cmake" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -S ./duckdb/ -B build/release
+          cmake --build build/release --parallel $(nproc)
+
+      - name: Run extension tests
+        run: |
+          # Smoke test
+          ./build/release/duckdb -c "SELECT anndata_version();"
+
+          # Run all extension tests
+          build/release/test/unittest "test/*" --test-dir . || {
+            echo "::error::Extension tests failed against DuckDB main!"
+            exit 1
+          }
+
+  # Create an issue if the build or tests fail
+  report-failure:
+    name: Report Compatibility Issues
+    needs: [check-latest-release, duckdb-next-build, duckdb-next-test]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Create or update issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CURRENT_VERSION: ${{ needs.check-latest-release.outputs.current_version }}
+          LATEST_VERSION: ${{ needs.check-latest-release.outputs.latest_version }}
+        run: |
+          TITLE="DuckDB Next Compatibility: build/test failure against main"
+          # Check if an open issue already exists
+          EXISTING=$(gh issue list --state open --search "${TITLE}" --json number --jq '.[0].number' 2>/dev/null || echo "")
+
+          BODY="## DuckDB Next Compatibility Failure
+
+          The scheduled compatibility check found issues building or testing against DuckDB \`main\`.
+
+          - **Current stable version**: \`${CURRENT_VERSION}\`
+          - **Latest release**: \`${LATEST_VERSION}\`
+          - **Build target**: DuckDB \`main\` (upcoming release)
+          - **Workflow run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          ### Action Required
+          1. Check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for build/test errors
+          2. Fix any API breaking changes on a compatibility branch
+          3. Update \`ref_next\` in the community-extensions descriptor if applicable
+          4. Re-run this workflow to verify the fix
+
+          ### Common DuckDB Breaking Changes
+          - Storage extension registration API changes
+          - Function signature / typedef changes
+          - Catalog API changes
+          - Build system / CMake changes"
+
+          if [ -n "${EXISTING}" ]; then
+            gh issue comment "${EXISTING}" --body "${BODY}"
+            echo "Updated existing issue #${EXISTING}"
+          else
+            gh issue create --title "${TITLE}" --body "${BODY}" --label "duckdb-compat"
+            echo "Created new compatibility issue"
+          fi
+
+  # Notify on success if there's a new release available
+  report-success:
+    name: Report Status
+    needs: [check-latest-release, duckdb-next-build, duckdb-next-test]
+    if: success()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Report success
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NEEDS_UPDATE: ${{ needs.check-latest-release.outputs.needs_update }}
+          CURRENT_VERSION: ${{ needs.check-latest-release.outputs.current_version }}
+          LATEST_VERSION: ${{ needs.check-latest-release.outputs.latest_version }}
+        run: |
+          echo "Build and tests passed against DuckDB main!"
+
+          if [ "${NEEDS_UPDATE}" = "true" ]; then
+            echo "::notice::DuckDB ${LATEST_VERSION} is available (currently on ${CURRENT_VERSION}). Extension builds successfully against main."
+          fi
+
+          # Close any open compatibility issues since we're passing now
+          TITLE="DuckDB Next Compatibility: build/test failure against main"
+          EXISTING=$(gh issue list --state open --search "${TITLE}" --json number --jq '.[0].number' 2>/dev/null || echo "")
+          if [ -n "${EXISTING}" ]; then
+            gh issue comment "${EXISTING}" --body "Resolved: Extension now builds and tests successfully against DuckDB main."
+            gh issue close "${EXISTING}"
+            echo "Closed resolved issue #${EXISTING}"
+          fi
