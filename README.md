@@ -109,7 +109,7 @@ CREATE SECRET my_s3_secret (
     TYPE S3,
     PROVIDER CREDENTIAL_CHAIN,
     CHAIN 'config',
-    PROFILE_NAME 'my-profile',
+    PROFILE 'my-profile',
     REGION 'us-west-2'
 );
 
