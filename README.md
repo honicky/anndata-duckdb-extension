@@ -91,25 +91,42 @@ SELECT COUNT(*) FROM s3data.obs;
 
 #### S3 Files (Authenticated Access)
 
+The easiest way to authenticate is using your existing AWS profile or environment variables:
+
 ```sql
 -- Load the httpfs extension
 INSTALL httpfs;
 LOAD httpfs;
 
--- Create an S3 secret with your credentials
+-- Use your default AWS profile (reads from ~/.aws/credentials)
 CREATE SECRET my_s3_secret (
     TYPE S3,
-    KEY_ID 'your-access-key-id',
-    SECRET 'your-secret-access-key',
+    PROVIDER CREDENTIAL_CHAIN
+);
+
+-- Or use a specific named profile
+CREATE SECRET my_s3_secret (
+    TYPE S3,
+    PROVIDER CREDENTIAL_CHAIN,
+    CHAIN 'config',
+    PROFILE_NAME 'my-profile',
     REGION 'us-west-2'
 );
 
 -- Attach and query
 ATTACH 's3://my-private-bucket/data.h5ad' AS s3data (TYPE ANNDATA);
 SELECT * FROM s3data.obs LIMIT 10;
+```
 
--- Clean up secret when done
-DROP SECRET my_s3_secret;
+You can also pass credentials explicitly if needed:
+
+```sql
+CREATE SECRET my_s3_secret (
+    TYPE S3,
+    KEY_ID 'your-access-key-id',
+    SECRET 'your-secret-access-key',
+    REGION 'us-west-2'
+);
 ```
 
 For custom S3-compatible endpoints (e.g., MinIO):
