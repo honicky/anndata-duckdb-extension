@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-05-07
+
+### Added
+- New `.github/workflows/UpcomingDuckdbPipeline.yml` (daily cron + on-demand) that builds the extension against `duckdb/main` to surface API breakages before they ship in a stable release. Per [DuckDB's community extensions guidance](https://duckdb.org/community_extensions/development), extensions should track the upcoming release alongside the current stable one.
+- The upcoming-release workflow opens (or refreshes) a tracking issue labeled `duckdb-main-broken` on failure and auto-closes it when the next run passes. The issue body `@`-mentions Claude so that, if the [Claude GitHub App](https://github.com/apps/claude) is installed, an automatic fix-PR is proposed.
+
+### Changed
+- Bumped target DuckDB version from v1.5.0 to v1.5.2 (latest stable patch). Both git submodules (`duckdb`, `extension-ci-tools`) and all version references in `.github/workflows/MainDistributionPipeline.yml` now point at v1.5.2.
+- `MainDistributionPipeline.yml` now references the matching `v1.5.2` tag of `extension-ci-tools` instead of `main`, so the stable build is reproducible.
+
 ## [0.14.1] - 2026-03-13
 
 ### Fixed

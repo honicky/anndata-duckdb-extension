@@ -259,3 +259,23 @@ DuckDB frequently changes internal C++ APIs between versions. Common breaking ch
 ### 4. Clean build, test, and run quality checks
 
 A clean build is required after submodule changes (`rm -rf build/release`). Then follow the steps in "Building from a Clean Environment" and "Code Quality Checks Before Committing" above.
+
+## Tracking the upcoming DuckDB release
+
+Per [DuckDB's community-extensions guidance](https://duckdb.org/community_extensions/development), extensions should be built against both the current stable release and the upcoming release (`duckdb/main`) so API breakages surface before they ship.
+
+This is wired up via `.github/workflows/UpcomingDuckdbPipeline.yml`:
+- Runs daily on a cron schedule (06:00 UTC) and on `workflow_dispatch`
+- Calls `_extension_distribution.yml@main` and `_extension_code_quality.yml@main` with `duckdb_version: main` and `ci_tools_version: main`
+- On failure: opens (or refreshes) a tracking issue labeled `duckdb-main-broken`. The body `@`-mentions Claude — if the [Claude GitHub App](https://github.com/apps/claude) is installed, it will attempt to open a fix PR automatically. Otherwise, the issue is for a human to resolve.
+- On success: any open `duckdb-main-broken` issue is auto-closed.
+
+To reproduce the upcoming-release build locally:
+
+```bash
+git -C duckdb fetch origin main && git -C duckdb checkout origin/main
+git -C extension-ci-tools fetch origin main && git -C extension-ci-tools checkout origin/main
+rm -rf build/release && uv run make
+```
+
+Do NOT commit the submodule pointers in this state — `main` and `extension-ci-tools/main` are only for the upcoming-release CI job. The committed submodule SHAs should always match the stable `duckdb_version` in `MainDistributionPipeline.yml`.
