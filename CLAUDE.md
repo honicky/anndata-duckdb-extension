@@ -274,8 +274,13 @@ To reproduce the upcoming-release build locally:
 
 ```bash
 git -C duckdb fetch origin main && git -C duckdb checkout origin/main
-git -C extension-ci-tools fetch origin main && git -C extension-ci-tools checkout origin/main
 rm -rf build/release && uv run make
 ```
 
-Do NOT commit the submodule pointers in this state — `main` and `extension-ci-tools/main` are only for the upcoming-release CI job. The committed submodule SHAs should always match the stable `duckdb_version` in `MainDistributionPipeline.yml`.
+(The `extension-ci-tools` submodule already tracks `main`, so it does not need to be moved.)
+
+Do NOT commit the duckdb submodule pointer in this state — duckdb `main` is only for the upcoming-release CI job. The committed `duckdb` SHA must match the stable `duckdb_version` in `MainDistributionPipeline.yml`.
+
+### Pinning policy
+
+`MainDistributionPipeline.yml` intentionally uses `@main` and `ci_tools_version: main` for `extension-ci-tools` — only `duckdb_version` is pinned (to the stable release we ship). This means a breaking change in upstream CI tooling will surface in the next stable PR run, not silently mask itself for weeks. If you do need to pin `extension-ci-tools` (e.g. to unblock a PR while a CI-tools fix is upstreamed), do so as a temporary `revert me` commit, not as the steady-state config.

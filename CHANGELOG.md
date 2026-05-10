@@ -14,8 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The upcoming-release workflow opens (or refreshes) a tracking issue labeled `duckdb-main-broken` on failure and auto-closes it when the next run passes. The issue body `@`-mentions Claude so that, if the [Claude GitHub App](https://github.com/apps/claude) is installed, an automatic fix-PR is proposed.
 
 ### Changed
-- Bumped target DuckDB version from v1.5.0 to v1.5.2 (latest stable patch). Both git submodules (`duckdb`, `extension-ci-tools`) and all version references in `.github/workflows/MainDistributionPipeline.yml` now point at v1.5.2.
-- `MainDistributionPipeline.yml` now references the matching `v1.5.2` tag of `extension-ci-tools` instead of `main`, so the stable build is reproducible.
+- Bumped target DuckDB version from v1.5.0 to v1.5.2 (latest stable patch). The `duckdb` submodule and all `duckdb_version:` / artifact / URL references in `.github/workflows/MainDistributionPipeline.yml` now point at v1.5.2. The `extension-ci-tools` submodule and `ci_tools_version:` / `uses: ...@main` references stay on `main` so the stable build still surfaces breakages in upstream CI tooling immediately.
 
 ## [0.14.1] - 2026-03-13
 
