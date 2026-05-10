@@ -10,8 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.14.2] - 2026-05-07
 
 ### Added
-- New `.github/workflows/UpcomingDuckdbPipeline.yml` (daily cron + on-demand) that builds the extension against `duckdb/main` to surface API breakages before they ship in a stable release. Per [DuckDB's community extensions guidance](https://duckdb.org/community_extensions/development), extensions should track the upcoming release alongside the current stable one.
-- The upcoming-release workflow opens (or refreshes) a tracking issue labeled `duckdb-main-broken` on failure and auto-closes it when the next run passes. The issue body `@`-mentions Claude so that, if the [Claude GitHub App](https://github.com/apps/claude) is installed, an automatic fix-PR is proposed.
+- **Two-branch upcoming-release tracking**, matching the workflow described in DuckDB's [community-extensions developer guide](https://duckdb.org/community_extensions/development) (`ref` / `ref_next` in the descriptor):
+  - `main` continues to track the stable DuckDB release (currently `v1.5.2`).
+  - A new long-lived `main-distribution` branch tracks `duckdb/main`. It is auto-bootstrapped on first run.
+  - `.github/workflows/UpcomingDuckdbPipeline.yml` (renamed in spirit; same filename) now: (a) auto-merges `main` → `main-distribution` daily, (b) builds + code-quality-checks `main-distribution` against `duckdb/main`, (c) on build failure opens a `duckdb-main-broken` tracking issue with `@claude` mention, (d) on merge conflict opens a `next-merge-conflict` issue with `@claude` mention, (e) on success checks the upstream `duckdb/community-extensions` descriptor and opens a `descriptor-out-of-sync` issue with a ready-to-paste diff if `ref` / `ref_next` are stale.
+  - All three tracking issues auto-close once the underlying problem is resolved.
 
 ### Changed
 - Bumped target DuckDB version from v1.5.0 to v1.5.2 (latest stable patch). The `duckdb` submodule and all `duckdb_version:` / artifact / URL references in `.github/workflows/MainDistributionPipeline.yml` now point at v1.5.2. The `extension-ci-tools` submodule and `ci_tools_version:` / `uses: ...@main` references stay on `main` so the stable build still surfaces breakages in upstream CI tooling immediately.

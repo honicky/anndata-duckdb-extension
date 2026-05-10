@@ -1,59 +1,214 @@
 #
-# This workflow builds the extension against the upcoming DuckDB release
-# (the duckdb/main branch) so that API breakages are surfaced before they
-# ship in a stable release.
+# This workflow tracks the upcoming DuckDB release.
 #
-# Cadence: runs daily, plus on demand via workflow_dispatch.
-# When the build or code-quality job fails, the `report-failure` job opens
-# (or refreshes) a tracking issue labeled `duckdb-main-broken`. When a later
-# run succeeds, the `clear-failure` job auto-closes any open tracking issue.
+# Per https://duckdb.org/community_extensions/development, an extension
+# should maintain TWO branches:
+#   * `main` — builds against the current stable DuckDB release
+#               (the descriptor's `ref` in duckdb/community-extensions)
+#   * `main-distribution` — builds against `duckdb/main`
+#                           (the descriptor's `ref_next`)
 #
-# Per https://duckdb.org/community_extensions/development, extensions should
-# track both the current stable release and the upcoming release on `main`.
+# This workflow:
+#   1. Bootstraps `main-distribution` from `main` if it doesn't exist yet,
+#      and otherwise merges `main` into `main-distribution` daily so stable
+#      changes flow forward automatically.
+#      - Clean merge → pushed to origin
+#      - Conflict   → tracking issue opened (with @claude mention to fix)
+#   2. Builds the resulting `main-distribution` against `duckdb/main`.
+#   3. On build/code-quality failure → opens (or refreshes) a tracking issue
+#      labeled `duckdb-main-broken`. The issue body @-mentions Claude so
+#      that, if the Claude GitHub App is installed, an automatic fix-PR
+#      against `main-distribution` is proposed.
+#   4. On build success → checks the descriptor at
+#      duckdb/community-extensions and, if `ref` / `ref_next` is out of date
+#      relative to the current heads of `main` / `main-distribution`, opens
+#      (or refreshes) a tracking issue labeled `descriptor-out-of-sync`
+#      with a ready-to-paste YAML snippet. The user opens the descriptor PR
+#      manually. When the upstream descriptor catches up, the issue is
+#      auto-closed.
 #
 name: Upcoming DuckDB Pipeline (main)
 on:
   schedule:
-    # Daily at 06:00 UTC. DuckDB main lands new commits across the day so
-    # any time is fine; pre-business-hours UTC keeps results fresh by 9am EU.
+    # Daily at 06:00 UTC.
     - cron: '0 6 * * *'
   workflow_dispatch:
-  # Also run when the workflow file itself is edited so changes can be tested.
+  # Re-run when main-distribution itself changes (e.g. a fix pushed by hand).
   push:
-    branches: [main]
-    paths:
-      - '.github/workflows/UpcomingDuckdbPipeline.yml'
+    branches: [main-distribution]
 
-# Allow only one concurrent run of this workflow; cancel previous in-progress.
+# Single-flight: don't pile up scheduled runs while one is in progress.
 concurrency:
   group: ${{ github.workflow }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
   issues: write
 
 jobs:
+  sync:
+    name: Sync main → main-distribution
+    # Skip on push to main-distribution (the push itself is the merge result;
+    # re-running sync would be a no-op or a loop).
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    outputs:
+      head_sha: ${{ steps.sync.outputs.head_sha }}
+      conflict: ${{ steps.sync.outputs.conflict }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bootstrap or fast-forward main-distribution
+        id: sync
+        run: |
+          set -eo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if ! git ls-remote --exit-code --heads origin main-distribution >/dev/null; then
+            echo "main-distribution does not exist on origin; bootstrapping from main"
+            git fetch origin main
+            git checkout -B main-distribution origin/main
+            git push origin main-distribution
+            echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch origin main main-distribution
+          git checkout main-distribution
+          git reset --hard origin/main-distribution
+
+          # If main-distribution is already up to date with main, nothing to do.
+          if git merge-base --is-ancestor origin/main HEAD; then
+            echo "main-distribution already contains all of main; skipping merge"
+            echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git merge --no-edit --no-ff origin/main -m "chore: merge main into main-distribution"; then
+            git push origin main-distribution
+            echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+          else
+            git merge --abort || true
+            echo "head_sha=$(git rev-parse origin/main-distribution)" >> "$GITHUB_OUTPUT"
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open conflict tracking issue
+        if: steps.sync.outputs.conflict == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const label = 'next-merge-conflict';
+            const title = 'Merge `main` → `main-distribution` failed (conflict)';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const mainSha = await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: 'main'
+            }).then(r => r.data.commit.sha).catch(() => null);
+            const distSha = await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: 'main-distribution'
+            }).then(r => r.data.commit.sha).catch(() => null);
+
+            const body = [
+              `Auto-merge from \`main\` into \`main-distribution\` could not complete cleanly.`,
+              ``,
+              `- main: \`${mainSha}\``,
+              `- main-distribution: \`${distSha}\``,
+              `- Run: ${runUrl}`,
+              ``,
+              `@claude please resolve the merge conflict by checking out \`main-distribution\`, ` +
+              `merging \`origin/main\` into it, hand-resolving the conflicting hunks (typically the ` +
+              `extension code that diverged to support \`duckdb/main\` APIs), and pushing the result. ` +
+              `Reproduce with:`,
+              ``,
+              '```',
+              'git fetch origin main main-distribution',
+              'git checkout main-distribution && git reset --hard origin/main-distribution',
+              'git merge origin/main',
+              '```',
+              ``,
+              `> The \`@claude\` mention only triggers an automated PR if the [Claude GitHub App](https://github.com/apps/claude) is installed.`,
+            ].join('\n');
+
+            try {
+              await github.rest.issues.getLabel({ owner: context.repo.owner, repo: context.repo.repo, name: label });
+            } catch (e) {
+              if (e.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  name: label, color: 'fbca04',
+                  description: 'Tracking issue: main → main-distribution merge has a conflict',
+                });
+              } else { throw e; }
+            }
+
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: label, per_page: 100,
+            });
+
+            if (open.length === 0) {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: [label],
+              });
+              core.notice(`Opened conflict tracking issue #${created.data.number}`);
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: open[0].number,
+                body: `Still conflicting on a new run.\n\n${body}`,
+              });
+              core.notice(`Updated existing conflict issue #${open[0].number}`);
+            }
+
+      - name: Fail run if merge conflict
+        if: steps.sync.outputs.conflict == 'true'
+        run: |
+          echo "::error::Merge conflict between main and main-distribution; tracking issue opened. Skipping build."
+          exit 1
+
   duckdb-main-build:
     name: Build against duckdb/main
+    needs: sync
+    # Run when sync succeeded (clean merge or already up to date) OR when this
+    # workflow was triggered by a direct push to main-distribution (sync was skipped).
+    if: always() && (needs.sync.result == 'success' || needs.sync.result == 'skipped')
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
       duckdb_version: main
       ci_tools_version: main
       extension_name: anndata
       opt_in_archs: 'linux_amd64_musl'
+      override_repository: ${{ github.repository }}
+      override_ref: main-distribution
 
   duckdb-main-code-quality:
     name: Code quality vs duckdb/main
+    needs: sync
+    if: always() && (needs.sync.result == 'success' || needs.sync.result == 'skipped')
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
     with:
       duckdb_version: main
       ci_tools_version: main
       extension_name: anndata
       format_checks: 'format;tidy'
+      override_repository: ${{ github.repository }}
+      override_ref: main-distribution
 
   report-failure:
-    name: Open / update tracking issue on failure
+    name: Open / update tracking issue on build failure
     needs: [duckdb-main-build, duckdb-main-code-quality]
     if: always() && (needs.duckdb-main-build.result == 'failure' || needs.duckdb-main-code-quality.result == 'failure')
     runs-on: ubuntu-latest
@@ -78,91 +233,70 @@ jobs:
         with:
           script: |
             const label = 'duckdb-main-broken';
-            const title = 'Upcoming DuckDB build failure (duckdb/main)';
+            const title = 'Upcoming DuckDB build failure (`main-distribution` vs duckdb/main)';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const duckdbSha = process.env.DUCKDB_SHA;
-            const duckdbShort = process.env.DUCKDB_SHORT;
-            const buildResult = process.env.BUILD_RESULT;
-            const qualityResult = process.env.QUALITY_RESULT;
             const failedJobs = [];
-            if (buildResult === 'failure') failedJobs.push('`duckdb-main-build`');
-            if (qualityResult === 'failure') failedJobs.push('`duckdb-main-code-quality`');
+            if (process.env.BUILD_RESULT === 'failure') failedJobs.push('`duckdb-main-build`');
+            if (process.env.QUALITY_RESULT === 'failure') failedJobs.push('`duckdb-main-code-quality`');
 
             const body = [
-              `The daily build against \`duckdb/main\` failed.`,
+              `The build of \`main-distribution\` against \`duckdb/main\` failed.`,
               ``,
               `- Failed jobs: ${failedJobs.join(', ')}`,
               `- Run: ${runUrl}`,
-              `- DuckDB \`main\` ref: [\`${duckdbShort}\`](https://github.com/duckdb/duckdb/commit/${duckdbSha})`,
+              `- DuckDB \`main\` ref: [\`${process.env.DUCKDB_SHORT}\`](https://github.com/duckdb/duckdb/commit/${process.env.DUCKDB_SHA})`,
               `- Triggered by: \`${context.eventName}\``,
               ``,
-              `When the next scheduled run passes, this issue will be closed automatically.`,
+              `When the next run of this workflow passes, this issue will be closed automatically.`,
               ``,
               `---`,
               ``,
-              `@claude please investigate the failed run linked above and open a pull request that fixes the API breakage so the extension builds against \`duckdb/main\`. Keep changes minimal and preserve compatibility with the current stable release (\`v1.5.x\`). Reproduce locally with:`,
+              `@claude please investigate the failed run linked above and open a pull request **against the \`main-distribution\` branch** that fixes the API breakage. Keep the change minimal and isolated to \`main-distribution\` (do not touch \`main\` unless the fix is also valid against the current stable DuckDB release). Reproduce locally with:`,
               ``,
               '```',
+              'git fetch origin main-distribution',
+              'git checkout main-distribution',
               'git -C duckdb fetch origin main && git -C duckdb checkout origin/main',
-              'git -C extension-ci-tools fetch origin main && git -C extension-ci-tools checkout origin/main',
               'rm -rf build/release && uv run make',
               '```',
               ``,
-              `> Note: the \`@claude\` mention only triggers a fix PR if the [Claude GitHub App](https://github.com/apps/claude) is installed on this repository. Otherwise this is a tracking issue for a human to address.`,
+              `> The \`@claude\` mention only triggers an automated PR if the [Claude GitHub App](https://github.com/apps/claude) is installed.`,
             ].join('\n');
 
-            // Find an existing open tracking issue (label-based, not title-based).
-            const existing = await github.paginate(github.rest.issues.listForRepo, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: label,
-              per_page: 100,
-            });
-
-            // Ensure the label exists (create if missing).
             try {
-              await github.rest.issues.getLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: label,
-              });
+              await github.rest.issues.getLabel({ owner: context.repo.owner, repo: context.repo.repo, name: label });
             } catch (e) {
               if (e.status === 404) {
                 await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: label,
-                  color: 'b60205',
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  name: label, color: 'b60205',
                   description: 'Tracking issue: extension fails to build against duckdb/main',
                 });
-              } else {
-                throw e;
-              }
+              } else { throw e; }
             }
 
-            if (existing.length === 0) {
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: label, per_page: 100,
+            });
+
+            if (open.length === 0) {
               const created = await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title,
-                body,
-                labels: [label],
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: [label],
               });
               core.notice(`Opened tracking issue #${created.data.number}`);
             } else {
-              const issue = existing[0];
               await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: open[0].number,
                 body: `Still failing on a new run.\n\n${body}`,
               });
-              core.notice(`Updated existing tracking issue #${issue.number}`);
+              core.notice(`Updated existing tracking issue #${open[0].number}`);
             }
 
   clear-failure:
-    name: Close tracking issue on success
+    name: Close build-failure tracking issue on success
     needs: [duckdb-main-build, duckdb-main-code-quality]
     if: needs.duckdb-main-build.result == 'success' && needs.duckdb-main-code-quality.result == 'success'
     runs-on: ubuntu-latest
@@ -176,27 +310,136 @@ jobs:
           script: |
             const label = 'duckdb-main-broken';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-
             const open = await github.paginate(github.rest.issues.listForRepo, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: label,
-              per_page: 100,
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: label, per_page: 100,
             });
-
             for (const issue of open) {
               await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
+                owner: context.repo.owner, repo: context.repo.repo,
                 issue_number: issue.number,
                 body: `Build against \`duckdb/main\` is green again. Closing.\n\nRun: ${runUrl}`,
               });
               await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
+                owner: context.repo.owner, repo: context.repo.repo,
                 issue_number: issue.number,
                 state: 'closed',
               });
               core.notice(`Closed tracking issue #${issue.number}`);
+            }
+
+  descriptor-sync-check:
+    name: Check community-extensions descriptor freshness
+    needs: [duckdb-main-build, duckdb-main-code-quality]
+    if: needs.duckdb-main-build.result == 'success' && needs.duckdb-main-code-quality.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Read upstream descriptor
+        id: upstream
+        run: |
+          set -eo pipefail
+          curl -sfL https://raw.githubusercontent.com/duckdb/community-extensions/main/extensions/anndata/description.yml -o /tmp/description.yml
+          UPSTREAM_REF=$(awk '/^repo:/{f=1; next} f && /^[^ ]/{f=0} f && /^[[:space:]]+ref:/{print $2; exit}' /tmp/description.yml)
+          UPSTREAM_REF_NEXT=$(awk '/^repo:/{f=1; next} f && /^[^ ]/{f=0} f && /^[[:space:]]+ref_next:/{print $2; exit}' /tmp/description.yml)
+          echo "ref=${UPSTREAM_REF}" >> "$GITHUB_OUTPUT"
+          echo "ref_next=${UPSTREAM_REF_NEXT}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve our latest green branch heads
+        id: heads
+        run: |
+          MAIN_SHA=$(git ls-remote https://github.com/${{ github.repository }}.git refs/heads/main | awk '{print $1}')
+          DIST_SHA=$(git ls-remote https://github.com/${{ github.repository }}.git refs/heads/main-distribution | awk '{print $1}')
+          echo "main=${MAIN_SHA}" >> "$GITHUB_OUTPUT"
+          echo "main_dist=${DIST_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Open / update / close descriptor-sync issue
+        uses: actions/github-script@v7
+        env:
+          UPSTREAM_REF: ${{ steps.upstream.outputs.ref }}
+          UPSTREAM_REF_NEXT: ${{ steps.upstream.outputs.ref_next }}
+          OUR_MAIN: ${{ steps.heads.outputs.main }}
+          OUR_DIST: ${{ steps.heads.outputs.main_dist }}
+        with:
+          script: |
+            const label = 'descriptor-out-of-sync';
+            const title = '`duckdb/community-extensions` descriptor is behind';
+            const upstreamRef = process.env.UPSTREAM_REF || '';
+            const upstreamRefNext = process.env.UPSTREAM_REF_NEXT || '';
+            const ourMain = process.env.OUR_MAIN;
+            const ourDist = process.env.OUR_DIST;
+
+            const refMatches = upstreamRef === ourMain;
+            const refNextMatches = upstreamRefNext === ourDist;
+            const inSync = refMatches && refNextMatches;
+
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: label, per_page: 100,
+            });
+
+            if (inSync) {
+              for (const issue of open) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `Upstream descriptor is now in sync (\`ref: ${ourMain}\`, \`ref_next: ${ourDist}\`). Closing.`,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issue.number, state: 'closed',
+                });
+              }
+              core.notice('Descriptor in sync; closed any open tracking issues.');
+              return;
+            }
+
+            const body = [
+              `The \`duckdb/community-extensions\` descriptor for \`anndata\` is behind our latest green commits. Open a PR there updating \`extensions/anndata/description.yml\`:`,
+              ``,
+              '```diff',
+              ` repo:`,
+              `   github: ${context.repo.owner}/${context.repo.repo}`,
+              `-  ref: ${upstreamRef}`,
+              `+  ref: ${ourMain}`,
+              upstreamRefNext
+                ? `-  ref_next: ${upstreamRefNext}\n+  ref_next: ${ourDist}`
+                : `+  ref_next: ${ourDist}`,
+              '```',
+              ``,
+              `Quick checklist:`,
+              `- [ ] Fork \`duckdb/community-extensions\` (if not already) and apply the diff to \`extensions/anndata/description.yml\``,
+              `- [ ] Bump the \`extension.version\` field if a new release tag has been cut on this repo`,
+              `- [ ] Open the PR; reference this issue`,
+              ``,
+              `This issue will close automatically once the upstream descriptor matches our heads.`,
+            ].join('\n');
+
+            try {
+              await github.rest.issues.getLabel({ owner: context.repo.owner, repo: context.repo.repo, name: label });
+            } catch (e) {
+              if (e.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  name: label, color: '0e8a16',
+                  description: 'Tracking issue: community-extensions descriptor (ref/ref_next) needs updating',
+                });
+              } else { throw e; }
+            }
+
+            if (open.length === 0) {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: [label],
+              });
+              core.notice(`Opened descriptor-sync issue #${created.data.number}`);
+            } else {
+              // Update body in-place rather than spam comments — the diff is the whole content.
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: open[0].number, body, title,
+              });
+              core.notice(`Refreshed descriptor-sync issue #${open[0].number}`);
             }

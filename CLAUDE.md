@@ -262,24 +262,43 @@ A clean build is required after submodule changes (`rm -rf build/release`). Then
 
 ## Tracking the upcoming DuckDB release
 
-Per [DuckDB's community-extensions guidance](https://duckdb.org/community_extensions/development), extensions should be built against both the current stable release and the upcoming release (`duckdb/main`) so API breakages surface before they ship.
+Per [DuckDB's community-extensions guidance](https://duckdb.org/community_extensions/development), an extension should maintain **two long-lived branches**:
 
-This is wired up via `.github/workflows/UpcomingDuckdbPipeline.yml`:
-- Runs daily on a cron schedule (06:00 UTC) and on `workflow_dispatch`
-- Calls `_extension_distribution.yml@main` and `_extension_code_quality.yml@main` with `duckdb_version: main` and `ci_tools_version: main`
-- On failure: opens (or refreshes) a tracking issue labeled `duckdb-main-broken`. The body `@`-mentions Claude — if the [Claude GitHub App](https://github.com/apps/claude) is installed, it will attempt to open a fix PR automatically. Otherwise, the issue is for a human to resolve.
-- On success: any open `duckdb-main-broken` issue is auto-closed.
+| Branch              | DuckDB target | community-extensions descriptor field |
+|---------------------|---------------|---------------------------------------|
+| `main`              | latest stable release (`v1.5.2`) | `ref` |
+| `main-distribution` | `duckdb/main` (upcoming release) | `ref_next` |
 
-To reproduce the upcoming-release build locally:
+The community-extensions CI builds both. When DuckDB cuts a release, the upstream maintainers swap `ref_next` → `ref`; at that point our `main-distribution` becomes the new `main`.
+
+### Automation (`.github/workflows/UpcomingDuckdbPipeline.yml`)
+
+This single workflow runs daily (06:00 UTC) and on push to `main-distribution`. It:
+
+1. **Bootstraps `main-distribution`** if the branch doesn't exist yet (off `main` HEAD).
+2. **Auto-merges `main` into `main-distribution`** so stable changes flow forward.
+   - Clean merge → pushed automatically.
+   - Conflict → opens an issue labeled `next-merge-conflict` with `@claude` mention.
+3. **Builds and code-quality-checks `main-distribution`** against `duckdb/main`.
+   - Failure → opens (or refreshes) `duckdb-main-broken` tracking issue with `@claude` mention. Auto-closes on next green run.
+4. **Checks the upstream descriptor at `duckdb/community-extensions`**.
+   - Mismatch → opens (or refreshes) `descriptor-out-of-sync` issue showing the YAML diff to apply manually. Auto-closes when upstream catches up.
+
+If the [Claude GitHub App](https://github.com/apps/claude) is installed, the `@claude` mentions in the failure issues trigger automated fix PRs against `main-distribution`. Without the app, the issues are tracking-only.
+
+### Working with `main-distribution` manually
+
+Reproduce the upcoming-release build locally:
 
 ```bash
+git fetch origin main-distribution && git checkout main-distribution
 git -C duckdb fetch origin main && git -C duckdb checkout origin/main
 rm -rf build/release && uv run make
 ```
 
 (The `extension-ci-tools` submodule already tracks `main`, so it does not need to be moved.)
 
-Do NOT commit the duckdb submodule pointer in this state — duckdb `main` is only for the upcoming-release CI job. The committed `duckdb` SHA must match the stable `duckdb_version` in `MainDistributionPipeline.yml`.
+If you fix an API breakage that's only relevant to `duckdb/main`, **commit the fix on `main-distribution` only** — not on `main`. Do not commit the `duckdb` submodule pointer change; that submodule SHA on `main-distribution` should still match the stable `duckdb_version` in `MainDistributionPipeline.yml`. The override of the duckdb checkout for the upcoming build happens inside the workflow, not via the committed submodule pointer.
 
 ### Pinning policy
 
