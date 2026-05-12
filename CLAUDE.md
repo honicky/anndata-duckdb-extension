@@ -259,3 +259,47 @@ DuckDB frequently changes internal C++ APIs between versions. Common breaking ch
 ### 4. Clean build, test, and run quality checks
 
 A clean build is required after submodule changes (`rm -rf build/release`). Then follow the steps in "Building from a Clean Environment" and "Code Quality Checks Before Committing" above.
+
+## Tracking the upcoming DuckDB release
+
+Per [DuckDB's community-extensions guidance](https://duckdb.org/community_extensions/development), an extension should maintain **two long-lived branches**:
+
+| Branch              | DuckDB target | community-extensions descriptor field |
+|---------------------|---------------|---------------------------------------|
+| `main`              | latest stable release (`v1.5.2`) | `ref` |
+| `main-distribution` | `duckdb/main` (upcoming release) | `ref_next` |
+
+The community-extensions CI builds both. When DuckDB cuts a release, the upstream maintainers swap `ref_next` → `ref`; at that point our `main-distribution` becomes the new `main`.
+
+### Automation (`.github/workflows/UpcomingDuckdbPipeline.yml`)
+
+This single workflow runs daily (06:00 UTC) and on push to `main-distribution`. It:
+
+1. **Bootstraps `main-distribution`** if the branch doesn't exist yet (off `main` HEAD).
+2. **Auto-merges `main` into `main-distribution`** so stable changes flow forward.
+   - Clean merge → pushed automatically.
+   - Conflict → opens an issue labeled `next-merge-conflict` with `@claude` mention.
+3. **Builds and code-quality-checks `main-distribution`** against `duckdb/main`.
+   - Failure → opens (or refreshes) `duckdb-main-broken` tracking issue with `@claude` mention. Auto-closes on next green run.
+4. **Checks the upstream descriptor at `duckdb/community-extensions`**.
+   - Mismatch → opens (or refreshes) `descriptor-out-of-sync` issue showing the YAML diff to apply manually. Auto-closes when upstream catches up.
+
+If the [Claude GitHub App](https://github.com/apps/claude) is installed, the `@claude` mentions in the failure issues trigger automated fix PRs against `main-distribution`. Without the app, the issues are tracking-only.
+
+### Working with `main-distribution` manually
+
+Reproduce the upcoming-release build locally:
+
+```bash
+git fetch origin main-distribution && git checkout main-distribution
+git -C duckdb fetch origin main && git -C duckdb checkout origin/main
+rm -rf build/release && uv run make
+```
+
+(The `extension-ci-tools` submodule already tracks `main`, so it does not need to be moved.)
+
+If you fix an API breakage that's only relevant to `duckdb/main`, **commit the fix on `main-distribution` only** — not on `main`. Do not commit the `duckdb` submodule pointer change; that submodule SHA on `main-distribution` should still match the stable `duckdb_version` in `MainDistributionPipeline.yml`. The override of the duckdb checkout for the upcoming build happens inside the workflow, not via the committed submodule pointer.
+
+### Pinning policy
+
+`MainDistributionPipeline.yml` intentionally uses `@main` and `ci_tools_version: main` for `extension-ci-tools` — only `duckdb_version` is pinned (to the stable release we ship). This means a breaking change in upstream CI tooling will surface in the next stable PR run, not silently mask itself for weeks. If you do need to pin `extension-ci-tools` (e.g. to unblock a PR while a CI-tools fix is upstreamed), do so as a temporary `revert me` commit, not as the steady-state config.
