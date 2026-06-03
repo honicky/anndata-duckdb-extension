@@ -303,3 +303,10 @@ If you fix an API breakage that's only relevant to `duckdb/main`, **commit the f
 ### Pinning policy
 
 `MainDistributionPipeline.yml` intentionally uses `@main` and `ci_tools_version: main` for `extension-ci-tools` — only `duckdb_version` is pinned (to the stable release we ship). This means a breaking change in upstream CI tooling will surface in the next stable PR run, not silently mask itself for weeks. If you do need to pin `extension-ci-tools` (e.g. to unblock a PR while a CI-tools fix is upstreamed), do so as a temporary `revert me` commit, not as the steady-state config.
+
+### Checking for new releases locally
+
+```bash
+./scripts/check-duckdb-release.sh           # Check current vs latest
+./scripts/check-duckdb-release.sh --update   # Print upgrade commands
+```
