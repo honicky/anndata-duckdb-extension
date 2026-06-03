@@ -9,7 +9,7 @@
 set -euo pipefail
 
 WORKFLOW_FILE=".github/workflows/MainDistributionPipeline.yml"
-NEXT_WORKFLOW_FILE=".github/workflows/DuckDBNextBuild.yml"
+NEXT_WORKFLOW_FILE=".github/workflows/UpcomingDuckdbPipeline.yml"
 
 # Extract current DuckDB version from the main CI workflow
 CURRENT_VERSION=$(grep -m1 'duckdb_version:' "$WORKFLOW_FILE" | sed 's/.*duckdb_version: *//' | tr -d "'\"")
@@ -17,7 +17,7 @@ echo "Current DuckDB version (CI): ${CURRENT_VERSION}"
 
 # Check DuckDB submodule version
 if [ -d "duckdb" ] && [ -f "duckdb/.git" ]; then
-    SUBMODULE_REF=$(cd duckdb && git describe --tags --exact-match 2>/dev/null || cd duckdb && git log -1 --format=%h)
+    SUBMODULE_REF=$(cd duckdb && (git describe --tags --exact-match 2>/dev/null || git log -1 --format=%h))
     echo "DuckDB submodule ref:        ${SUBMODULE_REF}"
 fi
 
@@ -72,6 +72,6 @@ if command -v gh &> /dev/null; then
     echo ""
     echo "--- DuckDB Next Build Status ---"
     # Check the most recent scheduled workflow run
-    NEXT_STATUS=$(gh run list --workflow=DuckDBNextBuild.yml --limit=1 --json conclusion,createdAt --jq '.[0] | "\(.conclusion // "in_progress") (\(.createdAt))"' 2>/dev/null || echo "no runs found")
+    NEXT_STATUS=$(gh run list --workflow=UpcomingDuckdbPipeline.yml --limit=1 --json conclusion,createdAt --jq '.[0] | "\(.conclusion // "in_progress") (\(.createdAt))"' 2>/dev/null || echo "no runs found")
     echo "Latest next-build run: ${NEXT_STATUS}"
 fi
