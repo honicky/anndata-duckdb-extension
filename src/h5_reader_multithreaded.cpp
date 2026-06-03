@@ -1,4 +1,5 @@
 #include "include/h5_reader_multithreaded.hpp"
+#include "include/duckdb_compat.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -361,8 +362,8 @@ void H5ReaderMultithreaded::ReadCompoundDatasetColumn(const std::string &path, c
 			size_t str_size = H5Tget_size(member_type);
 
 			result.SetVectorType(VectorType::FLAT_VECTOR);
-			auto string_vec = FlatVector::GetData<string_t>(result);
-			auto &validity = FlatVector::Validity(result);
+			auto string_vec = compat::FlatVectorGetData<string_t>(result);
+			auto &validity = compat::FlatVectorValidity(result);
 			validity.SetAllValid(count);
 
 			for (idx_t i = 0; i < count; i++) {
@@ -436,7 +437,7 @@ void H5ReaderMultithreaded::ReadCompoundDatasetColumn(const std::string &path, c
 		} else {
 			// Unknown type - set all values to NULL
 			result.SetVectorType(VectorType::FLAT_VECTOR);
-			auto &validity = FlatVector::Validity(result);
+			auto &validity = compat::FlatVectorValidity(result);
 			for (idx_t i = 0; i < count; i++) {
 				validity.SetInvalid(i);
 			}
@@ -838,8 +839,11 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 	try {
 		// Handle obs_idx column (row index)
 		if (column_name == "obs_idx") {
+			auto obs_data = compat::FlatVectorGetData<int64_t>(result);
+			auto &obs_validity = compat::FlatVectorValidity(result);
+			obs_validity.SetAllValid(count);
 			for (idx_t i = 0; i < count; i++) {
-				result.SetValue(i, Value::BIGINT(offset + i));
+				obs_data[i] = static_cast<int64_t>(offset + i);
 			}
 			return;
 		}
@@ -895,12 +899,15 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 				}
 
 				// Map codes to categories and set in result vector
+				auto cat_data = compat::FlatVectorGetData<string_t>(result);
+				auto &cat_validity = compat::FlatVectorValidity(result);
+				cat_validity.SetAllValid(count);
 				for (idx_t i = 0; i < count; i++) {
 					int32_t code = codes_i32[i];
 					if (code >= 0 && static_cast<size_t>(code) < categories.size()) {
-						result.SetValue(i, Value(categories[code]));
+						cat_data[i] = StringVector::AddString(result, categories[code]);
 					} else {
-						result.SetValue(i, Value()); // NULL for invalid codes
+						cat_validity.SetInvalid(i);
 					}
 				}
 			} catch (...) {
@@ -932,8 +939,8 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 
 					// Ensure vector is properly initialized
 					result.SetVectorType(VectorType::FLAT_VECTOR);
-					auto string_vec = FlatVector::GetData<string_t>(result);
-					auto &validity = FlatVector::Validity(result);
+					auto string_vec = compat::FlatVectorGetData<string_t>(result);
+					auto &validity = compat::FlatVectorValidity(result);
 					validity.SetAllValid(count); // Start with all valid
 
 					for (idx_t i = 0; i < count; i++) {
@@ -960,8 +967,8 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 
 					// Ensure vector is properly initialized
 					result.SetVectorType(VectorType::FLAT_VECTOR);
-					auto string_vec = FlatVector::GetData<string_t>(result);
-					auto &validity = FlatVector::Validity(result);
+					auto string_vec = compat::FlatVectorGetData<string_t>(result);
+					auto &validity = compat::FlatVectorValidity(result);
 					validity.SetAllValid(count);
 
 					for (idx_t i = 0; i < count; i++) {
@@ -1033,8 +1040,8 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 
 				// Ensure vector is properly initialized for strings
 				result.SetVectorType(VectorType::FLAT_VECTOR);
-				auto string_vec = FlatVector::GetData<string_t>(result);
-				auto &validity = FlatVector::Validity(result);
+				auto string_vec = compat::FlatVectorGetData<string_t>(result);
+				auto &validity = compat::FlatVectorValidity(result);
 				validity.SetAllValid(count);
 
 				for (idx_t i = 0; i < count; i++) {
@@ -1047,7 +1054,7 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 			} else {
 				// Unknown type - set all values to NULL
 				result.SetVectorType(VectorType::FLAT_VECTOR);
-				auto &validity = FlatVector::Validity(result);
+				auto &validity = compat::FlatVectorValidity(result);
 				for (idx_t i = 0; i < count; i++) {
 					validity.SetInvalid(i);
 				}
@@ -1132,12 +1139,15 @@ void H5ReaderMultithreaded::ReadVarColumnAtPath(const std::string &var_path, con
 				}
 
 				// Map codes to categories
+				auto cat_data = compat::FlatVectorGetData<string_t>(result);
+				auto &cat_validity = compat::FlatVectorValidity(result);
+				cat_validity.SetAllValid(count);
 				for (idx_t i = 0; i < count; i++) {
 					int32_t code = codes_i32[i];
 					if (code >= 0 && static_cast<size_t>(code) < categories.size()) {
-						result.SetValue(i, Value(categories[code]));
+						cat_data[i] = StringVector::AddString(result, categories[code]);
 					} else {
-						result.SetValue(i, Value()); // NULL for invalid codes
+						cat_validity.SetInvalid(i);
 					}
 				}
 			} catch (...) {
@@ -1169,8 +1179,8 @@ void H5ReaderMultithreaded::ReadVarColumnAtPath(const std::string &var_path, con
 
 					// Ensure vector is properly initialized
 					result.SetVectorType(VectorType::FLAT_VECTOR);
-					auto string_vec = FlatVector::GetData<string_t>(result);
-					auto &validity = FlatVector::Validity(result);
+					auto string_vec = compat::FlatVectorGetData<string_t>(result);
+					auto &validity = compat::FlatVectorValidity(result);
 					validity.SetAllValid(count); // Start with all valid
 
 					for (idx_t i = 0; i < count; i++) {
@@ -1197,8 +1207,8 @@ void H5ReaderMultithreaded::ReadVarColumnAtPath(const std::string &var_path, con
 
 					// Ensure vector is properly initialized
 					result.SetVectorType(VectorType::FLAT_VECTOR);
-					auto string_vec = FlatVector::GetData<string_t>(result);
-					auto &validity = FlatVector::Validity(result);
+					auto string_vec = compat::FlatVectorGetData<string_t>(result);
+					auto &validity = compat::FlatVectorValidity(result);
 					validity.SetAllValid(count);
 
 					for (idx_t i = 0; i < count; i++) {
@@ -1270,8 +1280,8 @@ void H5ReaderMultithreaded::ReadVarColumnAtPath(const std::string &var_path, con
 
 				// Ensure vector is properly initialized for strings
 				result.SetVectorType(VectorType::FLAT_VECTOR);
-				auto string_vec = FlatVector::GetData<string_t>(result);
-				auto &validity = FlatVector::Validity(result);
+				auto string_vec = compat::FlatVectorGetData<string_t>(result);
+				auto &validity = compat::FlatVectorValidity(result);
 				validity.SetAllValid(count);
 
 				for (idx_t i = 0; i < count; i++) {
@@ -1284,7 +1294,7 @@ void H5ReaderMultithreaded::ReadVarColumnAtPath(const std::string &var_path, con
 			} else {
 				// Unknown type - set all values to NULL
 				result.SetVectorType(VectorType::FLAT_VECTOR);
-				auto &validity = FlatVector::Validity(result);
+				auto &validity = compat::FlatVectorValidity(result);
 				for (idx_t i = 0; i < count; i++) {
 					validity.SetInvalid(i);
 				}
@@ -1849,7 +1859,7 @@ void H5ReaderMultithreaded::ReadXMatrixBatch(idx_t row_start, idx_t row_count, i
 			auto sparse_data = ReadSparseXMatrix(row_start, row_count, col_start, col_count);
 
 			// Convert sparse data to dense format for output
-			output.SetCardinality(row_count);
+			compat::SetChunkCardinality(output,row_count);
 
 			// Set obs_idx column (first column)
 			auto &obs_idx_vec = output.data[0];
@@ -1918,7 +1928,7 @@ void H5ReaderMultithreaded::ReadXMatrixBatch(idx_t row_start, idx_t row_count, i
 		// Fill output DataChunk in WIDE format
 		// The output should have columns: obs_idx + one column per gene
 		// First column is obs_idx, rest are gene values
-		output.SetCardinality(row_count);
+		compat::SetChunkCardinality(output,row_count);
 
 		// Set obs_idx column (first column)
 		auto &obs_idx_vec = output.data[0];
@@ -2406,7 +2416,7 @@ void H5ReaderMultithreaded::ReadLayerMatrix(const std::string &layer_name, idx_t
 			gene_vec.SetValue(0, Value::DOUBLE(buffer[i]));
 		}
 
-		output.SetCardinality(1);
+		compat::SetChunkCardinality(output,1);
 
 	} else if (obj_info.type == H5O_TYPE_GROUP) {
 		// Sparse layer
@@ -2476,7 +2486,7 @@ void H5ReaderMultithreaded::ReadLayerMatrix(const std::string &layer_name, idx_t
 			}
 		}
 
-		output.SetCardinality(1);
+		compat::SetChunkCardinality(output,1);
 	}
 }
 
@@ -2671,7 +2681,7 @@ void H5ReaderMultithreaded::ReadMatrixBatch(const std::string &path, idx_t row_s
 		}
 	}
 
-	output.SetCardinality(row_count);
+	compat::SetChunkCardinality(output,row_count);
 }
 
 void H5ReaderMultithreaded::ReadMatrixColumns(const std::string &path, idx_t row_start, idx_t row_count,
@@ -2682,7 +2692,7 @@ void H5ReaderMultithreaded::ReadMatrixColumns(const std::string &path, idx_t row
 
 	// If no columns requested, just return empty result
 	if (matrix_col_indices.empty()) {
-		output.SetCardinality(row_count);
+		compat::SetChunkCardinality(output,row_count);
 		return;
 	}
 
@@ -2786,7 +2796,7 @@ void H5ReaderMultithreaded::ReadMatrixColumns(const std::string &path, idx_t row
 		}
 	}
 
-	output.SetCardinality(row_count);
+	compat::SetChunkCardinality(output,row_count);
 }
 
 // Helper function to read array and return as vector of strings
@@ -3082,8 +3092,8 @@ void H5ReaderMultithreaded::ReadUnsArray(const std::string &key, Vector &result,
 	if (type_class == H5T_STRING) {
 		// String array
 		result.SetVectorType(VectorType::FLAT_VECTOR);
-		auto string_vec = FlatVector::GetData<string_t>(result);
-		auto &validity = FlatVector::Validity(result);
+		auto string_vec = compat::FlatVectorGetData<string_t>(result);
+		auto &validity = compat::FlatVectorValidity(result);
 		validity.SetAllValid(count);
 
 		if (H5Tis_variable_str(dtype_id)) {
@@ -3118,18 +3128,18 @@ void H5ReaderMultithreaded::ReadUnsArray(const std::string &key, Vector &result,
 #endif
 	} else if (type_class == H5T_INTEGER) {
 		// Integer array
-		auto data = FlatVector::GetData<int64_t>(result);
+		auto data = compat::FlatVectorGetData<int64_t>(result);
 		H5Dread(dataset.get(), H5T_NATIVE_INT64, memspace.get(), dataspace.get(), H5P_DEFAULT, data);
 	} else if (type_class == H5T_FLOAT) {
 		// Float array
-		auto data = FlatVector::GetData<double>(result);
+		auto data = compat::FlatVectorGetData<double>(result);
 		H5Dread(dataset.get(), H5T_NATIVE_DOUBLE, memspace.get(), dataspace.get(), H5P_DEFAULT, data);
 	} else if (type_class == H5T_ENUM) {
 		// Boolean array
 		std::vector<int8_t> bool_buffer(count);
 		H5Dread(dataset.get(), H5T_NATIVE_INT8, memspace.get(), dataspace.get(), H5P_DEFAULT, bool_buffer.data());
 
-		auto data = FlatVector::GetData<bool>(result);
+		auto data = compat::FlatVectorGetData<bool>(result);
 		for (idx_t i = 0; i < count; i++) {
 			data[i] = bool_buffer[i] != 0;
 		}

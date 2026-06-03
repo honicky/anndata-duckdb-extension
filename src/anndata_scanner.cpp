@@ -1,4 +1,5 @@
 #include "include/anndata_scanner.hpp"
+#include "include/duckdb_compat.hpp"
 #include "include/s3_credentials.hpp"
 #include "include/glob_handler.hpp"
 #include "include/schema_harmonizer.hpp"
@@ -313,7 +314,7 @@ void AnndataScanner::ObsScan(ClientContext &context, TableFunctionInput &data, D
 		}
 
 		gstate.current_row += count;
-		output.SetCardinality(count);
+		compat::SetChunkCardinality(output,count);
 		return;
 	}
 
@@ -324,7 +325,7 @@ void AnndataScanner::ObsScan(ClientContext &context, TableFunctionInput &data, D
 
 	// Check if we've exhausted all files
 	if (gstate.current_file_idx >= bind_data.file_paths.size()) {
-		output.SetCardinality(0);
+		compat::SetChunkCardinality(output,0);
 		return;
 	}
 
@@ -335,7 +336,7 @@ void AnndataScanner::ObsScan(ClientContext &context, TableFunctionInput &data, D
 	// If current file is exhausted, move to next
 	while (rows_remaining_in_file == 0) {
 		if (!gstate.AdvanceToNextFile(context, bind_data)) {
-			output.SetCardinality(0);
+			compat::SetChunkCardinality(output,0);
 			return;
 		}
 		file_row_count = bind_data.harmonized_schema.file_row_counts[gstate.current_file_idx];
@@ -347,7 +348,7 @@ void AnndataScanner::ObsScan(ClientContext &context, TableFunctionInput &data, D
 	// Read _file_name column (column 0 in multi-file mode)
 	auto &file_name_vec = output.data[0];
 	for (idx_t i = 0; i < rows_to_read; i++) {
-		FlatVector::GetData<string_t>(file_name_vec)[i] =
+		compat::FlatVectorGetData<string_t>(file_name_vec)[i] =
 		    StringVector::AddString(file_name_vec, gstate.current_file_name);
 	}
 
@@ -363,7 +364,7 @@ void AnndataScanner::ObsScan(ClientContext &context, TableFunctionInput &data, D
 			                                rows_to_read);
 		} else {
 			// Column doesn't exist - fill with NULL (union mode)
-			auto &validity = FlatVector::Validity(vec);
+			auto &validity = compat::FlatVectorValidity(vec);
 			for (idx_t i = 0; i < rows_to_read; i++) {
 				validity.SetInvalid(i);
 			}
@@ -372,7 +373,7 @@ void AnndataScanner::ObsScan(ClientContext &context, TableFunctionInput &data, D
 
 	gstate.current_row_in_file += rows_to_read;
 	gstate.current_row += rows_to_read;
-	output.SetCardinality(rows_to_read);
+	compat::SetChunkCardinality(output,rows_to_read);
 }
 
 // Table function implementations for .var table
@@ -475,7 +476,7 @@ void AnndataScanner::VarScan(ClientContext &context, TableFunctionInput &data, D
 		}
 
 		gstate.current_row += count;
-		output.SetCardinality(count);
+		compat::SetChunkCardinality(output,count);
 		return;
 	}
 
@@ -486,7 +487,7 @@ void AnndataScanner::VarScan(ClientContext &context, TableFunctionInput &data, D
 
 	// Check if we've exhausted all files
 	if (gstate.current_file_idx >= bind_data.file_paths.size()) {
-		output.SetCardinality(0);
+		compat::SetChunkCardinality(output,0);
 		return;
 	}
 
@@ -497,7 +498,7 @@ void AnndataScanner::VarScan(ClientContext &context, TableFunctionInput &data, D
 	// If current file is exhausted, move to next
 	while (rows_remaining_in_file == 0) {
 		if (!gstate.AdvanceToNextFile(context, bind_data)) {
-			output.SetCardinality(0);
+			compat::SetChunkCardinality(output,0);
 			return;
 		}
 		file_row_count = bind_data.harmonized_schema.file_row_counts[gstate.current_file_idx];
@@ -509,7 +510,7 @@ void AnndataScanner::VarScan(ClientContext &context, TableFunctionInput &data, D
 	// Read _file_name column (column 0)
 	auto &file_name_vec = output.data[0];
 	for (idx_t i = 0; i < rows_to_read; i++) {
-		FlatVector::GetData<string_t>(file_name_vec)[i] =
+		compat::FlatVectorGetData<string_t>(file_name_vec)[i] =
 		    StringVector::AddString(file_name_vec, gstate.current_file_name);
 	}
 
@@ -525,7 +526,7 @@ void AnndataScanner::VarScan(ClientContext &context, TableFunctionInput &data, D
 			                                rows_to_read);
 		} else {
 			// Column doesn't exist - fill with NULL (union mode)
-			auto &validity = FlatVector::Validity(vec);
+			auto &validity = compat::FlatVectorValidity(vec);
 			for (idx_t i = 0; i < rows_to_read; i++) {
 				validity.SetInvalid(i);
 			}
@@ -534,7 +535,7 @@ void AnndataScanner::VarScan(ClientContext &context, TableFunctionInput &data, D
 
 	gstate.current_row_in_file += rows_to_read;
 	gstate.current_row += rows_to_read;
-	output.SetCardinality(rows_to_read);
+	compat::SetChunkCardinality(output,rows_to_read);
 }
 
 // Global state initialization
@@ -662,7 +663,7 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 		if (to_read == 0) {
 			// Try to advance to next file
 			if (!gstate.AdvanceToNextFile(context, bind_data)) {
-				output.SetCardinality(0);
+				compat::SetChunkCardinality(output,0);
 				return; // All files exhausted
 			}
 			// Update var mapping for new file
@@ -673,7 +674,7 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 		}
 
 		if (to_read == 0) {
-			output.SetCardinality(0);
+			compat::SetChunkCardinality(output,0);
 			return;
 		}
 
@@ -693,13 +694,13 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 				idx_t col_id = gstate.column_ids[out_idx];
 				if (col_id == 0) {
 					// _file_name column
-					auto file_name_data = FlatVector::GetData<string_t>(output.data[out_idx]);
+					auto file_name_data = compat::FlatVectorGetData<string_t>(output.data[out_idx]);
 					for (idx_t i = 0; i < count; i++) {
 						file_name_data[i] = StringVector::AddString(output.data[out_idx], gstate.current_file_name);
 					}
 				} else if (col_id == 1) {
 					// obs_idx column
-					auto obs_idx_data = FlatVector::GetData<int64_t>(output.data[out_idx]);
+					auto obs_idx_data = compat::FlatVectorGetData<int64_t>(output.data[out_idx]);
 					for (idx_t i = 0; i < count; i++) {
 						obs_idx_data[i] = static_cast<int64_t>(gstate.current_row_in_file + i);
 					}
@@ -713,7 +714,7 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 							output_gene_cols.push_back(out_idx);
 						} else {
 							// Union mode: column not in this file, set NULL
-							auto &validity = FlatVector::Validity(output.data[out_idx]);
+							auto &validity = compat::FlatVectorValidity(output.data[out_idx]);
 							for (idx_t i = 0; i < count; i++) {
 								validity.SetInvalid(i);
 							}
@@ -743,14 +744,14 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 			idx_t col_offset = 0;
 
 			// Fill _file_name column
-			auto file_name_data = FlatVector::GetData<string_t>(output.data[0]);
+			auto file_name_data = compat::FlatVectorGetData<string_t>(output.data[0]);
 			for (idx_t i = 0; i < count; i++) {
 				file_name_data[i] = StringVector::AddString(output.data[0], gstate.current_file_name);
 			}
 			col_offset = 1;
 
 			// Fill obs_idx column
-			auto obs_idx_data = FlatVector::GetData<int64_t>(output.data[col_offset]);
+			auto obs_idx_data = compat::FlatVectorGetData<int64_t>(output.data[col_offset]);
 			for (idx_t i = 0; i < count; i++) {
 				obs_idx_data[i] = static_cast<int64_t>(gstate.current_row_in_file + i);
 			}
@@ -788,7 +789,7 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 			for (idx_t v = 0; v < gstate.current_var_mapping.size(); v++) {
 				if (gstate.current_var_mapping[v] == DConstants::INVALID_INDEX) {
 					auto &vec = output.data[col_offset + v];
-					auto &validity = FlatVector::Validity(vec);
+					auto &validity = compat::FlatVectorValidity(vec);
 					for (idx_t row = 0; row < count; row++) {
 						validity.SetInvalid(row);
 					}
@@ -798,7 +799,7 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 
 		gstate.current_row_in_file += count;
 		gstate.current_row += count;
-		output.SetCardinality(count);
+		compat::SetChunkCardinality(output,count);
 	} else {
 		// Single file X scan
 		if (!gstate.h5_reader) {
@@ -858,7 +859,7 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 				}
 			}
 
-			output.SetCardinality(count);
+			compat::SetChunkCardinality(output,count);
 		} else {
 			// No projection pushdown - read all columns
 			gstate.h5_reader->ReadXMatrixBatch(gstate.current_row, count, 0, bind_data.n_var, output);
@@ -991,7 +992,7 @@ void AnndataScanner::ObsmScan(ClientContext &context, TableFunctionInput &data, 
 		}
 
 		gstate.current_row += count;
-		output.SetCardinality(count);
+		compat::SetChunkCardinality(output,count);
 		return;
 	}
 
@@ -1001,7 +1002,7 @@ void AnndataScanner::ObsmScan(ClientContext &context, TableFunctionInput &data, 
 	}
 
 	if (gstate.current_file_idx >= bind_data.file_paths.size()) {
-		output.SetCardinality(0);
+		compat::SetChunkCardinality(output,0);
 		return;
 	}
 
@@ -1010,7 +1011,7 @@ void AnndataScanner::ObsmScan(ClientContext &context, TableFunctionInput &data, 
 
 	while (rows_remaining == 0) {
 		if (!gstate.AdvanceToNextFile(context, bind_data)) {
-			output.SetCardinality(0);
+			compat::SetChunkCardinality(output,0);
 			return;
 		}
 		file_row_count = bind_data.harmonized_schema.file_row_counts[gstate.current_file_idx];
@@ -1029,7 +1030,7 @@ void AnndataScanner::ObsmScan(ClientContext &context, TableFunctionInput &data, 
 	// Column 0: _file_name
 	auto &file_name_vec = output.data[0];
 	for (idx_t i = 0; i < count; i++) {
-		FlatVector::GetData<string_t>(file_name_vec)[i] =
+		compat::FlatVectorGetData<string_t>(file_name_vec)[i] =
 		    StringVector::AddString(file_name_vec, gstate.current_file_name);
 	}
 
@@ -1047,7 +1048,7 @@ void AnndataScanner::ObsmScan(ClientContext &context, TableFunctionInput &data, 
 			                                 vec);
 		} else {
 			// Column doesn't exist in this file (union mode)
-			auto &validity = FlatVector::Validity(vec);
+			auto &validity = compat::FlatVectorValidity(vec);
 			for (idx_t i = 0; i < count; i++) {
 				validity.SetInvalid(i);
 			}
@@ -1056,7 +1057,7 @@ void AnndataScanner::ObsmScan(ClientContext &context, TableFunctionInput &data, 
 
 	gstate.current_row_in_file += count;
 	gstate.current_row += count;
-	output.SetCardinality(count);
+	compat::SetChunkCardinality(output,count);
 }
 
 // Table function implementations for varm matrices
@@ -1177,7 +1178,7 @@ void AnndataScanner::VarmScan(ClientContext &context, TableFunctionInput &data, 
 		}
 
 		gstate.current_row += count;
-		output.SetCardinality(count);
+		compat::SetChunkCardinality(output,count);
 		return;
 	}
 
@@ -1187,7 +1188,7 @@ void AnndataScanner::VarmScan(ClientContext &context, TableFunctionInput &data, 
 	}
 
 	if (gstate.current_file_idx >= bind_data.file_paths.size()) {
-		output.SetCardinality(0);
+		compat::SetChunkCardinality(output,0);
 		return;
 	}
 
@@ -1196,7 +1197,7 @@ void AnndataScanner::VarmScan(ClientContext &context, TableFunctionInput &data, 
 
 	while (rows_remaining == 0) {
 		if (!gstate.AdvanceToNextFile(context, bind_data)) {
-			output.SetCardinality(0);
+			compat::SetChunkCardinality(output,0);
 			return;
 		}
 		file_row_count = bind_data.harmonized_schema.file_row_counts[gstate.current_file_idx];
@@ -1214,7 +1215,7 @@ void AnndataScanner::VarmScan(ClientContext &context, TableFunctionInput &data, 
 
 	auto &file_name_vec = output.data[0];
 	for (idx_t i = 0; i < count; i++) {
-		FlatVector::GetData<string_t>(file_name_vec)[i] =
+		compat::FlatVectorGetData<string_t>(file_name_vec)[i] =
 		    StringVector::AddString(file_name_vec, gstate.current_file_name);
 	}
 
@@ -1229,7 +1230,7 @@ void AnndataScanner::VarmScan(ClientContext &context, TableFunctionInput &data, 
 			gstate.h5_reader->ReadVarmMatrix(bind_data.obsm_varm_matrix_name, gstate.current_row_in_file, count, col,
 			                                 vec);
 		} else {
-			auto &validity = FlatVector::Validity(vec);
+			auto &validity = compat::FlatVectorValidity(vec);
 			for (idx_t i = 0; i < count; i++) {
 				validity.SetInvalid(i);
 			}
@@ -1238,7 +1239,7 @@ void AnndataScanner::VarmScan(ClientContext &context, TableFunctionInput &data, 
 
 	gstate.current_row_in_file += count;
 	gstate.current_row += count;
-	output.SetCardinality(count);
+	compat::SetChunkCardinality(output,count);
 }
 
 // Helper functions for error handling
@@ -1378,7 +1379,7 @@ void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data,
 		if (to_read == 0) {
 			// Try to advance to next file
 			if (!state.AdvanceToNextFile(context, bind_data)) {
-				output.SetCardinality(0);
+				compat::SetChunkCardinality(output,0);
 				return; // All files exhausted
 			}
 			// Update var mapping for new file
@@ -1389,7 +1390,7 @@ void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data,
 		}
 
 		if (to_read == 0) {
-			output.SetCardinality(0);
+			compat::SetChunkCardinality(output,0);
 			return;
 		}
 
@@ -1407,13 +1408,13 @@ void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data,
 				idx_t col_id = state.column_ids[out_idx];
 				if (col_id == 0) {
 					// _file_name column
-					auto file_name_data = FlatVector::GetData<string_t>(output.data[out_idx]);
+					auto file_name_data = compat::FlatVectorGetData<string_t>(output.data[out_idx]);
 					for (idx_t i = 0; i < count; i++) {
 						file_name_data[i] = StringVector::AddString(output.data[out_idx], state.current_file_name);
 					}
 				} else if (col_id == 1) {
 					// obs_idx column
-					auto obs_idx_data = FlatVector::GetData<int64_t>(output.data[out_idx]);
+					auto obs_idx_data = compat::FlatVectorGetData<int64_t>(output.data[out_idx]);
 					for (idx_t i = 0; i < count; i++) {
 						obs_idx_data[i] = static_cast<int64_t>(state.current_row_in_file + i);
 					}
@@ -1425,7 +1426,7 @@ void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data,
 							file_var_indices.push_back(file_col);
 							output_gene_cols.push_back(out_idx);
 						} else {
-							auto &validity = FlatVector::Validity(output.data[out_idx]);
+							auto &validity = compat::FlatVectorValidity(output.data[out_idx]);
 							for (idx_t i = 0; i < count; i++) {
 								validity.SetInvalid(i);
 							}
@@ -1455,13 +1456,13 @@ void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data,
 			// No projection pushdown - write all columns
 			idx_t col_offset = 0;
 
-			auto file_name_data = FlatVector::GetData<string_t>(output.data[0]);
+			auto file_name_data = compat::FlatVectorGetData<string_t>(output.data[0]);
 			for (idx_t i = 0; i < count; i++) {
 				file_name_data[i] = StringVector::AddString(output.data[0], state.current_file_name);
 			}
 			col_offset = 1;
 
-			auto obs_idx_data = FlatVector::GetData<int64_t>(output.data[col_offset]);
+			auto obs_idx_data = compat::FlatVectorGetData<int64_t>(output.data[col_offset]);
 			for (idx_t i = 0; i < count; i++) {
 				obs_idx_data[i] = static_cast<int64_t>(state.current_row_in_file + i);
 			}
@@ -1498,7 +1499,7 @@ void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data,
 			for (idx_t v = 0; v < state.current_var_mapping.size(); v++) {
 				if (state.current_var_mapping[v] == DConstants::INVALID_INDEX) {
 					auto &vec = output.data[col_offset + v];
-					auto &validity = FlatVector::Validity(vec);
+					auto &validity = compat::FlatVectorValidity(vec);
 					for (idx_t row = 0; row < count; row++) {
 						validity.SetInvalid(row);
 					}
@@ -1508,7 +1509,7 @@ void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data,
 
 		state.current_row_in_file += count;
 		state.current_row += count;
-		output.SetCardinality(count);
+		compat::SetChunkCardinality(output,count);
 	} else {
 		// Single file layer scan
 		if (!state.h5_reader) {
@@ -1565,7 +1566,7 @@ void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data,
 				}
 			}
 
-			output.SetCardinality(count);
+			compat::SetChunkCardinality(output,count);
 		} else {
 			// No projection pushdown - read all columns
 			state.h5_reader->ReadLayerMatrixBatch(bind_data.layer_name, state.current_row, count, 0, bind_data.n_var,
@@ -1707,7 +1708,7 @@ void AnndataScanner::RawXScan(ClientContext &context, TableFunctionInput &data, 
 			}
 		}
 
-		output.SetCardinality(count);
+		compat::SetChunkCardinality(output,count);
 	} else {
 		gstate.h5_reader->ReadMatrixBatch("/raw/X", gstate.current_row, count, 0, bind_data.n_var, output, true);
 	}
@@ -1768,7 +1769,7 @@ void AnndataScanner::RawVarScan(ClientContext &context, TableFunctionInput &data
 	}
 
 	gstate.current_row += count;
-	output.SetCardinality(count);
+	compat::SetChunkCardinality(output,count);
 }
 
 unique_ptr<FunctionData> AnndataScanner::RawVarmBind(ClientContext &context, TableFunctionBindInput &input,
@@ -1851,7 +1852,7 @@ void AnndataScanner::RawVarmScan(ClientContext &context, TableFunctionInput &dat
 	}
 
 	gstate.current_row += count;
-	output.SetCardinality(count);
+	compat::SetChunkCardinality(output,count);
 }
 
 // Error handling functions for raw varm
@@ -1930,7 +1931,7 @@ void AnndataScanner::UnsScan(ClientContext &context, TableFunctionInput &data, D
 		// No uns data - return single row with message
 		if (gstate.current_row == 0) {
 			output.data[0].SetValue(0, Value("No uns data in file"));
-			output.SetCardinality(1);
+			compat::SetChunkCardinality(output,1);
 			gstate.current_row = 1;
 		}
 		return;
@@ -2030,7 +2031,7 @@ void AnndataScanner::UnsScan(ClientContext &context, TableFunctionInput &data, D
 	}
 
 	gstate.current_row += count;
-	output.SetCardinality(count);
+	compat::SetChunkCardinality(output,count);
 }
 
 // Table function implementations for obsp (observation pairwise matrices)
@@ -2129,7 +2130,7 @@ void AnndataScanner::ObspScan(ClientContext &context, TableFunctionInput &data, 
 		if (to_read == 0) {
 			// Try to advance to next file
 			if (!gstate.AdvanceToNextFile(context, bind_data)) {
-				output.SetCardinality(0);
+				compat::SetChunkCardinality(output,0);
 				return; // All files exhausted
 			}
 			current_file_nnz = bind_data.harmonized_schema.file_row_counts[gstate.current_file_idx];
@@ -2138,12 +2139,12 @@ void AnndataScanner::ObspScan(ClientContext &context, TableFunctionInput &data, 
 		}
 
 		if (to_read == 0) {
-			output.SetCardinality(0);
+			compat::SetChunkCardinality(output,0);
 			return;
 		}
 
 		// Fill _file_name column
-		auto file_name_data = FlatVector::GetData<string_t>(output.data[0]);
+		auto file_name_data = compat::FlatVectorGetData<string_t>(output.data[0]);
 		for (idx_t i = 0; i < to_read; i++) {
 			file_name_data[i] = StringVector::AddString(output.data[0], gstate.current_file_name);
 		}
@@ -2157,7 +2158,7 @@ void AnndataScanner::ObspScan(ClientContext &context, TableFunctionInput &data, 
 		count = to_read;
 		gstate.current_row_in_file += to_read;
 		gstate.current_row += to_read;
-		output.SetCardinality(count);
+		compat::SetChunkCardinality(output,count);
 	} else {
 		// Single file obsp scan
 		if (!gstate.h5_reader) {
@@ -2178,7 +2179,7 @@ void AnndataScanner::ObspScan(ClientContext &context, TableFunctionInput &data, 
 		                                 count);
 
 		gstate.current_row += count;
-		output.SetCardinality(count);
+		compat::SetChunkCardinality(output,count);
 	}
 }
 
@@ -2278,7 +2279,7 @@ void AnndataScanner::VarpScan(ClientContext &context, TableFunctionInput &data, 
 		if (to_read == 0) {
 			// Try to advance to next file
 			if (!gstate.AdvanceToNextFile(context, bind_data)) {
-				output.SetCardinality(0);
+				compat::SetChunkCardinality(output,0);
 				return; // All files exhausted
 			}
 			current_file_nnz = bind_data.harmonized_schema.file_row_counts[gstate.current_file_idx];
@@ -2287,12 +2288,12 @@ void AnndataScanner::VarpScan(ClientContext &context, TableFunctionInput &data, 
 		}
 
 		if (to_read == 0) {
-			output.SetCardinality(0);
+			compat::SetChunkCardinality(output,0);
 			return;
 		}
 
 		// Fill _file_name column
-		auto file_name_data = FlatVector::GetData<string_t>(output.data[0]);
+		auto file_name_data = compat::FlatVectorGetData<string_t>(output.data[0]);
 		for (idx_t i = 0; i < to_read; i++) {
 			file_name_data[i] = StringVector::AddString(output.data[0], gstate.current_file_name);
 		}
@@ -2306,7 +2307,7 @@ void AnndataScanner::VarpScan(ClientContext &context, TableFunctionInput &data, 
 		count = to_read;
 		gstate.current_row_in_file += to_read;
 		gstate.current_row += to_read;
-		output.SetCardinality(count);
+		compat::SetChunkCardinality(output,count);
 	} else {
 		// Single file varp scan
 		if (!gstate.h5_reader) {
@@ -2327,7 +2328,7 @@ void AnndataScanner::VarpScan(ClientContext &context, TableFunctionInput &data, 
 		                                 count);
 
 		gstate.current_row += count;
-		output.SetCardinality(count);
+		compat::SetChunkCardinality(output,count);
 	}
 }
 
@@ -2385,7 +2386,7 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 		}
 	}
 
-	output.SetCardinality(0);
+	compat::SetChunkCardinality(output,0);
 	idx_t result_idx = 0;
 
 	// Prepare output vectors
@@ -2616,19 +2617,19 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 			if (result_idx >= STANDARD_VECTOR_SIZE) {
 				break;
 			}
-			FlatVector::GetData<string_t>(property_vec)[result_idx] = StringVector::AddString(property_vec, row.first);
-			FlatVector::GetData<string_t>(value_vec)[result_idx] = StringVector::AddString(value_vec, row.second);
+			compat::FlatVectorGetData<string_t>(property_vec)[result_idx] = StringVector::AddString(property_vec, row.first);
+			compat::FlatVectorGetData<string_t>(value_vec)[result_idx] = StringVector::AddString(value_vec, row.second);
 			result_idx++;
 		}
 
 		gstate.current_row = info_rows.size();
 	}
 
-	output.SetCardinality(result_idx);
+	compat::SetChunkCardinality(output,result_idx);
 
 	// If we've output all rows, we're done
 	if (result_idx == 0) {
-		output.SetCardinality(0);
+		compat::SetChunkCardinality(output,0);
 	}
 }
 
