@@ -1,0 +1,38 @@
+# name: test/sql/duplicate_var_names.test
+# description: X wide table must rename duplicate var (gene) names with _1, _2 suffixes
+# group: [sql]
+
+require anndata
+
+statement ok
+ATTACH 'test/data/test_duplicate_var_names.h5ad' AS dup (TYPE ANNDATA);
+
+# The X table exposes one column per gene. Duplicate gene names (GENEA x3,
+# GENEB x2) must be disambiguated so binding does not fail with a duplicate
+# column name error. Column order follows var order in the file.
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM dup.X);
+----
+obs_idx
+GENEA
+GENEB
+GENEA_1
+UNIQUE1
+GENEB_1
+GENEA_2
+
+# Selecting a non-duplicated column must work (regression: previously failed
+# with "table anndata_scan_x has duplicate column name").
+query I
+SELECT UNIQUE1 FROM dup.X LIMIT 1;
+----
+4.0
+
+# Each renamed duplicate column maps to its own underlying gene column.
+query IIIIII
+SELECT GENEA, GENEB, GENEA_1, UNIQUE1, GENEB_1, GENEA_2 FROM dup.X LIMIT 1;
+----
+1.0	2.0	3.0	4.0	5.0	6.0
+
+statement ok
+DETACH dup;

@@ -602,12 +602,25 @@ unique_ptr<FunctionData> AnndataScanner::XBind(ClientContext &context, TableFunc
 		bind_data->var_names = file_schemas[0].var_names;
 		bind_data->row_count = bind_data->n_obs;
 
-		// Set up columns: obs_idx + one column per gene
+		// Set up columns: obs_idx + one column per gene, handling duplicate names
 		names.emplace_back("obs_idx");
 		return_types.emplace_back(LogicalType::BIGINT);
 
+		std::unordered_set<std::string> used_names;
+		used_names.insert("obs_idx");
+
 		for (size_t i = 0; i < bind_data->n_var && i < bind_data->var_names.size(); i++) {
-			names.emplace_back(bind_data->var_names[i]);
+			std::string base_name = bind_data->var_names[i];
+			std::string unique_name = base_name;
+
+			int suffix = 1;
+			while (used_names.count(unique_name) > 0) {
+				unique_name = base_name + "_" + std::to_string(suffix);
+				suffix++;
+			}
+
+			used_names.insert(unique_name);
+			names.emplace_back(unique_name);
 			return_types.emplace_back(LogicalType::DOUBLE);
 		}
 	} else {
@@ -630,8 +643,21 @@ unique_ptr<FunctionData> AnndataScanner::XBind(ClientContext &context, TableFunc
 		names.emplace_back("obs_idx");
 		return_types.emplace_back(LogicalType::BIGINT);
 
+		std::unordered_set<std::string> used_names;
+		used_names.insert("_file_name");
+		used_names.insert("obs_idx");
+
 		for (const auto &var_name : bind_data->harmonized_schema.common_var_names) {
-			names.emplace_back(var_name);
+			std::string unique_name = var_name;
+
+			int suffix = 1;
+			while (used_names.count(unique_name) > 0) {
+				unique_name = var_name + "_" + std::to_string(suffix);
+				suffix++;
+			}
+
+			used_names.insert(unique_name);
+			names.emplace_back(unique_name);
 			return_types.emplace_back(LogicalType::DOUBLE);
 		}
 	}
