@@ -1,0 +1,391 @@
+#
+# Monitor upstream DuckDB ecosystem for changes that affect this extension.
+#
+# Three checks, each with auto-open / auto-close issue tracking:
+#
+#   1. **New DuckDB release** — compares our pinned `duckdb_version` against
+#      the latest GitHub release. Opens a `new-duckdb-release` issue with
+#      upgrade instructions when a new version is available; auto-closes
+#      when we catch up.
+#
+#   2. **Stable CI health** — runs the full stable build matrix. If a
+#      platform that was previously broken starts passing (e.g. the
+#      extension-ci-tools Windows VS2026 regression), auto-closes the
+#      `ci-upstream-regression` issue. If a new regression appears, opens
+#      one.
+#
+#   3. **Community extensions descriptor** — checks whether our published
+#      version in `duckdb/community-extensions` matches our latest tag.
+#      Opens a `community-ext-stale` issue with the exact descriptor diff
+#      when behind; auto-closes when upstream catches up.
+#
+name: Monitor Upstream
+on:
+  schedule:
+    # Daily at 08:00 UTC (two hours after the UpcomingDuckdbPipeline).
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  # ── 1. New DuckDB release detection ──────────────────────────────────
+  check-release:
+    name: Check for new DuckDB release
+    runs-on: ubuntu-latest
+    outputs:
+      current: ${{ steps.versions.outputs.current }}
+      latest: ${{ steps.versions.outputs.latest }}
+      update_available: ${{ steps.versions.outputs.update_available }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare versions
+        id: versions
+        run: |
+          set -eo pipefail
+          CURRENT=$(grep -m1 'duckdb_version:' .github/workflows/MainDistributionPipeline.yml \
+            | sed 's/.*duckdb_version: *//' | tr -d "'\"")
+          LATEST=$(curl -sf https://api.github.com/repos/duckdb/duckdb/releases/latest \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])")
+          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+          echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
+          if [ "${CURRENT}" = "${LATEST}" ]; then
+            echo "update_available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "update_available=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Current: ${CURRENT}, Latest: ${LATEST}"
+
+      - name: Open or close release tracking issue
+        uses: actions/github-script@v7
+        env:
+          CURRENT: ${{ steps.versions.outputs.current }}
+          LATEST: ${{ steps.versions.outputs.latest }}
+          UPDATE: ${{ steps.versions.outputs.update_available }}
+        with:
+          script: |
+            const label = 'new-duckdb-release';
+            const current = process.env.CURRENT;
+            const latest = process.env.LATEST;
+            const updateAvailable = process.env.UPDATE === 'true';
+
+            // Ensure label exists
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner, repo: context.repo.repo, name: label
+              });
+            } catch (e) {
+              if (e.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  name: label, color: '1d76db',
+                  description: 'A new DuckDB stable release is available',
+                });
+              } else { throw e; }
+            }
+
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: label, per_page: 100,
+            });
+
+            if (!updateAvailable) {
+              for (const issue of open) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `We are now on \`${current}\` which matches the latest release. Closing.`,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issue.number, state: 'closed',
+                });
+              }
+              return;
+            }
+
+            const title = `New DuckDB release available: ${latest}`;
+            const body = [
+              `A new DuckDB stable release **${latest}** is available (we are on \`${current}\`).`,
+              ``,
+              `### Upgrade checklist`,
+              ``,
+              '```bash',
+              `# 1. Update DuckDB submodule`,
+              `cd duckdb && git fetch origin tag ${latest} && git checkout ${latest} && cd ..`,
+              ``,
+              `# 2. Update extension-ci-tools`,
+              `cd extension-ci-tools && git fetch origin && git checkout origin/main && cd ..`,
+              ``,
+              `# 3. Update CI version references`,
+              `sed -i "s/duckdb_version: ${current}/duckdb_version: ${latest}/g" .github/workflows/MainDistributionPipeline.yml`,
+              `sed -i "s/${current}/${latest}/g" .github/workflows/MainDistributionPipeline.yml`,
+              ``,
+              `# 4. Clean build and test`,
+              `rm -rf build/release && uv run make`,
+              `build/release/test/unittest "test/*" --test-dir .`,
+              ``,
+              `# 5. Quality checks`,
+              `uv run make format-fix && uv run make tidy-check`,
+              ``,
+              `# 6. Commit`,
+              `git add duckdb extension-ci-tools .github/workflows/MainDistributionPipeline.yml`,
+              `git commit -m "chore: upgrade DuckDB to ${latest}"`,
+              '```',
+              ``,
+              `After merging, update \`extensions/anndata/description.yml\` in [\`duckdb/community-extensions\`](https://github.com/duckdb/community-extensions) with the new \`ref\`.`,
+              ``,
+              `This issue will close automatically when our CI is updated to \`${latest}\`.`,
+            ].join('\n');
+
+            if (open.length === 0) {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: [label],
+              });
+              core.notice(`Opened release tracking issue #${created.data.number}`);
+            } else {
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: open[0].number, title, body,
+              });
+              core.notice(`Updated release tracking issue #${open[0].number}`);
+            }
+
+  # ── 2. Stable CI health check ───────────────────────────────────────
+  stable-build:
+    name: Stable CI health
+    needs: check-release
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
+    with:
+      duckdb_version: ${{ needs.check-release.outputs.current }}
+      ci_tools_version: main
+      extension_name: anndata
+      opt_in_archs: 'linux_amd64_musl'
+
+  report-ci-health:
+    name: Report CI health
+    needs: [check-release, stable-build]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or close CI regression issue
+        uses: actions/github-script@v7
+        env:
+          BUILD_RESULT: ${{ needs.stable-build.result }}
+        with:
+          script: |
+            const label = 'ci-upstream-regression';
+            const buildResult = process.env.BUILD_RESULT;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            // Ensure label exists
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner, repo: context.repo.repo, name: label
+              });
+            } catch (e) {
+              if (e.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  name: label, color: 'e4e669',
+                  description: 'Upstream CI tooling regression affecting our stable build',
+                });
+              } else { throw e; }
+            }
+
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: label, per_page: 100,
+            });
+
+            if (buildResult === 'success') {
+              for (const issue of open) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `Stable build is green again. The upstream regression has been fixed.\n\nRun: ${runUrl}`,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issue.number, state: 'closed',
+                });
+                core.notice(`Closed CI regression issue #${issue.number}`);
+              }
+              return;
+            }
+
+            const title = 'Stable build failing due to upstream CI tooling regression';
+            const body = [
+              `The stable build (DuckDB v1.5.2) is failing due to an issue in \`extension-ci-tools@main\`.`,
+              ``,
+              `This is **not caused by our code** — the failure is in the upstream CI tooling ` +
+              `(likely the Windows VS2026 runner migration in \`duckdb/extension-ci-tools\`).`,
+              ``,
+              `- Build result: \`${buildResult}\``,
+              `- Run: ${runUrl}`,
+              `- Upstream issue: [extension-ci-tools #371](https://github.com/duckdb/extension-ci-tools/issues/371)`,
+              ``,
+              `### What to do`,
+              ``,
+              `- **Wait** for the upstream fix (preferred). This issue will auto-close when the daily health check passes.`,
+              `- **Temporary workaround**: pin \`ci_tools_version\` in \`MainDistributionPipeline.yml\` to a known-good commit. Revert once upstream is fixed.`,
+              ``,
+              `This issue is refreshed daily and will close automatically when the build is green.`,
+            ].join('\n');
+
+            if (open.length === 0) {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: [label],
+              });
+              core.notice(`Opened CI regression issue #${created.data.number}`);
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: open[0].number,
+                body: `Still failing.\n\n- Build result: \`${buildResult}\`\n- Run: ${runUrl}`,
+              });
+              core.notice(`Updated CI regression issue #${open[0].number}`);
+            }
+
+  # ── 3. Community extensions descriptor freshness ─────────────────────
+  check-community-descriptor:
+    name: Check community extensions descriptor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compare descriptor vs our tags
+        id: descriptor
+        run: |
+          set -eo pipefail
+
+          # Fetch the upstream descriptor
+          HTTP_CODE=$(curl -sf -w '%{http_code}' \
+            https://raw.githubusercontent.com/duckdb/community-extensions/main/extensions/anndata/description.yml \
+            -o /tmp/descriptor.yml || true)
+          if [ "${HTTP_CODE}" != "200" ]; then
+            echo "status=not_found" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Extract upstream version and ref
+          UPSTREAM_VERSION=$(grep -m1 '^[[:space:]]*version:' /tmp/descriptor.yml | awk '{print $2}')
+          UPSTREAM_REF=$(awk '/^repo:/{f=1; next} f && /^[^ ]/{f=0} f && /^[[:space:]]+ref:/{print $2; exit}' /tmp/descriptor.yml)
+
+          # Get our latest tag
+          OUR_LATEST_TAG=$(git tag -l 'v*' --sort=-version:refname | head -1)
+          OUR_LATEST_VERSION=${OUR_LATEST_TAG#v}
+          OUR_TAG_SHA=$(git rev-parse "${OUR_LATEST_TAG}^{commit}" 2>/dev/null || echo "")
+
+          echo "upstream_version=${UPSTREAM_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "upstream_ref=${UPSTREAM_REF}" >> "$GITHUB_OUTPUT"
+          echo "our_version=${OUR_LATEST_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "our_tag=${OUR_LATEST_TAG}" >> "$GITHUB_OUTPUT"
+          echo "our_sha=${OUR_TAG_SHA}" >> "$GITHUB_OUTPUT"
+
+          if [ "${UPSTREAM_VERSION}" = "${OUR_LATEST_VERSION}" ] && [ "${UPSTREAM_REF}" = "${OUR_TAG_SHA}" ]; then
+            echo "status=in_sync" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=stale" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "Upstream: v${UPSTREAM_VERSION} (${UPSTREAM_REF})"
+          echo "Ours:     ${OUR_LATEST_TAG} (${OUR_TAG_SHA})"
+
+      - name: Open or close descriptor issue
+        if: steps.descriptor.outputs.status != 'not_found'
+        uses: actions/github-script@v7
+        env:
+          STATUS: ${{ steps.descriptor.outputs.status }}
+          UPSTREAM_VERSION: ${{ steps.descriptor.outputs.upstream_version }}
+          UPSTREAM_REF: ${{ steps.descriptor.outputs.upstream_ref }}
+          OUR_VERSION: ${{ steps.descriptor.outputs.our_version }}
+          OUR_TAG: ${{ steps.descriptor.outputs.our_tag }}
+          OUR_SHA: ${{ steps.descriptor.outputs.our_sha }}
+        with:
+          script: |
+            const label = 'community-ext-stale';
+            const status = process.env.STATUS;
+
+            // Ensure label exists
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner, repo: context.repo.repo, name: label
+              });
+            } catch (e) {
+              if (e.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  name: label, color: '0e8a16',
+                  description: 'Community extensions descriptor needs updating to our latest release',
+                });
+              } else { throw e; }
+            }
+
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: label, per_page: 100,
+            });
+
+            if (status === 'in_sync') {
+              for (const issue of open) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `Community extensions descriptor is now up to date (v${process.env.OUR_VERSION}). Closing.`,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issue.number, state: 'closed',
+                });
+              }
+              core.notice('Descriptor in sync.');
+              return;
+            }
+
+            const title = `Update community extensions descriptor to ${process.env.OUR_TAG}`;
+            const body = [
+              `Our latest release is **${process.env.OUR_TAG}** but the community extensions descriptor still has \`${process.env.UPSTREAM_VERSION}\`.`,
+              ``,
+              `### Update needed`,
+              ``,
+              `Open a PR in [\`duckdb/community-extensions\`](https://github.com/duckdb/community-extensions) updating \`extensions/anndata/description.yml\`:`,
+              ``,
+              '```diff',
+              `- version: ${process.env.UPSTREAM_VERSION}`,
+              `+ version: ${process.env.OUR_VERSION}`,
+              ` repo:`,
+              `   github: ${context.repo.owner}/${context.repo.repo}`,
+              `-  ref: ${process.env.UPSTREAM_REF}`,
+              `+  ref: ${process.env.OUR_SHA}`,
+              '```',
+              ``,
+              `This issue will close automatically when the upstream descriptor matches our latest tag.`,
+            ].join('\n');
+
+            if (open.length === 0) {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: [label],
+              });
+              core.notice(`Opened descriptor issue #${created.data.number}`);
+            } else {
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: open[0].number, title, body,
+              });
+              core.notice(`Updated descriptor issue #${open[0].number}`);
+            }
