@@ -266,7 +266,7 @@ Per [DuckDB's community-extensions guidance](https://duckdb.org/community_extens
 
 | Branch              | DuckDB target | community-extensions descriptor field |
 |---------------------|---------------|---------------------------------------|
-| `main`              | latest stable release (`v1.5.2`) | `ref` |
+| `main`              | latest stable release (`v1.5.3`) | `ref` |
 | `main-distribution` | `duckdb/main` (upcoming release) | `ref_next` |
 
 The community-extensions CI builds both. When DuckDB cuts a release, the upstream maintainers swap `ref_next` → `ref`; at that point our `main-distribution` becomes the new `main`.
