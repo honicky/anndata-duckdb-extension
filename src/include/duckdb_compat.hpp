@@ -18,6 +18,14 @@
 #define DUCKDB_FLAT_VECTOR_HAS_MUTABLE 1
 #endif
 
+// DuckDB main introduced the Identifier class for case-insensitive SQL
+// identifiers and updated DefaultGenerator and CreateViewInfo to use it.
+// In v1.5.x these APIs use plain strings.
+#if __has_include("duckdb/common/identifier.hpp")
+#include "duckdb/common/identifier.hpp"
+#define DUCKDB_HAS_IDENTIFIER 1
+#endif
+
 namespace duckdb {
 namespace compat {
 
@@ -45,6 +53,15 @@ static inline void SetChunkCardinality(DataChunk &chunk, idx_t count) {
 	chunk.SetCardinality(count);
 #endif
 }
+
+// Type aliases for DefaultGenerator signatures that changed from string to Identifier.
+#ifdef DUCKDB_HAS_IDENTIFIER
+using DefaultEntryName = Identifier;
+using DefaultEntryList = vector<Identifier>;
+#else
+using DefaultEntryName = string;
+using DefaultEntryList = vector<string>;
+#endif
 
 } // namespace compat
 } // namespace duckdb
