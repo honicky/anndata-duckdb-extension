@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Bumped target DuckDB version from v1.5.2 to v1.5.4 (latest stable patch). v1.5.4 backports the upstream fix "Remove checked_array_iterator from fmt dep", which resolves the Windows build failure on the GitHub `windows-2025-vs2026` runner (MSVC 14.51 removed `stdext::checked_array_iterator`). v1.5.3 did not include this fix.
+
 ### Fixed
 - X wide table now renames duplicate variable (gene) names with `_1`, `_2`, ... suffixes, matching the `var`/raw-X tables and the attach-time warning. Previously, querying `*.X` on a file with non-unique `var_names` (e.g. `feature_name` used as both var_id and var_name) failed with `Binder Error: table "anndata_scan_x" has duplicate column name`.
 
