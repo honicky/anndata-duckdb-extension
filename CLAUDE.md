@@ -310,3 +310,11 @@ If you fix an API breakage that's only relevant to `duckdb/main`, **commit the f
 ./scripts/check-duckdb-release.sh           # Check current vs latest
 ./scripts/check-duckdb-release.sh --update   # Print upgrade commands
 ```
+
+### Automated monitoring (`.github/workflows/MonitorUpstream.yml`)
+
+Runs daily at 08:00 UTC. Three checks, each with auto-open / auto-close issue tracking:
+
+1. **New DuckDB release** (`new-duckdb-release` label) — compares our pinned `duckdb_version` against the latest GitHub release. Opens an issue with upgrade instructions; auto-closes when we update.
+2. **Stable CI health** (`ci-upstream-regression` label) — runs the full stable build matrix against `extension-ci-tools@main`. Detects and tracks upstream CI tooling regressions (e.g. Windows runner changes). Auto-closes when the regression is fixed upstream.
+3. **Community extensions descriptor** (`community-ext-stale` label) — checks whether our published version in `duckdb/community-extensions` matches our latest tag. Opens an issue with the exact descriptor diff; auto-closes when upstream catches up.
