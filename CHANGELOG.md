@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - X wide table now renames duplicate variable (gene) names with `_1`, `_2`, ... suffixes, matching the `var`/raw-X tables and the attach-time warning. Previously, querying `*.X` on a file with non-unique `var_names` (e.g. `feature_name` used as both var_id and var_name) failed with `Binder Error: table "anndata_scan_x" has duplicate column name`.
 
+### Compatibility
+- Extended `src/include/duckdb_compat.hpp` to cover the catalog API rework on `duckdb/main` (post-v1.5.x): `DefaultGenerator::CreateDefaultEntry`/`GetDefaultEntries` now take/return the new `Identifier` type instead of `string`, and `CreateViewInfo` replaced its public `schema`/`view_name` members with `SetSchema()`/`SetViewName()`. The shim is gated on `__has_include("duckdb/common/identifier.hpp")` and is a no-op on all released v1.5.x versions (verified: it compiles unchanged against v1.5.4), so it only affects the `main-distribution` build against `duckdb/main`. This unbreaks the Upcoming DuckDB Pipeline.
+
 ## [0.14.2] - 2026-05-07
 
 ### Added

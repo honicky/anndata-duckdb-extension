@@ -70,12 +70,17 @@ string AnndataDefaultGenerator::GenerateViewSQL(const TableViewInfo &info) const
 	throw InternalException("Unknown table type: " + info.table_type);
 }
 
-unique_ptr<CatalogEntry> AnndataDefaultGenerator::CreateDefaultEntry(ClientContext &context, const string &entry_name) {
-	auto it = table_map.find(entry_name);
+unique_ptr<CatalogEntry> AnndataDefaultGenerator::CreateDefaultEntry(ClientContext &context,
+                                                                    const compat::DefaultEntryName &entry_name) {
+	// DuckDB main passes an Identifier here; v1.5.x passes a string. Normalize to a
+	// raw string for our string-keyed table_map lookups.
+	const string &entry_name_str = compat::DefaultEntryNameToString(entry_name);
+
+	auto it = table_map.find(entry_name_str);
 	if (it == table_map.end()) {
 		// Check case-insensitively
 		for (const auto &pair : table_map) {
-			if (StringUtil::CIEquals(pair.first, entry_name)) {
+			if (StringUtil::CIEquals(pair.first, entry_name_str)) {
 				it = table_map.find(pair.first);
 				break;
 			}
@@ -89,19 +94,25 @@ unique_ptr<CatalogEntry> AnndataDefaultGenerator::CreateDefaultEntry(ClientConte
 	const auto &info = it->second;
 
 	auto result = make_uniq<CreateViewInfo>();
+#ifdef DUCKDB_HAS_IDENTIFIER
+	// DuckDB main: schema/view_name are set through accessors.
+	result->SetSchema(Identifier(DEFAULT_SCHEMA));
+	result->SetViewName(Identifier(info.name));
+#else
 	result->schema = DEFAULT_SCHEMA;
 	result->view_name = info.name;
+#endif
 	result->sql = GenerateViewSQL(info);
 
 	auto view_info = CreateViewInfo::FromSelect(context, std::move(result));
 	return make_uniq_base<CatalogEntry, ViewCatalogEntry>(catalog, schema, *view_info);
 }
 
-vector<string> AnndataDefaultGenerator::GetDefaultEntries() {
-	vector<string> entries;
+compat::DefaultEntryList AnndataDefaultGenerator::GetDefaultEntries() {
+	compat::DefaultEntryList entries;
 	entries.reserve(tables.size());
 	for (const auto &table : tables) {
-		entries.push_back(table.name);
+		entries.push_back(compat::MakeDefaultEntryName(table.name));
 	}
 	return entries;
 }

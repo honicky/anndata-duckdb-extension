@@ -3,6 +3,7 @@
 #include "duckdb/storage/storage_extension.hpp"
 #include "duckdb/catalog/default/default_generator.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
+#include "duckdb_compat.hpp"
 #include <map>
 
 namespace duckdb {
@@ -25,8 +26,9 @@ public:
 	AnndataDefaultGenerator(Catalog &catalog, SchemaCatalogEntry &schema, string file_path,
 	                        vector<TableViewInfo> tables);
 
-	unique_ptr<CatalogEntry> CreateDefaultEntry(ClientContext &context, const string &entry_name) override;
-	vector<string> GetDefaultEntries() override;
+	unique_ptr<CatalogEntry> CreateDefaultEntry(ClientContext &context,
+	                                            const compat::DefaultEntryName &entry_name) override;
+	compat::DefaultEntryList GetDefaultEntries() override;
 
 private:
 	SchemaCatalogEntry &schema;
