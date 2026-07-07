@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-07-07
+
 ### Changed
 - Bumped target DuckDB version from v1.5.2 to v1.5.4 (latest stable patch). v1.5.4 backports the upstream fix "Remove checked_array_iterator from fmt dep", which resolves the Windows build failure on the GitHub `windows-2025-vs2026` runner (MSVC 14.51 removed `stdext::checked_array_iterator`). v1.5.3 did not include this fix.
 - Consolidated the `MonitorUpstream.yml` workflow into `UpcomingDuckdbPipeline.yml`. The single workflow now handles both upcoming-release tracking (sync + build/quality vs `duckdb/main` + `duckdb-main-broken`) and stable-upstream monitoring (`new-duckdb-release`, `ci-upstream-regression`, `community-ext-stale`). The monitoring jobs are gated to schedule/dispatch runs so they don't run on `main-distribution` pushes. Dropped the redundant `descriptor-sync-check` job (label `descriptor-out-of-sync`): it compared the descriptor's `ref` against `main`'s branch HEAD and expected a `ref_next` field, but the published descriptor pins `ref` to a release-tag SHA and has no `ref_next` — so it reported false positives. Descriptor freshness is now covered solely by the tag-based `community-ext-stale` check.
