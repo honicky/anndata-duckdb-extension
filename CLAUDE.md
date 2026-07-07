@@ -273,7 +273,9 @@ The community-extensions CI builds both. When DuckDB cuts a release, the upstrea
 
 ### Automation (`.github/workflows/UpcomingDuckdbPipeline.yml`)
 
-This single workflow runs daily (06:00 UTC) and on push to `main-distribution`. It:
+A single workflow handles both upcoming-release tracking and stable-upstream monitoring. (It consolidates the former `UpcomingDuckdbPipeline` + `MonitorUpstream` workflows.) It runs daily (06:00 UTC), on manual dispatch, and on push to `main-distribution`.
+
+**Upcoming-release tracking** (all triggers, including `main-distribution` pushes):
 
 1. **Bootstraps `main-distribution`** if the branch doesn't exist yet (off `main` HEAD).
 2. **Auto-merges `main` into `main-distribution`** so stable changes flow forward.
@@ -281,8 +283,12 @@ This single workflow runs daily (06:00 UTC) and on push to `main-distribution`. 
    - Conflict → opens an issue labeled `next-merge-conflict` with `@claude` mention.
 3. **Builds and code-quality-checks `main-distribution`** against `duckdb/main`.
    - Failure → opens (or refreshes) `duckdb-main-broken` tracking issue with `@claude` mention. Auto-closes on next green run.
-4. **Checks the upstream descriptor at `duckdb/community-extensions`**.
-   - Mismatch → opens (or refreshes) `descriptor-out-of-sync` issue showing the YAML diff to apply manually. Auto-closes when upstream catches up.
+
+**Upstream monitoring** (schedule / manual dispatch only — skipped on `main-distribution` pushes):
+
+4. **New stable DuckDB release** (`new-duckdb-release` label) — compares our pinned `duckdb_version` against the latest GitHub release. Opens an issue with an upgrade checklist; auto-closes when we catch up.
+5. **Stable CI health** (`ci-upstream-regression` label) — re-runs the full stable build matrix against `extension-ci-tools@main` to catch upstream CI-tooling regressions (e.g. runner-image migrations) even without a push. Auto-closes when green again.
+6. **Community-extensions descriptor freshness** (`community-ext-stale` label) — compares the published `version` / `ref` at `duckdb/community-extensions` against our latest **release tag** (the descriptor's `ref` is pinned to a tag SHA, not a moving branch head). Opens an issue with the exact descriptor diff when behind; auto-closes when upstream catches up.
 
 If the [Claude GitHub App](https://github.com/apps/claude) is installed, the `@claude` mentions in the failure issues trigger automated fix PRs against `main-distribution`. Without the app, the issues are tracking-only.
 
@@ -310,11 +316,3 @@ If you fix an API breakage that's only relevant to `duckdb/main`, **commit the f
 ./scripts/check-duckdb-release.sh           # Check current vs latest
 ./scripts/check-duckdb-release.sh --update   # Print upgrade commands
 ```
-
-### Automated monitoring (`.github/workflows/MonitorUpstream.yml`)
-
-Runs daily at 08:00 UTC. Three checks, each with auto-open / auto-close issue tracking:
-
-1. **New DuckDB release** (`new-duckdb-release` label) — compares our pinned `duckdb_version` against the latest GitHub release. Opens an issue with upgrade instructions; auto-closes when we update.
-2. **Stable CI health** (`ci-upstream-regression` label) — runs the full stable build matrix against `extension-ci-tools@main`. Detects and tracks upstream CI tooling regressions (e.g. Windows runner changes). Auto-closes when the regression is fixed upstream.
-3. **Community extensions descriptor** (`community-ext-stale` label) — checks whether our published version in `duckdb/community-extensions` matches our latest tag. Opens an issue with the exact descriptor diff; auto-closes when upstream catches up.
