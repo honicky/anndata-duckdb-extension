@@ -310,6 +310,21 @@ If you fix an API breakage that's only relevant to `duckdb/main`, **commit the f
 
 `MainDistributionPipeline.yml` intentionally uses `@main` and `ci_tools_version: main` for `extension-ci-tools` — only `duckdb_version` is pinned (to the stable release we ship). This means a breaking change in upstream CI tooling will surface in the next stable PR run, not silently mask itself for weeks. If you do need to pin `extension-ci-tools` (e.g. to unblock a PR while a CI-tools fix is upstreamed), do so as a temporary `revert me` commit, not as the steady-state config.
 
+### vcpkg pinning
+
+We pin the vcpkg baseline ourselves rather than inheriting the `extension-ci-tools` default. **Two places must always agree:**
+
+1. `builtin-baseline` in `vcpkg.json`
+2. `vcpkg_commit:` on every `_extension_distribution.yml` call site — currently three: one in `MainDistributionPipeline.yml`, two in `UpcomingDuckdbPipeline.yml` (`duckdb-main-build` and `stable-build`)
+
+`_extension_code_quality.yml` does not use vcpkg, so it takes no `vcpkg_commit`.
+
+Why we pin: the ci-tools default baseline (`84bab45d`, Dec 2025) has a `libaec` port that downloads from `gitlab.dkrz.de`, which returns HTTP 429 to GitHub Actions runners. `libaec` is not a direct dependency — it arrives via the `szip` feature that vcpkg's `hdf5` port enables by default. Baseline `9e593bb1` (vcpkg `2026.07.29`) is the first release tag where `libaec` is fetched from a GitHub mirror instead.
+
+`hdf5` is held at 1.14.6 by an `overrides` entry in `vcpkg.json`. Do not drop that override casually: the baseline's own `hdf5` is 2.1.1, `CMakeLists.txt` links the 1.14-era `hdf5::hdf5-static` / `hdf5::hdf5-shared` config targets, and local builds use the system HDF5 1.14.x. Moving to HDF5 2.x is its own change with its own verification.
+
+Note that only the CI builds use vcpkg at all — local development links system `libhdf5-dev` (see "Building from a Clean Environment"), so a vcpkg-only breakage will never reproduce locally.
+
 ### Checking for new releases locally
 
 ```bash
