@@ -67,7 +67,7 @@ jobs:
       head_sha: ${{ steps.sync.outputs.head_sha }}
       conflict: ${{ steps.sync.outputs.conflict }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -113,7 +113,7 @@ jobs:
 
       - name: Open conflict tracking issue
         if: steps.sync.outputs.conflict == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const label = 'next-merge-conflict';
@@ -231,7 +231,7 @@ jobs:
           echo "short=${SHA:0:12}" >> "$GITHUB_OUTPUT"
 
       - name: Open or update tracking issue
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           BUILD_RESULT: ${{ needs.duckdb-main-build.result }}
           QUALITY_RESULT: ${{ needs.duckdb-main-code-quality.result }}
@@ -312,7 +312,7 @@ jobs:
       issues: write
     steps:
       - name: Close any open tracking issue
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const label = 'duckdb-main-broken';
@@ -349,7 +349,7 @@ jobs:
       latest: ${{ steps.versions.outputs.latest }}
       update_available: ${{ steps.versions.outputs.update_available }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Compare versions
         id: versions
@@ -369,7 +369,7 @@ jobs:
           echo "Current: ${CURRENT}, Latest: ${LATEST}"
 
       - name: Open or close release tracking issue
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           CURRENT: ${{ steps.versions.outputs.current }}
           LATEST: ${{ steps.versions.outputs.latest }}
@@ -487,7 +487,7 @@ jobs:
       issues: write
     steps:
       - name: Open or close CI regression issue
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           BUILD_RESULT: ${{ needs.stable-build.result }}
           DUCKDB_VERSION: ${{ needs.check-release.outputs.current }}
@@ -585,7 +585,7 @@ jobs:
     permissions:
       issues: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -629,7 +629,7 @@ jobs:
 
       - name: Open or close descriptor issue
         if: steps.descriptor.outputs.status != 'not_found'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           STATUS: ${{ steps.descriptor.outputs.status }}
           UPSTREAM_VERSION: ${{ steps.descriptor.outputs.upstream_version }}

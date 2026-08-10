@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **CI: unbreak the `linux_amd64_musl` and `linux_arm64` builds.** Both had been failing every day since ~2026-07-29. vcpkg's `hdf5` port enables its `szip` feature by default, which pulls in `libaec`, whose portfile at the baseline DuckDB pins (`84bab45d`, Dec 2025) downloads the source tarball from `gitlab.dkrz.de`. That host now returns HTTP 429 to GitHub Actions runner IP ranges, so the download failed all four vcpkg retries and aborted `vcpkg install`. Only musl/arm64 were affected because they get no hits from DuckDB's read-only vcpkg binary cache (different toolchain → different ABI hash) and therefore build `libaec` from source; `linux_amd64` restores it from cache and only ever showed as `cancelled` via matrix fail-fast.
+
+  Fixed by adding a `libaec` **overlay port** at `vcpkg-overlay/ports/libaec/`, alongside the `hdf5` overlay already there — a verbatim copy of the upstream port after microsoft/vcpkg moved the source to the `Deutsches-Klimarechenzentrum/libaec` GitHub mirror (libaec 1.1.7). Overlay ports take precedence over the registry baseline, so this replaces the one broken port and leaves every other version alone.
+
+  Worth recording for next time: port versions in this repo are **not** governed by `builtin-baseline` in `vcpkg.json`. The root `vcpkg-configuration.json` declares a `default-registry` whose `baseline` (`62efe42f`, Sep 2025 — where `libaec` is 1.1.3#1, exactly what CI resolved) takes precedence over the manifest's `builtin-baseline`. Adding `builtin-baseline` / `overrides` to `vcpkg.json` therefore changes nothing. That file is also the reason a `vcpkg-configuration` key cannot be added to `vcpkg.json` at all — vcpkg rejects the combination outright with "Ambiguous vcpkg configuration provided by both manifest and configuration file".
+- **CI: silence the Node.js 20 deprecation warnings.** Bumped `actions/checkout` v4 → v5, `actions/github-script` v7 → v8, and `actions/download-artifact` v4 → v7 — the lowest majors that run natively on Node 24. `download-artifact` v5's breaking change only affects downloads by artifact ID; we download by name, so behavior is unchanged.
+
 ## [0.14.3] - 2026-07-07
 
 ### Changed
