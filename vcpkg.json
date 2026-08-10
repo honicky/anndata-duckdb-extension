@@ -5,9 +5,6 @@
   "description": "DuckDB extension for reading AnnData (.h5ad) files",
   "homepage": "https://github.com/rj/anndata-duckdb",
   "license": "MIT",
-  "vcpkg-configuration": {
-    "overlay-ports": ["vcpkg_ports"]
-  },
   "dependencies": [
     {
       "name": "hdf5",

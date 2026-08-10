@@ -310,27 +310,34 @@ If you fix an API breakage that's only relevant to `duckdb/main`, **commit the f
 
 `MainDistributionPipeline.yml` intentionally uses `@main` and `ci_tools_version: main` for `extension-ci-tools` — only `duckdb_version` is pinned (to the stable release we ship). This means a breaking change in upstream CI tooling will surface in the next stable PR run, not silently mask itself for weeks. If you do need to pin `extension-ci-tools` (e.g. to unblock a PR while a CI-tools fix is upstreamed), do so as a temporary `revert me` commit, not as the steady-state config.
 
-### vcpkg: what our `vcpkg.json` actually controls
+### vcpkg: where dependency versions actually come from
 
-**Most of our `vcpkg.json` is discarded before CI ever builds it.** `duckdb/scripts/merge_vcpkg_deps.py` generates the manifest that is really used (`build/extension_configuration/vcpkg.json`) and reads only two keys out of ours:
+**`vcpkg-configuration.json` at the repo root is in charge, not `vcpkg.json`.** It declares a `default-registry` pinned to a vcpkg commit, and that `baseline` **overrides** any `builtin-baseline` in the manifest. Consequences, each of which has already cost a red CI run:
 
-- `dependencies` — passed through, including per-dependency `features` / `default-features`
-- `vcpkg-configuration` — only `overlay-ports` and `overlay-triplets`, with each path rewritten relative to our manifest's directory (so a bare `vcpkg_ports` becomes an absolute `/duckdb_build_dir/vcpkg_ports` in CI)
+- Adding `builtin-baseline` or `overrides` to `vcpkg.json` does nothing. It parses fine and is silently ignored, so the build fails exactly as if you had changed nothing.
+- Adding a `vcpkg-configuration` key to `vcpkg.json` is worse than useless — vcpkg hard-errors with *"Ambiguous vcpkg configuration provided by both manifest and configuration file"* because the standalone file already exists.
+- Setting the `vcpkg_commit:` workflow input moves the checked-out vcpkg *tree*, but port resolution still follows the `default-registry` baseline, so versions do not change.
 
-Everything else it **hardcodes**: `builtin-baseline` is fixed at DuckDB's pin, and `overrides` is replaced wholesale with a single `openssl` entry. So adding `builtin-baseline` or `overrides` to our `vcpkg.json` is silently dead config — it parses fine, changes nothing, and the failure looks like the fix simply didn't work. Setting the `vcpkg_commit:` workflow input moves the checked-out vcpkg *tree* but not the manifest's baseline, so it does not change which port versions resolve either.
+So there are exactly three levers:
 
-To change a dependency in CI you therefore have exactly two levers:
+1. **Bump `default-registry.baseline`** in `vcpkg-configuration.json` — moves every port at once. Blunt: it churns `openssl` / `curl` / `zlib` and invalidates the shared vcpkg binary cache for the arches that currently hit it.
+2. **Add an overlay port** under `vcpkg-overlay/ports/<port>/` (already wired up via `overlay-ports` in `vcpkg-configuration.json`). Overlays beat the baseline, so this replaces one port and disturbs nothing else. Prefer this for a single broken or outdated port.
+3. **Change the dependency set** in `vcpkg.json` — `dependencies` *is* honored, including per-dependency `features` / `default-features`.
 
-1. **Change the dependency set** — e.g. `"default-features": false` plus explicit `features` on a dependency object.
-2. **Vendor an overlay port** under `vcpkg_ports/<port>/` and list `vcpkg_ports` in `vcpkg-configuration.overlay-ports`. Overlay ports beat both the baseline and the registries, so this is how you replace a single broken port without disturbing anything else (and without invalidating the binary cache for unrelated ports).
+Two overlays exist today:
 
-`vcpkg_ports/libaec/` is an instance of lever 2: the baseline's `libaec` fetches from `gitlab.dkrz.de`, which now returns HTTP 429 to GitHub Actions runners. `libaec` is not a direct dependency — it arrives via the `szip` feature that vcpkg's `hdf5` port turns on by default. The overlay is a verbatim copy of the upstream port after microsoft/vcpkg moved the source to the `Deutsches-Klimarechenzentrum/libaec` GitHub mirror. Refresh it from upstream if it ever needs updating rather than hand-editing.
+- `hdf5` — pinned at 1.14.6 and carrying an extra `ros3` feature (Read-Only S3 VFD) that upstream's port lacks.
+- `libaec` — the baseline's `libaec` fetches from `gitlab.dkrz.de`, which returns HTTP 429 to GitHub Actions runners. We don't depend on it directly; it arrives via the `szip` feature `hdf5` enables by default. Ours is a verbatim copy of upstream's port after microsoft/vcpkg moved the source to a GitHub mirror. Refresh from upstream rather than hand-editing, and delete it once `default-registry.baseline` advances past vcpkg `2026.07.29`.
 
-Only CI builds use vcpkg at all — local development links system `libhdf5-dev` (see "Building from a Clean Environment"), so a vcpkg-only breakage will never reproduce locally. To check manifest resolution without a full CI run, run `merge_vcpkg_deps.py` by hand and inspect the generated manifest:
+Only CI builds use vcpkg — local development links system `libhdf5-dev` (see "Building from a Clean Environment"), so a vcpkg-only breakage never reproduces in a normal local build. To check resolution without burning a CI run, point vcpkg at a copy of the three inputs and dry-run it:
 
 ```bash
-python3 duckdb/scripts/merge_vcpkg_deps.py "$PWD/vcpkg.json"   # writes build/extension_configuration/vcpkg.json
+mkdir -p /tmp/vcpkgcheck && cp vcpkg.json vcpkg-configuration.json /tmp/vcpkgcheck/
+cp -r vcpkg-overlay /tmp/vcpkgcheck/ && cd /tmp/vcpkgcheck
+vcpkg install --dry-run --triplet=arm64-osx --host-triplet=arm64-osx
 ```
+
+Each line of the resulting plan names the source it resolved from, so an overlay that isn't taking effect is immediately visible. Cross-check the versions against a real CI log — if `openssl` / `curl` match, you are reproducing CI faithfully.
 
 ### Checking for new releases locally
 
