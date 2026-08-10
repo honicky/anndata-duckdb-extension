@@ -198,9 +198,6 @@ jobs:
       ci_tools_version: main
       extension_name: anndata
       opt_in_archs: 'linux_amd64_musl'
-      # Keep in sync with "builtin-baseline" in vcpkg.json -- see the comment
-      # on the same input in MainDistributionPipeline.yml.
-      vcpkg_commit: 9e593bb18ea69cc5095e012465dcd675a822ed0d
       override_repository: ${{ github.repository }}
       override_ref: main-distribution
 
@@ -480,9 +477,6 @@ jobs:
       ci_tools_version: main
       extension_name: anndata
       opt_in_archs: 'linux_amd64_musl'
-      # Keep in sync with "builtin-baseline" in vcpkg.json -- see the comment
-      # on the same input in MainDistributionPipeline.yml.
-      vcpkg_commit: 9e593bb18ea69cc5095e012465dcd675a822ed0d
 
   report-ci-health:
     name: Report CI health
