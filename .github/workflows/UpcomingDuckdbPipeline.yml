@@ -607,25 +607,34 @@ jobs:
           UPSTREAM_VERSION=$(grep -m1 '^[[:space:]]*version:' /tmp/descriptor.yml | awk '{print $2}')
           UPSTREAM_REF=$(awk '/^repo:/{f=1; next} f && /^[^ ]/{f=0} f && /^[[:space:]]+ref:/{print $2; exit}' /tmp/descriptor.yml)
 
-          # Get our latest tag
+          # Get our latest tag.
+          #
+          # auto-tag creates ANNOTATED tags, so the tag name resolves to two
+          # different SHAs: the tag object itself, and the commit it points at.
+          # The upstream descriptor may legitimately pin either one, so accept
+          # both -- comparing against only the commit SHA reports a permanent
+          # false "stale" for every annotated tag.
           OUR_LATEST_TAG=$(git tag -l 'v*' --sort=-version:refname | head -1)
           OUR_LATEST_VERSION=${OUR_LATEST_TAG#v}
           OUR_TAG_SHA=$(git rev-parse "${OUR_LATEST_TAG}^{commit}" 2>/dev/null || echo "")
+          OUR_TAG_OBJ_SHA=$(git rev-parse "${OUR_LATEST_TAG}" 2>/dev/null || echo "")
 
           echo "upstream_version=${UPSTREAM_VERSION}" >> "$GITHUB_OUTPUT"
           echo "upstream_ref=${UPSTREAM_REF}" >> "$GITHUB_OUTPUT"
           echo "our_version=${OUR_LATEST_VERSION}" >> "$GITHUB_OUTPUT"
           echo "our_tag=${OUR_LATEST_TAG}" >> "$GITHUB_OUTPUT"
           echo "our_sha=${OUR_TAG_SHA}" >> "$GITHUB_OUTPUT"
+          echo "our_tag_obj_sha=${OUR_TAG_OBJ_SHA}" >> "$GITHUB_OUTPUT"
 
-          if [ "${UPSTREAM_VERSION}" = "${OUR_LATEST_VERSION}" ] && [ "${UPSTREAM_REF}" = "${OUR_TAG_SHA}" ]; then
+          if [ "${UPSTREAM_VERSION}" = "${OUR_LATEST_VERSION}" ] \
+             && { [ "${UPSTREAM_REF}" = "${OUR_TAG_SHA}" ] || [ "${UPSTREAM_REF}" = "${OUR_TAG_OBJ_SHA}" ]; }; then
             echo "status=in_sync" >> "$GITHUB_OUTPUT"
           else
             echo "status=stale" >> "$GITHUB_OUTPUT"
           fi
 
           echo "Upstream: v${UPSTREAM_VERSION} (${UPSTREAM_REF})"
-          echo "Ours:     ${OUR_LATEST_TAG} (${OUR_TAG_SHA})"
+          echo "Ours:     ${OUR_LATEST_TAG} (commit ${OUR_TAG_SHA}, tag object ${OUR_TAG_OBJ_SHA})"
 
       - name: Open or close descriptor issue
         if: steps.descriptor.outputs.status != 'not_found'
@@ -637,6 +646,7 @@ jobs:
           OUR_VERSION: ${{ steps.descriptor.outputs.our_version }}
           OUR_TAG: ${{ steps.descriptor.outputs.our_tag }}
           OUR_SHA: ${{ steps.descriptor.outputs.our_sha }}
+          OUR_TAG_OBJ_SHA: ${{ steps.descriptor.outputs.our_tag_obj_sha }}
         with:
           script: |
             const label = 'community-ext-stale';
@@ -680,7 +690,8 @@ jobs:
 
             const title = `Update community extensions descriptor to ${process.env.OUR_TAG}`;
             const body = [
-              `Our latest release is **${process.env.OUR_TAG}** but the community extensions descriptor still has \`${process.env.UPSTREAM_VERSION}\`.`,
+              `Our latest release is **${process.env.OUR_TAG}** (\`${process.env.OUR_TAG_OBJ_SHA}\`) but the community extensions ` +
+              `descriptor has \`${process.env.UPSTREAM_VERSION}\` at \`${process.env.UPSTREAM_REF}\`.`,
               ``,
               `### Update needed`,
               ``,
@@ -692,8 +703,11 @@ jobs:
               ` repo:`,
               `   github: ${context.repo.owner}/${context.repo.repo}`,
               `-  ref: ${process.env.UPSTREAM_REF}`,
-              `+  ref: ${process.env.OUR_SHA}`,
+              `+  ref: ${process.env.OUR_TAG_OBJ_SHA}`,
               '```',
+              ``,
+              `The \`ref\` above is the annotated tag object for ${process.env.OUR_TAG}, matching the convention ` +
+              `already used upstream. The equivalent commit SHA (\`${process.env.OUR_SHA}\`) is also accepted.`,
               ``,
               `This issue will close automatically when the upstream descriptor matches our latest tag.`,
             ].join('\n');
