@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.5] - 2026-08-12
+
 ### Changed
 - Bumped target DuckDB version from v1.5.4 to v1.5.5 (latest stable patch). The `duckdb` submodule and all `duckdb_version:` / artifact-name / CLI-download-URL / extension-path / `git checkout` references in `.github/workflows/MainDistributionPipeline.yml` now point at v1.5.5; `UpcomingDuckdbPipeline.yml` needed no change because its `stable-build` job reads the version dynamically from `check-release`. The `extension-ci-tools` submodule moved to current `main`, and `ci_tools_version: main` / `uses: ...@main` stay as they are so upstream CI-tooling breakage keeps surfacing immediately.
 
