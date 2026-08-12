@@ -7,13 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.5] - 2026-08-12
+
+### Changed
+- Bumped target DuckDB version from v1.5.4 to v1.5.5 (latest stable patch). The `duckdb` submodule and all `duckdb_version:` / artifact-name / CLI-download-URL / extension-path / `git checkout` references in `.github/workflows/MainDistributionPipeline.yml` now point at v1.5.5; `UpcomingDuckdbPipeline.yml` needed no change because its `stable-build` job reads the version dynamically from `check-release`. The `extension-ci-tools` submodule moved to current `main`, and `ci_tools_version: main` / `uses: ...@main` stay as they are so upstream CI-tooling breakage keeps surfacing immediately.
+
+  No source changes were required — v1.5.5 is a patch release (extension pin bumps, a concurrent `ALTER`/`INSERT` crash fix, a `range()` TIMESTAMP fix, C API destructor exposure) and broke none of the DuckDB internals this extension uses. Verified locally against v1.5.5: clean build, full extension suite green (647 assertions, 20 cases; the 5 skips are the httpfs/S3-env-gated remote tests), plus `make format` and `make tidy-check`.
+
+## [0.14.4] - 2026-08-11
+
 ### Fixed
-- **CI: unbreak the `linux_amd64_musl` and `linux_arm64` builds.** Both had been failing every day since ~2026-07-29. vcpkg's `hdf5` port enables its `szip` feature by default, which pulls in `libaec`, whose portfile at the baseline DuckDB pins (`84bab45d`, Dec 2025) downloads the source tarball from `gitlab.dkrz.de`. That host now returns HTTP 429 to GitHub Actions runner IP ranges, so the download failed all four vcpkg retries and aborted `vcpkg install`. Only musl/arm64 were affected because they get no hits from DuckDB's read-only vcpkg binary cache (different toolchain → different ABI hash) and therefore build `libaec` from source; `linux_amd64` restores it from cache and only ever showed as `cancelled` via matrix fail-fast.
+- **CI: unbreak the `linux_amd64_musl` and `linux_arm64` builds.** Both had been failing every day since ~2026-07-29. vcpkg's `hdf5` port enables its `szip` feature by default, which pulls in `libaec`, whose portfile at our pinned registry baseline (`62efe42f`, Sep 2025) downloads the source tarball from `gitlab.dkrz.de`. That host now returns HTTP 429 to GitHub Actions runner IP ranges, so the download failed all four vcpkg retries and aborted `vcpkg install`. Only musl/arm64 were affected because they get no hits from DuckDB's read-only vcpkg binary cache (different toolchain → different ABI hash) and therefore build `libaec` from source; `linux_amd64` restores it from cache and only ever showed as `cancelled` via matrix fail-fast.
 
   Fixed by adding a `libaec` **overlay port** at `vcpkg-overlay/ports/libaec/`, alongside the `hdf5` overlay already there — a verbatim copy of the upstream port after microsoft/vcpkg moved the source to the `Deutsches-Klimarechenzentrum/libaec` GitHub mirror (libaec 1.1.7). Overlay ports take precedence over the registry baseline, so this replaces the one broken port and leaves every other version alone.
 
   Worth recording for next time: port versions in this repo are **not** governed by `builtin-baseline` in `vcpkg.json`. The root `vcpkg-configuration.json` declares a `default-registry` whose `baseline` (`62efe42f`, Sep 2025 — where `libaec` is 1.1.3#1, exactly what CI resolved) takes precedence over the manifest's `builtin-baseline`. Adding `builtin-baseline` / `overrides` to `vcpkg.json` therefore changes nothing. That file is also the reason a `vcpkg-configuration` key cannot be added to `vcpkg.json` at all — vcpkg rejects the combination outright with "Ambiguous vcpkg configuration provided by both manifest and configuration file".
 - **CI: silence the Node.js 20 deprecation warnings.** Bumped `actions/checkout` v4 → v5, `actions/github-script` v7 → v8, and `actions/download-artifact` v4 → v7 — the lowest majors that run natively on Node 24. `download-artifact` v5's breaking change only affects downloads by artifact ID; we download by name, so behavior is unchanged.
+- **CI: stop the `community-ext-stale` check from firing permanently.** It compared the upstream descriptor's `ref` against `git rev-parse "<tag>^{commit}"`, but `auto-tag` creates *annotated* tags, and the published descriptor pins the **tag object** SHA. Those two SHAs never match, so the check reported `stale` on every run regardless of the actual state — issue #21 was a false positive the whole time (the descriptor was already correct at v0.14.3). It now accepts either SHA form, and the generated diff suggests the tag object SHA to match the convention already in use upstream.
 
 ## [0.14.3] - 2026-07-07
 
