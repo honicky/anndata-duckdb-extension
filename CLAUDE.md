@@ -266,7 +266,7 @@ Per [DuckDB's community-extensions guidance](https://duckdb.org/community_extens
 
 | Branch              | DuckDB target | community-extensions descriptor field |
 |---------------------|---------------|---------------------------------------|
-| `main`              | latest stable release (`v1.5.4`) | `ref` |
+| `main`              | latest stable release (`v1.5.5`) | `ref` |
 | `main-distribution` | `duckdb/main` (upcoming release) | `ref_next` |
 
 The community-extensions CI builds both. When DuckDB cuts a release, the upstream maintainers swap `ref_next` → `ref`; at that point our `main-distribution` becomes the new `main`.
@@ -329,7 +329,9 @@ Two overlays exist today:
 - `hdf5` — pinned at 1.14.6 and carrying an extra `ros3` feature (Read-Only S3 VFD) that upstream's port lacks.
 - `libaec` — the baseline's `libaec` fetches from `gitlab.dkrz.de`, which returns HTTP 429 to GitHub Actions runners. We don't depend on it directly; it arrives via the `szip` feature `hdf5` enables by default. Ours is a verbatim copy of upstream's port after microsoft/vcpkg moved the source to a GitHub mirror. Refresh from upstream rather than hand-editing, and delete it once `default-registry.baseline` advances past vcpkg `2026.07.29`.
 
-Only CI builds use vcpkg — local development links system `libhdf5-dev` (see "Building from a Clean Environment"), so a vcpkg-only breakage never reproduces in a normal local build. To check resolution without burning a CI run, point vcpkg at a copy of the three inputs and dry-run it:
+Whether a **local** build uses vcpkg at all depends on your environment: the Makefile switches on `VCPKG_TOOLCHAIN_PATH` / `VCPKG_ROOT`. With those set, local builds resolve through vcpkg and these overlays exactly like CI does; without them, the build falls back to system HDF5 via `find_package(HDF5)` MODULE mode (the apt `libhdf5-dev` path in "Building from a Clean Environment"), and a vcpkg-only breakage will not reproduce. Check with `echo $VCPKG_TOOLCHAIN_PATH` before concluding anything from a local build.
+
+To check resolution without burning a CI run, point vcpkg at a copy of the three inputs and dry-run it:
 
 ```bash
 mkdir -p /tmp/vcpkgcheck && cp vcpkg.json vcpkg-configuration.json /tmp/vcpkgcheck/
