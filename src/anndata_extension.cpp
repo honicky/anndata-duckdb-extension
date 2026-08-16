@@ -44,12 +44,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 	auto &db = loader.GetDatabaseInstance();
 
 	// Register the version function
-	loader.RegisterFunction(
-	    ScalarFunction("anndata_version", {}, LogicalType::VARCHAR, AnndataVersionFunction));
+	loader.RegisterFunction(ScalarFunction("anndata_version", {}, LogicalType::VARCHAR, AnndataVersionFunction));
 
 	// Register the hello function
-	loader.RegisterFunction(
-	    ScalarFunction("anndata_hello", {}, LogicalType::VARCHAR, AnndataHelloFunction));
+	loader.RegisterFunction(ScalarFunction("anndata_hello", {}, LogicalType::VARCHAR, AnndataHelloFunction));
 
 	// Register the AnnData table functions
 	RegisterAnndataTableFunctions(loader);

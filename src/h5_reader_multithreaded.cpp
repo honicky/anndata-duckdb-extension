@@ -1859,7 +1859,7 @@ void H5ReaderMultithreaded::ReadXMatrixBatch(idx_t row_start, idx_t row_count, i
 			auto sparse_data = ReadSparseXMatrix(row_start, row_count, col_start, col_count);
 
 			// Convert sparse data to dense format for output
-			compat::SetChunkCardinality(output,row_count);
+			compat::SetChunkCardinality(output, row_count);
 
 			// Set obs_idx column (first column)
 			auto &obs_idx_vec = output.data[0];
@@ -1928,7 +1928,7 @@ void H5ReaderMultithreaded::ReadXMatrixBatch(idx_t row_start, idx_t row_count, i
 		// Fill output DataChunk in WIDE format
 		// The output should have columns: obs_idx + one column per gene
 		// First column is obs_idx, rest are gene values
-		compat::SetChunkCardinality(output,row_count);
+		compat::SetChunkCardinality(output, row_count);
 
 		// Set obs_idx column (first column)
 		auto &obs_idx_vec = output.data[0];
@@ -2416,7 +2416,7 @@ void H5ReaderMultithreaded::ReadLayerMatrix(const std::string &layer_name, idx_t
 			gene_vec.SetValue(0, Value::DOUBLE(buffer[i]));
 		}
 
-		compat::SetChunkCardinality(output,1);
+		compat::SetChunkCardinality(output, 1);
 
 	} else if (obj_info.type == H5O_TYPE_GROUP) {
 		// Sparse layer
@@ -2486,7 +2486,7 @@ void H5ReaderMultithreaded::ReadLayerMatrix(const std::string &layer_name, idx_t
 			}
 		}
 
-		compat::SetChunkCardinality(output,1);
+		compat::SetChunkCardinality(output, 1);
 	}
 }
 
@@ -2681,7 +2681,7 @@ void H5ReaderMultithreaded::ReadMatrixBatch(const std::string &path, idx_t row_s
 		}
 	}
 
-	compat::SetChunkCardinality(output,row_count);
+	compat::SetChunkCardinality(output, row_count);
 }
 
 void H5ReaderMultithreaded::ReadMatrixColumns(const std::string &path, idx_t row_start, idx_t row_count,
@@ -2692,7 +2692,7 @@ void H5ReaderMultithreaded::ReadMatrixColumns(const std::string &path, idx_t row
 
 	// If no columns requested, just return empty result
 	if (matrix_col_indices.empty()) {
-		compat::SetChunkCardinality(output,row_count);
+		compat::SetChunkCardinality(output, row_count);
 		return;
 	}
 
@@ -2796,7 +2796,7 @@ void H5ReaderMultithreaded::ReadMatrixColumns(const std::string &path, idx_t row
 		}
 	}
 
-	compat::SetChunkCardinality(output,row_count);
+	compat::SetChunkCardinality(output, row_count);
 }
 
 // Helper function to read array and return as vector of strings

@@ -76,7 +76,7 @@ string AnndataDefaultGenerator::GenerateViewSQL(const TableViewInfo &info) const
 }
 
 unique_ptr<CatalogEntry> AnndataDefaultGenerator::CreateDefaultEntry(ClientContext &context,
-                                                                    const compat::DefaultEntryName &entry_name) {
+                                                                     const compat::DefaultEntryName &entry_name) {
 	// DuckDB main passes an Identifier here; v1.5.x passes a string. Normalize to a
 	// raw string for our string-keyed table_map lookups.
 	const string &entry_name_str = compat::DefaultEntryNameToString(entry_name);
