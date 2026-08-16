@@ -216,7 +216,7 @@ string AnndataScanner::GetAnndataInfo(const string &path) {
 
 // Table function implementations for .obs table
 unique_ptr<FunctionData> AnndataScanner::ObsBind(ClientContext &context, TableFunctionBindInput &input,
-                                                 vector<LogicalType> &return_types, vector<string> &names) {
+                                                 vector<LogicalType> &return_types, compat::BindColumnNames &names) {
 	string file_pattern = input.inputs[0].GetValue<string>();
 	SchemaMode schema_mode = ParseSchemaMode(input);
 
@@ -247,14 +247,14 @@ unique_ptr<FunctionData> AnndataScanner::ObsBind(ClientContext &context, TableFu
 		auto columns = reader.GetObsColumns();
 		vector<string> original_names_vec;
 		for (const auto &col : columns) {
-			names.push_back(col.name);
+			names.emplace_back(col.name);
 			original_names_vec.push_back(col.original_name);
 			return_types.push_back(col.type);
 		}
 
 		bind_data->row_count = reader.GetObsCount();
 		bind_data->column_count = names.size();
-		bind_data->column_names = names;
+		bind_data->column_names = compat::BindColumnNamesToStrings(names);
 		bind_data->original_names = original_names_vec;
 		bind_data->column_types = return_types;
 	} else {
@@ -271,21 +271,21 @@ unique_ptr<FunctionData> AnndataScanner::ObsBind(ClientContext &context, TableFu
 		bind_data->harmonized_schema = SchemaHarmonizer::ComputeObsVarSchema(file_schemas, schema_mode);
 
 		// Add _file_name column first
-		names.push_back("_file_name");
+		names.emplace_back("_file_name");
 		return_types.push_back(LogicalType::VARCHAR);
 
 		// Add harmonized columns
 		vector<string> original_names_vec;
 		original_names_vec.push_back("_file_name"); // Pseudo-column
 		for (const auto &col : bind_data->harmonized_schema.columns) {
-			names.push_back(col.name);
+			names.emplace_back(col.name);
 			original_names_vec.push_back(col.original_name);
 			return_types.push_back(col.type);
 		}
 
 		bind_data->row_count = bind_data->harmonized_schema.total_row_count;
 		bind_data->column_count = names.size();
-		bind_data->column_names = names;
+		bind_data->column_names = compat::BindColumnNamesToStrings(names);
 		bind_data->original_names = original_names_vec;
 		bind_data->column_types = return_types;
 	}
@@ -378,7 +378,7 @@ void AnndataScanner::ObsScan(ClientContext &context, TableFunctionInput &data, D
 
 // Table function implementations for .var table
 unique_ptr<FunctionData> AnndataScanner::VarBind(ClientContext &context, TableFunctionBindInput &input,
-                                                 vector<LogicalType> &return_types, vector<string> &names) {
+                                                 vector<LogicalType> &return_types, compat::BindColumnNames &names) {
 	string file_pattern = input.inputs[0].GetValue<string>();
 	SchemaMode schema_mode = ParseSchemaMode(input);
 
@@ -409,14 +409,14 @@ unique_ptr<FunctionData> AnndataScanner::VarBind(ClientContext &context, TableFu
 		auto columns = reader.GetVarColumns();
 		vector<string> original_names_vec;
 		for (const auto &col : columns) {
-			names.push_back(col.name);
+			names.emplace_back(col.name);
 			original_names_vec.push_back(col.original_name);
 			return_types.push_back(col.type);
 		}
 
 		bind_data->row_count = reader.GetVarCount();
 		bind_data->column_count = names.size();
-		bind_data->column_names = names;
+		bind_data->column_names = compat::BindColumnNamesToStrings(names);
 		bind_data->original_names = original_names_vec;
 		bind_data->column_types = return_types;
 	} else {
@@ -433,21 +433,21 @@ unique_ptr<FunctionData> AnndataScanner::VarBind(ClientContext &context, TableFu
 		bind_data->harmonized_schema = SchemaHarmonizer::ComputeObsVarSchema(file_schemas, schema_mode);
 
 		// Add _file_name column first
-		names.push_back("_file_name");
+		names.emplace_back("_file_name");
 		return_types.push_back(LogicalType::VARCHAR);
 
 		// Add harmonized columns
 		vector<string> original_names_vec;
 		original_names_vec.push_back("_file_name");
 		for (const auto &col : bind_data->harmonized_schema.columns) {
-			names.push_back(col.name);
+			names.emplace_back(col.name);
 			original_names_vec.push_back(col.original_name);
 			return_types.push_back(col.type);
 		}
 
 		bind_data->row_count = bind_data->harmonized_schema.total_row_count;
 		bind_data->column_count = names.size();
-		bind_data->column_names = names;
+		bind_data->column_names = compat::BindColumnNamesToStrings(names);
 		bind_data->original_names = original_names_vec;
 		bind_data->column_types = return_types;
 	}
@@ -560,7 +560,7 @@ static unique_ptr<LocalTableFunctionState> AnndataInitLocal(ExecutionContext &co
 
 // Table function implementations for X matrix
 unique_ptr<FunctionData> AnndataScanner::XBind(ClientContext &context, TableFunctionBindInput &input,
-                                               vector<LogicalType> &return_types, vector<string> &names) {
+                                               vector<LogicalType> &return_types, compat::BindColumnNames &names) {
 	string file_pattern = input.inputs[0].GetValue<string>();
 	string var_name_column = "_index"; // Default
 
@@ -663,7 +663,7 @@ unique_ptr<FunctionData> AnndataScanner::XBind(ClientContext &context, TableFunc
 	}
 
 	bind_data->column_count = names.size();
-	bind_data->column_names = names;
+	bind_data->column_names = compat::BindColumnNamesToStrings(names);
 	bind_data->column_types = return_types;
 
 	return std::move(bind_data);
@@ -897,7 +897,7 @@ void AnndataScanner::XScan(ClientContext &context, TableFunctionInput &data, Dat
 
 // Table function implementations for obsm matrices
 unique_ptr<FunctionData> AnndataScanner::ObsmBind(ClientContext &context, TableFunctionBindInput &input,
-                                                  vector<LogicalType> &return_types, vector<string> &names) {
+                                                  vector<LogicalType> &return_types, compat::BindColumnNames &names) {
 	// Require file path and matrix name
 	if (input.inputs.size() < 2) {
 		throw InvalidInputException("anndata_scan_obsm requires file path and matrix name");
@@ -932,18 +932,18 @@ unique_ptr<FunctionData> AnndataScanner::ObsmBind(ClientContext &context, TableF
 		bind_data->row_count = file_schemas[0].n_obs;
 
 		// First column is obs_idx
-		names.push_back("obs_idx");
+		names.emplace_back("obs_idx");
 		return_types.push_back(LogicalType::BIGINT);
 
 		// Add columns for each dimension, preserving the matrix's dtype
 		LogicalType matrix_dtype = file_schemas[0].matrix_dtype;
 		for (idx_t i = 0; i < bind_data->matrix_cols; i++) {
-			names.push_back(matrix_name + "_" + to_string(i));
+			names.emplace_back(matrix_name + "_" + to_string(i));
 			return_types.push_back(matrix_dtype);
 		}
 
 		bind_data->column_count = names.size();
-		bind_data->column_names = names;
+		bind_data->column_names = compat::BindColumnNamesToStrings(names);
 		bind_data->column_types = return_types;
 	} else {
 		// Multi-file mode
@@ -964,13 +964,13 @@ unique_ptr<FunctionData> AnndataScanner::ObsmBind(ClientContext &context, TableF
 		bind_data->matrix_cols = result_cols;
 
 		// Build schema
-		names.push_back("_file_name");
+		names.emplace_back("_file_name");
 		return_types.push_back(LogicalType::VARCHAR);
-		names.push_back("obs_idx");
+		names.emplace_back("obs_idx");
 		return_types.push_back(LogicalType::BIGINT);
 
 		for (idx_t i = 0; i < result_cols; i++) {
-			names.push_back(matrix_name + "_" + to_string(i));
+			names.emplace_back(matrix_name + "_" + to_string(i));
 			return_types.push_back(LogicalType::DOUBLE);
 		}
 
@@ -986,7 +986,7 @@ unique_ptr<FunctionData> AnndataScanner::ObsmBind(ClientContext &context, TableF
 
 		bind_data->row_count = total_rows;
 		bind_data->column_count = names.size();
-		bind_data->column_names = names;
+		bind_data->column_names = compat::BindColumnNamesToStrings(names);
 		bind_data->column_types = return_types;
 	}
 
@@ -1088,7 +1088,7 @@ void AnndataScanner::ObsmScan(ClientContext &context, TableFunctionInput &data, 
 
 // Table function implementations for varm matrices
 unique_ptr<FunctionData> AnndataScanner::VarmBind(ClientContext &context, TableFunctionBindInput &input,
-                                                  vector<LogicalType> &return_types, vector<string> &names) {
+                                                  vector<LogicalType> &return_types, compat::BindColumnNames &names) {
 	// Require file path and matrix name
 	if (input.inputs.size() < 2) {
 		throw InvalidInputException("anndata_scan_varm requires file path and matrix name");
@@ -1122,18 +1122,18 @@ unique_ptr<FunctionData> AnndataScanner::VarmBind(ClientContext &context, TableF
 		bind_data->matrix_cols = file_schemas[0].n_var;
 		bind_data->row_count = file_schemas[0].n_obs;
 
-		names.push_back("var_idx");
+		names.emplace_back("var_idx");
 		return_types.push_back(LogicalType::BIGINT);
 
 		// Preserve the matrix's dtype
 		LogicalType matrix_dtype = file_schemas[0].matrix_dtype;
 		for (idx_t i = 0; i < bind_data->matrix_cols; i++) {
-			names.push_back(matrix_name + "_" + to_string(i));
+			names.emplace_back(matrix_name + "_" + to_string(i));
 			return_types.push_back(matrix_dtype);
 		}
 
 		bind_data->column_count = names.size();
-		bind_data->column_names = names;
+		bind_data->column_names = compat::BindColumnNamesToStrings(names);
 		bind_data->column_types = return_types;
 	} else {
 		// Multi-file mode
@@ -1152,13 +1152,13 @@ unique_ptr<FunctionData> AnndataScanner::VarmBind(ClientContext &context, TableF
 		idx_t result_cols = (schema_mode == SchemaMode::INTERSECTION) ? min_cols : max_cols;
 		bind_data->matrix_cols = result_cols;
 
-		names.push_back("_file_name");
+		names.emplace_back("_file_name");
 		return_types.push_back(LogicalType::VARCHAR);
-		names.push_back("var_idx");
+		names.emplace_back("var_idx");
 		return_types.push_back(LogicalType::BIGINT);
 
 		for (idx_t i = 0; i < result_cols; i++) {
-			names.push_back(matrix_name + "_" + to_string(i));
+			names.emplace_back(matrix_name + "_" + to_string(i));
 			return_types.push_back(LogicalType::DOUBLE);
 		}
 
@@ -1172,7 +1172,7 @@ unique_ptr<FunctionData> AnndataScanner::VarmBind(ClientContext &context, TableF
 
 		bind_data->row_count = total_rows;
 		bind_data->column_count = names.size();
-		bind_data->column_names = names;
+		bind_data->column_names = compat::BindColumnNamesToStrings(names);
 		bind_data->column_types = return_types;
 	}
 
@@ -1270,18 +1270,18 @@ void AnndataScanner::VarmScan(ClientContext &context, TableFunctionInput &data, 
 
 // Helper functions for error handling
 unique_ptr<FunctionData> ObsmBindError(ClientContext &context, TableFunctionBindInput &input,
-                                       vector<LogicalType> &return_types, vector<string> &names) {
+                                       vector<LogicalType> &return_types, compat::BindColumnNames &names) {
 	throw InvalidInputException("anndata_scan_obsm requires file path and matrix name");
 }
 
 unique_ptr<FunctionData> VarmBindError(ClientContext &context, TableFunctionBindInput &input,
-                                       vector<LogicalType> &return_types, vector<string> &names) {
+                                       vector<LogicalType> &return_types, compat::BindColumnNames &names) {
 	throw InvalidInputException("anndata_scan_varm requires file path and matrix name");
 }
 
 // Layer scanning implementation
 unique_ptr<FunctionData> AnndataScanner::LayerBind(ClientContext &context, TableFunctionBindInput &input,
-                                                   vector<LogicalType> &return_types, vector<string> &names) {
+                                                   vector<LogicalType> &return_types, compat::BindColumnNames &names) {
 	string file_pattern = input.inputs[0].GetValue<string>();
 	string layer_name = input.inputs[1].GetValue<string>();
 	// Get variable name column - allow custom column selection
@@ -1378,7 +1378,7 @@ unique_ptr<FunctionData> AnndataScanner::LayerBind(ClientContext &context, Table
 		}
 	}
 
-	result->column_names = names;
+	result->column_names = compat::BindColumnNamesToStrings(names);
 	result->column_types = return_types;
 	result->column_count = names.size();
 
@@ -1605,7 +1605,7 @@ void AnndataScanner::LayerScan(ClientContext &context, TableFunctionInput &data,
 
 // Error handling function for layers when layer name is missing
 unique_ptr<FunctionData> LayerBindError(ClientContext &context, TableFunctionBindInput &input,
-                                        vector<LogicalType> &return_types, vector<string> &names) {
+                                        vector<LogicalType> &return_types, compat::BindColumnNames &names) {
 	throw InvalidInputException("anndata_scan_layers requires layer name");
 }
 
@@ -1615,7 +1615,7 @@ void DummyScan(ClientContext &context, TableFunctionInput &data, DataChunk &outp
 
 // Raw X matrix scan
 unique_ptr<FunctionData> AnndataScanner::RawXBind(ClientContext &context, TableFunctionBindInput &input,
-                                                  vector<LogicalType> &return_types, vector<string> &names) {
+                                                  vector<LogicalType> &return_types, compat::BindColumnNames &names) {
 	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
 
 	// Check for optional var_name_column parameter
@@ -1644,7 +1644,7 @@ unique_ptr<FunctionData> AnndataScanner::RawXBind(ClientContext &context, TableF
 	bind_data->var_names = reader.GetRawVarNames(bind_data->var_name_column);
 
 	// Set up columns: obs_idx + one column per gene
-	names.push_back("obs_idx");
+	names.emplace_back("obs_idx");
 	return_types.push_back(LogicalType::BIGINT);
 
 	// Add one column for each gene, handling duplicate names
@@ -1662,13 +1662,13 @@ unique_ptr<FunctionData> AnndataScanner::RawXBind(ClientContext &context, TableF
 		}
 
 		used_names.insert(unique_name);
-		names.push_back(unique_name);
+		names.emplace_back(unique_name);
 		return_types.push_back(LogicalType::DOUBLE);
 	}
 
 	bind_data->row_count = bind_data->n_obs;
 	bind_data->column_count = names.size();
-	bind_data->column_names = names;
+	bind_data->column_names = compat::BindColumnNamesToStrings(names);
 	bind_data->column_types = return_types;
 
 	return std::move(bind_data);
@@ -1743,7 +1743,7 @@ void AnndataScanner::RawXScan(ClientContext &context, TableFunctionInput &data, 
 }
 
 unique_ptr<FunctionData> AnndataScanner::RawVarBind(ClientContext &context, TableFunctionBindInput &input,
-                                                    vector<LogicalType> &return_types, vector<string> &names) {
+                                                    vector<LogicalType> &return_types, compat::BindColumnNames &names) {
 	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
 	bind_data->is_raw_var_scan = true;
 
@@ -1762,14 +1762,14 @@ unique_ptr<FunctionData> AnndataScanner::RawVarBind(ClientContext &context, Tabl
 
 	vector<string> original_names;
 	for (const auto &col : columns) {
-		names.push_back(col.name);
+		names.emplace_back(col.name);
 		original_names.push_back(col.original_name);
 		return_types.push_back(col.type);
 	}
 
 	bind_data->row_count = reader.GetRawVarCount();
 	bind_data->column_count = names.size();
-	bind_data->column_names = names;
+	bind_data->column_names = compat::BindColumnNamesToStrings(names);
 	bind_data->original_names = original_names;
 	bind_data->column_types = return_types;
 
@@ -1799,7 +1799,8 @@ void AnndataScanner::RawVarScan(ClientContext &context, TableFunctionInput &data
 }
 
 unique_ptr<FunctionData> AnndataScanner::RawVarmBind(ClientContext &context, TableFunctionBindInput &input,
-                                                     vector<LogicalType> &return_types, vector<string> &names) {
+                                                     vector<LogicalType> &return_types,
+                                                     compat::BindColumnNames &names) {
 	if (input.inputs.size() < 2) {
 		throw InvalidInputException("anndata_scan_raw_varm requires file path and matrix name");
 	}
@@ -1828,16 +1829,16 @@ unique_ptr<FunctionData> AnndataScanner::RawVarmBind(ClientContext &context, Tab
 			bind_data->matrix_cols = matrix.cols;
 			bind_data->row_count = matrix.rows;
 
-			names.push_back("var_idx");
+			names.emplace_back("var_idx");
 			return_types.push_back(LogicalType::BIGINT);
 
 			for (idx_t i = 0; i < matrix.cols; i++) {
-				names.push_back(bind_data->obsm_varm_matrix_name + "_" + to_string(i));
+				names.emplace_back(bind_data->obsm_varm_matrix_name + "_" + to_string(i));
 				return_types.push_back(matrix.dtype);
 			}
 
 			bind_data->column_count = names.size();
-			bind_data->column_names = names;
+			bind_data->column_names = compat::BindColumnNamesToStrings(names);
 			bind_data->column_types = return_types;
 
 			found = true;
@@ -1883,13 +1884,13 @@ void AnndataScanner::RawVarmScan(ClientContext &context, TableFunctionInput &dat
 
 // Error handling functions for raw varm
 unique_ptr<FunctionData> RawVarmBindError(ClientContext &context, TableFunctionBindInput &input,
-                                          vector<LogicalType> &return_types, vector<string> &names) {
+                                          vector<LogicalType> &return_types, compat::BindColumnNames &names) {
 	throw InvalidInputException("anndata_scan_raw_varm requires file path and matrix name");
 }
 
 // Table function implementations for uns (unstructured) data
 unique_ptr<FunctionData> AnndataScanner::UnsBind(ClientContext &context, TableFunctionBindInput &input,
-                                                 vector<LogicalType> &return_types, vector<string> &names) {
+                                                 vector<LogicalType> &return_types, compat::BindColumnNames &names) {
 	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
 	bind_data->is_uns_scan = true;
 
@@ -1910,24 +1911,24 @@ unique_ptr<FunctionData> AnndataScanner::UnsBind(ClientContext &context, TableFu
 
 	if (bind_data->uns_keys.empty()) {
 		// No uns data - return empty result with just a message column
-		names.push_back("message");
+		names.emplace_back("message");
 		return_types.push_back(LogicalType::VARCHAR);
 		bind_data->row_count = 1;
 	} else {
 		// Set up column schema
-		names.push_back("key");
+		names.emplace_back("key");
 		return_types.push_back(LogicalType::VARCHAR);
 
-		names.push_back("type");
+		names.emplace_back("type");
 		return_types.push_back(LogicalType::VARCHAR);
 
-		names.push_back("dtype");
+		names.emplace_back("dtype");
 		return_types.push_back(LogicalType::VARCHAR);
 
-		names.push_back("shape");
+		names.emplace_back("shape");
 		return_types.push_back(LogicalType::VARCHAR);
 
-		names.push_back("value");
+		names.emplace_back("value");
 		// UNION type: scalar VARCHAR or arr LIST(VARCHAR)
 		child_list_t<LogicalType> union_members;
 		union_members.emplace_back("scalar", LogicalType::VARCHAR);
@@ -1938,7 +1939,7 @@ unique_ptr<FunctionData> AnndataScanner::UnsBind(ClientContext &context, TableFu
 	}
 
 	bind_data->column_count = names.size();
-	bind_data->column_names = names;
+	bind_data->column_names = compat::BindColumnNamesToStrings(names);
 	bind_data->column_types = return_types;
 
 	return std::move(bind_data);
@@ -2062,7 +2063,7 @@ void AnndataScanner::UnsScan(ClientContext &context, TableFunctionInput &data, D
 
 // Table function implementations for obsp (observation pairwise matrices)
 unique_ptr<FunctionData> AnndataScanner::ObspBind(ClientContext &context, TableFunctionBindInput &input,
-                                                  vector<LogicalType> &return_types, vector<string> &names) {
+                                                  vector<LogicalType> &return_types, compat::BindColumnNames &names) {
 	// Validate input parameters
 	if (input.inputs.size() != 2) {
 		throw InvalidInputException("anndata_scan_obsp requires 2 parameters: file_path and matrix_name");
@@ -2125,7 +2126,7 @@ unique_ptr<FunctionData> AnndataScanner::ObspBind(ClientContext &context, TableF
 	return_types.emplace_back(LogicalType::FLOAT);
 
 	bind_data->column_count = names.size();
-	bind_data->column_names = names;
+	bind_data->column_names = compat::BindColumnNamesToStrings(names);
 	bind_data->column_types = return_types;
 
 	return std::move(bind_data);
@@ -2211,7 +2212,7 @@ void AnndataScanner::ObspScan(ClientContext &context, TableFunctionInput &data, 
 
 // Table function implementations for varp (variable pairwise matrices)
 unique_ptr<FunctionData> AnndataScanner::VarpBind(ClientContext &context, TableFunctionBindInput &input,
-                                                  vector<LogicalType> &return_types, vector<string> &names) {
+                                                  vector<LogicalType> &return_types, compat::BindColumnNames &names) {
 	// Validate input parameters
 	if (input.inputs.size() != 2) {
 		throw InvalidInputException("anndata_scan_varp requires 2 parameters: file_path and matrix_name");
@@ -2274,7 +2275,7 @@ unique_ptr<FunctionData> AnndataScanner::VarpBind(ClientContext &context, TableF
 	return_types.emplace_back(LogicalType::FLOAT);
 
 	bind_data->column_count = names.size();
-	bind_data->column_names = names;
+	bind_data->column_names = compat::BindColumnNamesToStrings(names);
 	bind_data->column_types = return_types;
 
 	return std::move(bind_data);
@@ -2360,7 +2361,7 @@ void AnndataScanner::VarpScan(ClientContext &context, TableFunctionInput &data, 
 
 // Table function for info
 unique_ptr<FunctionData> AnndataScanner::InfoBind(ClientContext &context, TableFunctionBindInput &input,
-                                                  vector<LogicalType> &return_types, vector<string> &names) {
+                                                  vector<LogicalType> &return_types, compat::BindColumnNames &names) {
 	if (input.inputs.empty()) {
 		throw InvalidInputException("anndata_info requires at least 1 parameter: file_path");
 	}

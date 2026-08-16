@@ -3,6 +3,7 @@
 #include "duckdb.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb_compat.hpp"
 #include "h5_reader_multithreaded.hpp"
 #include "schema_harmonizer.hpp"
 #include <string>
@@ -17,64 +18,64 @@ class AnndataScanner {
 public:
 	// Table function for scanning .obs table
 	static unique_ptr<FunctionData> ObsBind(ClientContext &context, TableFunctionBindInput &input,
-	                                        vector<LogicalType> &return_types, vector<string> &names);
+	                                        vector<LogicalType> &return_types, compat::BindColumnNames &names);
 	static void ObsScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
 	// Table function for scanning .var table
 	static unique_ptr<FunctionData> VarBind(ClientContext &context, TableFunctionBindInput &input,
-	                                        vector<LogicalType> &return_types, vector<string> &names);
+	                                        vector<LogicalType> &return_types, compat::BindColumnNames &names);
 	static void VarScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
 	// Table function for scanning X matrix
 	static unique_ptr<FunctionData> XBind(ClientContext &context, TableFunctionBindInput &input,
-	                                      vector<LogicalType> &return_types, vector<string> &names);
+	                                      vector<LogicalType> &return_types, compat::BindColumnNames &names);
 	static void XScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
 	// Table function for scanning obsm matrices
 	static unique_ptr<FunctionData> ObsmBind(ClientContext &context, TableFunctionBindInput &input,
-	                                         vector<LogicalType> &return_types, vector<string> &names);
+	                                         vector<LogicalType> &return_types, compat::BindColumnNames &names);
 	static void ObsmScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
 	// Table function for scanning varm matrices
 	static unique_ptr<FunctionData> VarmBind(ClientContext &context, TableFunctionBindInput &input,
-	                                         vector<LogicalType> &return_types, vector<string> &names);
+	                                         vector<LogicalType> &return_types, compat::BindColumnNames &names);
 	static void VarmScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
 	// Table function for scanning layer matrices
 	static unique_ptr<FunctionData> LayerBind(ClientContext &context, TableFunctionBindInput &input,
-	                                          vector<LogicalType> &return_types, vector<string> &names);
+	                                          vector<LogicalType> &return_types, compat::BindColumnNames &names);
 	static void LayerScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
 	// Table function for scanning uns (unstructured) data
 	static unique_ptr<FunctionData> UnsBind(ClientContext &context, TableFunctionBindInput &input,
-	                                        vector<LogicalType> &return_types, vector<string> &names);
+	                                        vector<LogicalType> &return_types, compat::BindColumnNames &names);
 	static void UnsScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
 	// Table functions for scanning obsp/varp (pairwise matrices)
 	static unique_ptr<FunctionData> ObspBind(ClientContext &context, TableFunctionBindInput &input,
-	                                         vector<LogicalType> &return_types, vector<string> &names);
+	                                         vector<LogicalType> &return_types, compat::BindColumnNames &names);
 	static void ObspScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
 	static unique_ptr<FunctionData> VarpBind(ClientContext &context, TableFunctionBindInput &input,
-	                                         vector<LogicalType> &return_types, vector<string> &names);
+	                                         vector<LogicalType> &return_types, compat::BindColumnNames &names);
 	static void VarpScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
 	// Table functions for raw section
 	static unique_ptr<FunctionData> RawXBind(ClientContext &context, TableFunctionBindInput &input,
-	                                         vector<LogicalType> &return_types, vector<string> &names);
+	                                         vector<LogicalType> &return_types, compat::BindColumnNames &names);
 	static void RawXScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
 	static unique_ptr<FunctionData> RawVarBind(ClientContext &context, TableFunctionBindInput &input,
-	                                           vector<LogicalType> &return_types, vector<string> &names);
+	                                           vector<LogicalType> &return_types, compat::BindColumnNames &names);
 	static void RawVarScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
 	static unique_ptr<FunctionData> RawVarmBind(ClientContext &context, TableFunctionBindInput &input,
-	                                            vector<LogicalType> &return_types, vector<string> &names);
+	                                            vector<LogicalType> &return_types, compat::BindColumnNames &names);
 	static void RawVarmScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
 	// Table function for file info
 	static unique_ptr<FunctionData> InfoBind(ClientContext &context, TableFunctionBindInput &input,
-	                                         vector<LogicalType> &return_types, vector<string> &names);
+	                                         vector<LogicalType> &return_types, compat::BindColumnNames &names);
 	static void InfoScan(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
 	// Utility functions

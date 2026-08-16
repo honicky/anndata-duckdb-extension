@@ -3,6 +3,7 @@
 #include "duckdb.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb_compat.hpp"
 #include "h5_file_cache.hpp"
 
 namespace duckdb {
@@ -10,7 +11,7 @@ namespace duckdb {
 // Helper: try to read a single DuckDB setting into a string, returning empty on failure
 inline string TryGetSettingString(const ClientContext &context, const string &key) {
 	Value result;
-	auto lookup = context.TryGetCurrentSetting(key, result);
+	auto lookup = context.TryGetCurrentSetting(compat::SettingKey(key), result);
 	if (lookup && !result.IsNull()) {
 		return result.ToString();
 	}
