@@ -2,6 +2,11 @@
 #include "include/h5_reader_multithreaded.hpp"
 #include "include/s3_credentials.hpp"
 #include "duckdb/storage/storage_extension.hpp"
+// storage_extension.hpp only forward-declares AttachInfo, and catalog.hpp only
+// forward-declares AttachOptions; duckdb/main no longer pulls their definitions in
+// transitively, so include them explicitly. Both paths are identical on v1.5.x.
+#include "duckdb/parser/parsed_data/attach_info.hpp"
+#include "duckdb/main/attached_database.hpp"
 #include "duckdb/catalog/duck_catalog.hpp"
 #include "duckdb/transaction/duck_transaction_manager.hpp"
 #include "duckdb/catalog/catalog_entry/duck_schema_entry.hpp"
@@ -71,7 +76,7 @@ string AnndataDefaultGenerator::GenerateViewSQL(const TableViewInfo &info) const
 }
 
 unique_ptr<CatalogEntry> AnndataDefaultGenerator::CreateDefaultEntry(ClientContext &context,
-                                                                    const compat::DefaultEntryName &entry_name) {
+                                                                     const compat::DefaultEntryName &entry_name) {
 	// DuckDB main passes an Identifier here; v1.5.x passes a string. Normalize to a
 	// raw string for our string-keyed table_map lookups.
 	const string &entry_name_str = compat::DefaultEntryNameToString(entry_name);
