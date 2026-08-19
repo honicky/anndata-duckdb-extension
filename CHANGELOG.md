@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **WASM file access** (`wasm_mvp`, `wasm_eh`): files registered with duckdb-wasm
+  (`registerFileBuffer`, URLs, OPFS) can now actually be queried. HDF5's default (POSIX) driver
+  reads Emscripten MEMFS, which duckdb-wasm never populates - registered files live in its
+  `WebFileSystem`. The new bridge (`src/wasm_file_image.cpp`) reads the whole file through
+  `duckdb::FileSystem` and opens it as an in-memory HDF5 CORE file image
+  (`spec/wasm-support-spec.md`, "Stepping stone: `H5FD_CORE`"). Whole-file-resident: bounded by
+  wasm32 memory; the ranged-read VFD (spec Phase 3) supersedes this for large/remote files.
+  Unregistered paths now produce an actionable error naming `registerFileBuffer`. The CI load
+  smoke registers a real fixture and asserts `anndata_scan_obs`/`anndata_scan_var`/
+  `anndata_scan_x` results plus the `ATTACH (TYPE ANNDATA)` path end to end.
+- **In-browser demo** (`demo/browser/`): a terminal-style page that boots DuckDB-WASM from
+  jsDelivr (pinned in lockstep with `duckdb_version`), loads the locally built extension, and
+  queries `.h5ad` files dropped into the tab - entirely client-side. `python3 demo/browser/serve.py`
+  after `make wasm_eh`.
+
 ### Fixed
 - **WASM artifacts are now loadable** (`wasm_mvp`, `wasm_eh`). The wasm side module is produced by
   a `POST_BUILD emcc -sSIDE_MODULE=2` step that links only the archives named in

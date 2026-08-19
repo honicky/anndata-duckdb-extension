@@ -550,9 +550,15 @@ falls into the local branch and dies with `File not found: s3://…`.
 
 > **Status (2026-08-19):** Phase 0 landed in PR #34 (exclusion, deploy-matrix trim, docs).
 > Phase 1 landed with the `LINKED_LIBS` fix plus the Tier 0 symbol gate and Tier 1 Node load
-> smoke in CI (`wasm-checks` job); `wasm_mvp`/`wasm_eh` build and load (~3.0 MB artifacts)
-> but remain undistributed pending Phase 2. `wasm_threads` stays excluded (B4). Still open
-> from Phase 0: the upstream community-extensions `excluded_platforms` PR (Monitor 3 now
+> smoke in CI (`wasm-checks` job); `wasm_mvp`/`wasm_eh` build and load (~3.0 MB artifacts).
+> Phase 2's minimal path landed as well: the `H5FD_CORE` file-image bridge
+> (`src/wasm_file_image.cpp`, wasm-only) makes registered files queryable - scan functions and
+> `ATTACH` verified under duckdb-wasm on both arches, with a real-fixture phase in the CI load
+> smoke and an in-browser demo (`demo/browser/`). The artifacts remain undistributed pending the
+> un-exclusion criteria below; `wasm_threads` stays excluded (B4). One upstream limitation found:
+> on `wasm_mvp` a side-module C++ throw dies in the loader's invoke wrappers
+> (`_setThrew is not defined`) - happy paths are unaffected, error messages are eh-clean only.
+> Still open from Phase 0: the upstream community-extensions `excluded_platforms` PR (Monitor 3
 > nags until it lands) and retraction of historical wasm objects from the S3 channel.
 
 

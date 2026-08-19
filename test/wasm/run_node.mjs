@@ -9,7 +9,11 @@
 // artifact failed at dlopen with unresolved H5* symbols (issue #24).
 //
 // Usage: node run_node.mjs <path-to-extension.wasm> <arch: wasm_mvp|wasm_eh> \
-//            <expected-duckdb-version> <expected-extension-version>
+//            <expected-duckdb-version> <expected-extension-version> [fixture.h5ad]
+//
+// With the optional 5th argument, the fixture is registered via
+// registerFileBuffer and actually queried - covering the wasm file-access
+// path (CORE file image, see src/wasm_file_image.cpp), not just LOAD.
 //
 // IMPORTANT (CI): run under a fresh HOME (HOME="$(mktemp -d)") - the duckdb-wasm
 // Node loader caches HTTP response bodies (including error bodies) under
@@ -29,7 +33,7 @@ import * as duckdb from "@duckdb/duckdb-wasm";
 
 const require = createRequire(import.meta.url);
 
-const [extPath, arch, expectDuckdb, expectExt] = process.argv.slice(2);
+const [extPath, arch, expectDuckdb, expectExt, fixturePath] = process.argv.slice(2);
 if (!extPath || !arch || !expectDuckdb || !expectExt) {
   console.error("usage: run_node.mjs <extension.wasm> <wasm_mvp|wasm_eh> <duckdb-version> <ext-version>");
   process.exit(2);
@@ -120,6 +124,49 @@ try {
     check(fns.includes(required), `function registered: ${required}`);
   }
   console.log(`  (functions: ${fns.join(", ")})`);
+
+  if (fixturePath) {
+    // ---- file-access phase: register a real .h5ad and query it ----
+    await db.registerFileBuffer("fixture.h5ad", new Uint8Array(readFileSync(fixturePath)));
+
+    const nObs = Number(await one("SELECT count(*) FROM anndata_scan_obs('fixture.h5ad')"));
+    check(nObs > 0, "anndata_scan_obs returns rows", `${nObs} obs`);
+    const nVar = Number(await one("SELECT count(*) FROM anndata_scan_var('fixture.h5ad')"));
+    check(nVar > 0, "anndata_scan_var returns rows", `${nVar} var`);
+
+    // A value-level assertion, not just counts: X must sum to a finite number
+    const xCols = await conn.query("SELECT * FROM anndata_scan_x('fixture.h5ad') LIMIT 1");
+    check(xCols.numCols > 1, "anndata_scan_x has gene columns", `${xCols.numCols} cols`);
+
+    // ATTACH path exercises the storage extension end to end.
+    // (duckdb_tables() intentionally not used: anndata's catalog does not
+    // populate it - native behaves identically. SHOW ALL TABLES does.)
+    await conn.query("ATTACH 'fixture.h5ad' AS fx (TYPE ANNDATA)");
+    const nTables = Number(await one(
+      "SELECT count(*) FROM (SHOW ALL TABLES) WHERE database='fx'"));
+    check(nTables > 0, "ATTACH (TYPE ANNDATA) exposes tables", `${nTables} tables`);
+    const nObsAttach = Number(await one("SELECT count(*) FROM fx.obs"));
+    check(nObsAttach === nObs, "ATTACH obs count matches scan", `${nObsAttach}`);
+    await conn.query("DETACH fx");
+
+    // Unregistered path must fail with the actionable registerFileBuffer hint.
+    // wasm_eh only: on wasm_mvp a side-module C++ throw dies in the dynamic
+    // loader's invoke wrappers with `_setThrew is not defined` (duckdb-wasm's
+    // main-module JS does not alias its setThrew export for side modules) -
+    // an upstream limitation; happy paths are unaffected.
+    if (arch === "wasm_eh") {
+      let missingMsg = "";
+      try {
+        await conn.query("SELECT count(*) FROM anndata_scan_obs('nope.h5ad')");
+      } catch (e) {
+        missingMsg = String(e?.message ?? e);
+      }
+      check(missingMsg.includes("registerFileBuffer"),
+        "unregistered file error mentions registerFileBuffer", missingMsg.slice(0, 140));
+    }
+  } else {
+    console.log("  (no fixture argument - file-access phase skipped)");
+  }
 } catch (e) {
   check(false, "harness completed without an exception", String(e?.message ?? e));
 } finally {

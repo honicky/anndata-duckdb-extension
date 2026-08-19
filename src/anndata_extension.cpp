@@ -1,5 +1,6 @@
 #include "include/anndata_extension.hpp"
 #include "include/anndata_storage.hpp"
+#include "include/wasm_file_image.hpp"
 #include "anndata_version.hpp"
 #include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
@@ -42,6 +43,12 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	// Get the database instance
 	auto &db = loader.GetDatabaseInstance();
+
+#ifdef __EMSCRIPTEN__
+	// Enable file access in DuckDB-WASM: readers open registered files through
+	// duckdb::FileSystem as CORE file images (see wasm_file_image.hpp).
+	SetWasmDatabaseInstance(&db);
+#endif
 
 	// Register the version function
 	loader.RegisterFunction(ScalarFunction("anndata_version", {}, LogicalType::VARCHAR, AnndataVersionFunction));

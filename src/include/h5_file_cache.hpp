@@ -7,6 +7,7 @@
 #include <cstring>
 #include <list>
 #include <fstream>
+#include "wasm_file_image.hpp"
 #include <sys/stat.h>
 
 // Windows MSVC doesn't define S_ISDIR
@@ -130,6 +131,16 @@ public:
 		} else
 #endif
 		{
+#ifdef __EMSCRIPTEN__
+			// In DuckDB-WASM the POSIX filesystem (Emscripten MEMFS) never
+			// contains user files - they live in duckdb-wasm's WebFileSystem.
+			// Read through duckdb::FileSystem and open as a CORE file image.
+			// Remote URLs also take this path (DUCKDB_NO_REMOTE_VFD is defined
+			// on wasm): duckdb-wasm's HTTP filesystem downloads them whole,
+			// CORS permitting.
+			file = AnndataOpenFileImage(path);
+		}
+#else
 			// Local file - check existence and permissions before HDF5 operations
 			struct stat file_stat;
 			if (stat(path.c_str(), &file_stat) != 0) {
@@ -163,6 +174,7 @@ public:
 			file = H5Fopen(path.c_str(), H5F_ACC_RDONLY, fapl);
 			H5Pclose(fapl);
 		}
+#endif
 
 		if (file < 0) {
 			// Provide more specific error message based on context

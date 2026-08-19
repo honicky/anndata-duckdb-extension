@@ -199,7 +199,8 @@ jobs:
           # bodies (including error bodies) under ~/.duckdb/extensions/.
           HOME="$(mktemp -d)" node run_node.mjs \
             /tmp/extension/anndata.duckdb_extension.wasm \
-            ${{ matrix.duckdb_arch }} v1.5.5 "$(cat ../../VERSION)"
+            ${{ matrix.duckdb_arch }} v1.5.5 "$(cat ../../VERSION)" \
+            ../data/test_small.h5ad
 
   # Auto-tag when version changes and deploy if tagged
   auto-tag:
