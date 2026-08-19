@@ -37,16 +37,43 @@ SELECT cell_type, count(*) FROM d.obs GROUP BY 1;
   at `/extension/v1.5.5/<arch>/anndata.duckdb_extension.wasm`, and loaded via
   `SET custom_extension_repository` + `INSTALL anndata; LOAD anndata`
   (`allowUnsignedExtensions` - local builds are unsigned).
-- Files are registered with `registerFileBuffer` and opened by the extension
-  through DuckDB's filesystem as an in-memory HDF5 CORE image
-  (`src/wasm_file_image.cpp`).
+- Files are opened by the extension through a ranged HDF5 driver backed by
+  `duckdb::FileSystem` (`src/vfd/h5fd_duckdb_fs.cpp`): every browser byte
+  source - dropped files, buffers, HTTP/S3 URLs - reaches HDF5 through one
+  lazy, positional-read path.
+
+## Remote files (HTTP/S3)
+
+`.open <url>` registers the URL as a **lazy handle** (`registerFileURL`):
+queries issue HTTP range requests for exactly the byte ranges they touch.
+Measured on a 110 MB file: schema + a 150k-row aggregate = 1 HEAD + ~50 range
+requests, ~12 MB transferred, no full download.
+
+Server requirements: `Range` support (206), `Content-Length`, and in a browser
+CORS (`Access-Control-Allow-Origin`, allow the `Range` request header, expose
+`Content-Range`/`Content-Length`). Servers without Range support fall back to
+a whole-file download. The demo opens the database with
+`filesystem: { reliableHeadRequests: true, forceFullHTTPReads: false }` -
+without these flags this duckdb-wasm build downloads whole files.
+
+S3 uses the same machinery with SigV4 signing:
+
+```sql
+SET s3_region='us-west-2'; SET s3_access_key_id='...'; SET s3_secret_access_key='...';
+SELECT * FROM anndata_scan_obs('s3://bucket/file.h5ad') LIMIT 5;
+```
+
+(CORS must be configured on the bucket. Verified path: HTTP; S3 shares the
+same code path in duckdb-wasm but is not exercised by this repo's tests.)
 
 ## Limitations
 
-- **Whole file in memory** (CORE image; wasm32 address space caps practical
-  file size - the demo refuses files > 500 MB). The ranged-read VFD
-  (spec Phase 3) lifts this.
-- `.open <url>` requires CORS on the remote server and downloads the whole file.
+- Local drag & drop files are **lazy** (`registerFileHandle` + FileReaderSync):
+  no size cap - file size is bounded by what queries touch, not memory.
+  The "Load sample" button uses `registerFileBuffer` (in-memory) instead.
+- CSR expression matrices: selecting one gene still reads most of `X`
+  (row-major layout - a file-format property, not an I/O one). Metadata,
+  `obs`, `var`, `obsm` queries are the sweet spot for large remote files.
 - Browsers pick the `eh` bundle; on very old browsers (mvp) error *messages*
   can be cryptic (upstream duckdb-wasm limitation on side-module throws) -
   successful queries are unaffected.

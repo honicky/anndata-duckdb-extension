@@ -139,9 +139,12 @@ async function run(sql, { echo = true } = {}) {
 }
 
 async function registerBytes(name, bytes) {
+  // capture the size first: registerFileBuffer transfers the buffer to the
+  // worker, detaching it here (bytes.length becomes 0 after the await)
+  const n = bytes.length;
   await db.registerFileBuffer(name, bytes);
   registered.push(name);
-  const sz = bytes.length >= 1e6 ? `${(bytes.length / 1e6).toFixed(1)} MB` : `${(bytes.length / 1e3).toFixed(1)} KB`;
+  const sz = n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${(n / 1e3).toFixed(1)} KB`;
   line(`registered ${name} (${sz})`, "ok");
   line(`try:  SELECT * FROM anndata_scan_obs('${name}') LIMIT 5;`, "dim");
   line(`      ATTACH '${name}' AS d (TYPE ANNDATA); SHOW ALL TABLES;`, "dim");
@@ -149,11 +152,15 @@ async function registerBytes(name, bytes) {
 
 async function registerFiles(files) {
   for (const f of files) {
-    if (f.size > 500 * 1024 * 1024) {
-      line(`${f.name}: ${(f.size / 1e6).toFixed(0)} MB - too large for the in-memory demo (cap 500 MB)`, "err");
-      continue;
-    }
-    await registerBytes(f.name, new Uint8Array(await f.arrayBuffer()));
+    // registerFileHandle keeps the File as a lazy disk handle: the extension's
+    // ranged VFD reads only the byte ranges each query touches, so file size
+    // is bounded by the query's working set, not browser memory. No cap.
+    await db.registerFileHandle(f.name, f, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, false);
+    registered.push(f.name);
+    const sz = f.size >= 1e6 ? `${(f.size / 1e6).toFixed(1)} MB` : `${(f.size / 1e3).toFixed(1)} KB`;
+    line(`registered ${f.name} (${sz}, lazy - reads only what queries touch)`, "ok");
+    line(`try:  SELECT * FROM anndata_scan_obs('${f.name}') LIMIT 5;`, "dim");
+    line(`      ATTACH '${f.name}' AS d (TYPE ANNDATA); SHOW ALL TABLES;`, "dim");
   }
 }
 
@@ -164,7 +171,12 @@ Anything else runs as SQL. Useful starters:
   SELECT * FROM anndata_scan_obs('file.h5ad') LIMIT 5;
   SELECT * FROM anndata_info('file.h5ad');
   ATTACH 'file.h5ad' AS d (TYPE ANNDATA);  SHOW ALL TABLES;  SELECT * FROM d.obs LIMIT 5;
-Files must be registered first (drag & drop, Open, or Load sample).`;
+Files must be registered first (drag & drop, Open, or Load sample) -
+registration is lazy: queries read only the byte ranges they touch.
+http(s):// and s3:// URLs can be queried directly (Range + CORS required):
+  SELECT * FROM anndata_scan_obs('https://host/file.h5ad') LIMIT 5;
+  SET s3_region='us-west-2'; SET s3_access_key_id='...'; SET s3_secret_access_key='...';
+  SELECT * FROM anndata_scan_obs('s3://bucket/file.h5ad') LIMIT 5;`;
 
 async function dot(cmd) {
   const [word, ...rest] = cmd.split(/\s+/);
@@ -174,16 +186,34 @@ async function dot(cmd) {
     return;
   }
   if (word === ".open" && rest[0]) {
-    const url = rest[0];
-    const name = url.split("/").pop() || "remote.h5ad";
-    line(`fetching ${url} …`, "dim");
+    // registerFileURL keeps the URL as a lazy handle: duckdb-wasm issues HTTP
+    // range requests for exactly the byte ranges queries touch (server must
+    // support Range + expose Content-Length via CORS). Nothing is downloaded
+    // up front. (Querying an UNregistered http:// path also works, but
+    // downloads the whole file first - duckdb-wasm's allowFullHTTPReads
+    // fallback.)
+    // The HEAD/GET happens as sync XHR inside the duckdb-wasm worker, which
+    // is created from a blob: URL - relative paths cannot resolve there.
+    // Absolutize against the page origin first.
+    const url = /^[a-z][a-z0-9+.-]*:/i.test(rest[0]) ? rest[0] : new URL(rest[0], location.origin).href;
+    let name = (url.split("/").pop() || "remote.h5ad").split("?")[0];
     try {
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      await registerBytes(name, new Uint8Array(await resp.arrayBuffer()));
+      try { await db.dropFile(name); } catch {}
+      // an open file cannot be dropped (the extension may hold it in its file
+      // cache) - fall back to a fresh name rather than failing
+      for (let i = 2; registered.includes(name); i++) {
+        name = name.replace(/(~\d+)?$/, `~${i}`);
+      }
+      await db.registerFileURL(name, url, duckdb.DuckDBDataProtocol.HTTP, false);
+      registered.push(name);
+      line(`registered ${name} -> ${url} (lazy, HTTP range requests)`, "ok");
     } catch (e) {
-      line(`fetch failed: ${e.message} (the server must allow CORS)`, "err");
+      line(`register failed: ${e.message}`, "err");
+      return;
     }
+    const ok = await run(`SELECT * FROM anndata_info('${name}')`);
+    if (ok) line(`query it, e.g.  SELECT * FROM anndata_scan_obs('${name}') LIMIT 5;`, "dim");
+    else line("remote files need: Range support + Content-Length + CORS on the server", "dim");
     return;
   }
   line(`unknown command: ${cmd} — .help`, "err");
@@ -209,8 +239,17 @@ input.addEventListener("keydown", async (e) => {
 
 document.getElementById("filepick").addEventListener("change", (e) => registerFiles(e.target.files));
 document.getElementById("loadsample").addEventListener("click", async () => {
-  line("D .open /data/test_small.h5ad", "cmd");
-  await dot(".open /data/test_small.h5ad");
+  // Deliberately uses registerFileBuffer (the in-memory BUFFER path) so the
+  // demo exercises it alongside registerFileHandle (drag & drop) and
+  // registerFileURL (.open) - three byte sources, one VFD.
+  line("D (load sample: fetch + registerFileBuffer)", "cmd");
+  try {
+    const resp = await fetch("/data/test_small.h5ad");
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    await registerBytes("test_small.h5ad", new Uint8Array(await resp.arrayBuffer()));
+  } catch (e) {
+    line(`sample load failed: ${e.message}`, "err");
+  }
 });
 document.body.addEventListener("dragover", (e) => { e.preventDefault(); document.body.classList.add("dragging"); });
 document.body.addEventListener("dragleave", () => document.body.classList.remove("dragging"));
@@ -233,8 +272,23 @@ try {
   statusEl.textContent = "instantiating…";
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
   URL.revokeObjectURL(workerUrl);
-  await db.open({ path: ":memory:", allowUnsignedExtensions: true });
+  // filesystem flags: this duckdb-wasm build defaults to force-full HTTP
+  // reads (whole-file download on first access). reliableHeadRequests +
+  // !forceFullHTTPReads switches registered URLs to lazy range-request mode
+  // (verified: obs scan on a 110 MB file = 1 HEAD + 47 range GETs, 11.7 MB
+  // transferred). Servers without Range support still fall back to a full
+  // download via allowFullHTTPReads.
+  await db.open({
+    path: ":memory:",
+    allowUnsignedExtensions: true,
+    filesystem: {
+      allowFullHTTPReads: true,
+      reliableHeadRequests: true,
+      forceFullHTTPReads: false,
+    },
+  });
   conn = await db.connect();
+  window.demo = { db, conn, duckdb }; // for DevTools poking
 
   const one = async (sql) => String((await conn.query(sql)).getChildAt(0)?.get(0));
   const engineVersion = await one("SELECT version()");
