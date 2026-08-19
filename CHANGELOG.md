@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.6] - 2026-08-19
+
+### Changed
+- **WebAssembly builds are now excluded from CI and distribution** (`wasm_mvp`, `wasm_eh`,
+  `wasm_threads`). The published wasm artifacts could never be loaded: HDF5 is not linked into the
+  wasm side module, so `LOAD anndata` failed during `dlopen` with
+  `bad export type for 'H5T_NATIVE_INT32_g': undefined`. The wasm link step uses
+  `-sSIDE_MODULE=2`, which tolerates undefined symbols, so CI reported success while producing a
+  non-loadable 446 KB artifact containing 63 unresolved `H5*` imports. Excluding the platform means
+  users get a clear "not available" error instead of a cryptic load failure. See
+  [#24](https://github.com/honicky/anndata-duckdb-extension/issues/24); proper wasm support is
+  designed in `spec/wasm-support-spec.md`.
+
 ### Fixed
 - **CI: unbreak the `Build against duckdb/main` job.** All three `main-distribution` arches (`linux_amd64`, `linux_amd64_musl`, `linux_arm64`) started failing to compile once `duckdb/main` landed the new `duckdb::Identifier` type (`duckdb/common/identifier.hpp`) and rolled it out across the string-keyed APIs. `Identifier` is implicitly constructible from a *string literal* but **explicitly** from a runtime `string`, so every call site that handed DuckDB a `string` stopped compiling. Three distinct breakages, 31 errors total:
 
@@ -21,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Verified locally with two full builds from the same tree: against `duckdb/main` (`f8e1c96a53`) and against the pinned stable `v1.5.5` (`d8cdaa33fd`). Both compile clean, and the extension suite passes on both with byte-identical per-file assertion counts across all 25 test files (20 cases; the 5 skips are the httpfs/S3-env-gated remote tests). `make format` and `make tidy-check` pass. No behavior change on the stable build — `compat::BindColumnNames` is exactly `vector<string>` there.
 
   Worth recording for next time: **`make format` does not currently check this extension's `src/` at all.** `extension-ci-tools` passes `T="--workdir $PWD --directories src test"` down to `make -C duckdb format-check`, but v1.5.5's recipe is `scripts/format.py --all --check` — `$(T)` is silently dropped, so format.py runs with DuckDB's own tree as its working directory. `duckdb/main`'s recipe appends `$(T)` and does honor it. The CI log for `duckdb-main-code-quality` shows the un-scoped form, so the gate is green today for both branches while 43 pre-existing violations sit in `src/` (42 in `anndata_scanner.cpp`, almost all the same missing space in `compat::SetChunkCardinality(output,count)`, plus one continuation indent in `anndata_storage.cpp`). Those are left alone here to keep this diff to the build fix, but they will surface the moment the scoping starts working. This change itself is format-neutral: measured against `origin/main` with the pinned clang-format 11.0.1, the violation count per touched file is unchanged.
+
+- Documentation accuracy: `README.md` no longer claims thread-safe operation on *all* platforms
+  (Windows is single-threaded) and now documents the WebAssembly gap; `RELEASE.md` no longer lists
+  WebAssembly as a built and tested platform.
 
 ## [0.14.5] - 2026-08-12
 
