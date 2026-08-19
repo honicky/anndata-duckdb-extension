@@ -551,10 +551,16 @@ falls into the local branch and dies with `File not found: s3://…`.
 > **Status (2026-08-19):** Phase 0 landed in PR #34 (exclusion, deploy-matrix trim, docs).
 > Phase 1 landed with the `LINKED_LIBS` fix plus the Tier 0 symbol gate and Tier 1 Node load
 > smoke in CI (`wasm-checks` job); `wasm_mvp`/`wasm_eh` build and load (~3.0 MB artifacts).
-> Phase 2's minimal path landed as well: the `H5FD_CORE` file-image bridge
-> (`src/wasm_file_image.cpp`, wasm-only) makes registered files queryable - scan functions and
-> `ATTACH` verified under duckdb-wasm on both arches, with a real-fixture phase in the CI load
-> smoke and an in-browser demo (`demo/browser/`). The artifacts remain undistributed pending the
+> Phase 2 landed beyond the minimal path: the **ranged `duckdb::FileSystem` VFD**
+> (`src/vfd/h5fd_duckdb_fs.cpp`, wasm-only scope for now - the native swap still waits on the
+> performance gates) makes every duckdb-wasm byte source queryable lazily: drag & drop files
+> (FileReaderSync), buffers, and HTTP/S3 range requests (measured in Chrome: 110 MB file,
+> schema + 150k-row aggregate = ~50 range requests / ~12 MB). Scan functions and `ATTACH`
+> verified on both arches; real-fixture phase in the CI load smoke; in-browser demo
+> (`demo/browser/`). duckdb-wasm quirks worth recording: ranged HTTP requires
+> `filesystem: {reliableHeadRequests: true, forceFullHTTPReads: false}` at `db.open` (this
+> build otherwise force-downloads whole files), and its Node build cannot open `http://` paths
+> at all (no XHR in the worker). The artifacts remain undistributed pending the
 > un-exclusion criteria below; `wasm_threads` stays excluded (B4). One upstream limitation found:
 > on `wasm_mvp` a side-module C++ throw dies in the loader's invoke wrappers
 > (`_setThrew is not defined`) - happy paths are unaffected, error messages are eh-clean only.

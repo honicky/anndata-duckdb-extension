@@ -163,7 +163,7 @@ set(EXTENSION_SOURCES
     src/h5_reader_multithreaded.cpp
     src/glob_handler.cpp
     src/schema_harmonizer.cpp
-    src/wasm_file_image.cpp
+    src/vfd/h5fd_duckdb_fs.cpp
     ${LZF_SOURCES}
     ${VFD_SOURCES}
 )

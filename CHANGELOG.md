@@ -8,16 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **WASM file access** (`wasm_mvp`, `wasm_eh`): files registered with duckdb-wasm
-  (`registerFileBuffer`, URLs, OPFS) can now actually be queried. HDF5's default (POSIX) driver
-  reads Emscripten MEMFS, which duckdb-wasm never populates - registered files live in its
-  `WebFileSystem`. The new bridge (`src/wasm_file_image.cpp`) reads the whole file through
-  `duckdb::FileSystem` and opens it as an in-memory HDF5 CORE file image
-  (`spec/wasm-support-spec.md`, "Stepping stone: `H5FD_CORE`"). Whole-file-resident: bounded by
-  wasm32 memory; the ranged-read VFD (spec Phase 3) supersedes this for large/remote files.
-  Unregistered paths now produce an actionable error naming `registerFileBuffer`. The CI load
-  smoke registers a real fixture and asserts `anndata_scan_obs`/`anndata_scan_var`/
-  `anndata_scan_x` results plus the `ATTACH (TYPE ANNDATA)` path end to end.
+- **WASM file access via a ranged `duckdb::FileSystem` HDF5 driver** (`wasm_mvp`, `wasm_eh`):
+  files reachable through duckdb-wasm - drag & drop (`registerFileHandle`/FileReaderSync),
+  in-memory buffers (`registerFileBuffer`), and `http(s)://`/`s3://` URLs - can now be queried,
+  **lazily**. HDF5's default (POSIX) driver reads Emscripten MEMFS, which duckdb-wasm never
+  populates; the new driver (`src/vfd/h5fd_duckdb_fs.cpp`) maps HDF5's VFD callbacks onto
+  `duckdb::FileHandle` positional reads, so only the byte ranges a query touches are read - no
+  whole-file download, no wasm32 file-size ceiling, remote reads become HTTP range requests
+  (measured in Chrome: schema + a 150k-row aggregate on a 110 MB file = ~50 range requests,
+  ~12 MB transferred). Remote paths get a per-file 1 MiB-block LRU cache; unregistered paths
+  produce an actionable error naming `registerFileHandle`/`registerFileBuffer`. The CI load smoke
+  registers a real fixture and asserts scan results plus the `ATTACH (TYPE ANNDATA)` path end to
+  end. (An interim whole-file CORE-image bridge existed briefly within this release cycle and is
+  replaced by the driver.)
 - **In-browser demo** (`demo/browser/`): a terminal-style page that boots DuckDB-WASM from
   jsDelivr (pinned in lockstep with `duckdb_version`), loads the locally built extension, and
   queries `.h5ad` files dropped into the tab - entirely client-side. `python3 demo/browser/serve.py`
