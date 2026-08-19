@@ -119,10 +119,40 @@ function renderTable(result) {
 let db = null, conn = null;
 const registered = [];
 
+// URLs quoted inside SQL (ATTACH 'https://...', anndata_scan_obs('https://...'))
+// cannot be fetched directly by the worker unless the host sends CORS headers,
+// which most public data servers do not. Rewrite each cross-origin URL to a
+// lazily registered name backed by serve.py's same-origin range relay, so the
+// user's natural SQL just works. Same-origin URLs register directly.
+const urlNames = new Map(); // url -> registered name
+async function rewriteRemoteUrls(sql) {
+  // never rewrite configuration statements - SET custom_extension_repository,
+  // INSTALL ... FROM <url>, CREATE SECRET etc. legitimately contain URLs that
+  // are not data files
+  if (/^\s*(set|install|load|pragma|create\s+secret|force\s+install)\b/i.test(sql)) return sql;
+  const urls = [...new Set([...sql.matchAll(/'(https?:\/\/[^']+)'/g)].map((m) => m[1]))];
+  for (const url of urls) {
+    let name = urlNames.get(url);
+    if (!name) {
+      name = (url.split("/").pop() || "remote.h5ad").split("?")[0];
+      for (let i = 2; registered.includes(name); i++) name = name.replace(/(~\d+)?$/, `~${i}`);
+      const sameOrigin = url.startsWith(location.origin);
+      const regUrl = sameOrigin ? url : `${location.origin}/proxy/${encodeURIComponent(url)}`;
+      await db.registerFileURL(name, regUrl, duckdb.DuckDBDataProtocol.HTTP, false);
+      registered.push(name);
+      urlNames.set(url, name);
+      line(`registered ${name} -> ${url}${sameOrigin ? "" : " (via the local range relay)"} - lazy, range requests only`, "ok");
+    }
+    sql = sql.split(`'${url}'`).join(`'${name}'`);
+  }
+  return sql;
+}
+
 async function run(sql, { echo = true } = {}) {
   if (echo) line(`D ${sql}`, "cmd");
   const t0 = performance.now();
   try {
+    sql = await rewriteRemoteUrls(sql);
     const result = await conn.query(sql);
     const ms = (performance.now() - t0).toFixed(0);
     if (result.numRows > 0 || result.numCols > 0) {
