@@ -211,12 +211,15 @@ SELECT * FROM anndata_scan_obs('s3://bucket/project/*.h5ad');
 - Configurable gene name columns for expression matrix
 - **Auto-detection of gene name columns** with manual override options
 - Efficient HDF5 data reading with proper memory management
-- Thread-safe operation on all platforms
+- Thread-safe operation on Linux and macOS
 
 ## Limitations
 
 - Read only
 - Windows HDF5 library limitations mean that we don't support threading on Windows. This limits the throughput of more complicated queries on Windows.
+- **WebAssembly (DuckDB-WASM) is not supported.** The extension depends on the HDF5 C library,
+  which is not currently linked into the wasm build, so it cannot be loaded in the browser.
+  Tracking issue: [#24](https://github.com/honicky/anndata-duckdb-extension/issues/24).
 
 ## Usage
 

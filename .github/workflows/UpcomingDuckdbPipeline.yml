@@ -198,6 +198,7 @@ jobs:
       ci_tools_version: main
       extension_name: anndata
       opt_in_archs: 'linux_amd64_musl'
+      exclude_archs: 'wasm_mvp;wasm_eh;wasm_threads'  # see issue #24 — wasm build does not load
       override_repository: ${{ github.repository }}
       override_ref: main-distribution
 
@@ -477,6 +478,7 @@ jobs:
       ci_tools_version: main
       extension_name: anndata
       opt_in_archs: 'linux_amd64_musl'
+      exclude_archs: 'wasm_mvp;wasm_eh;wasm_threads'  # see issue #24 — wasm build does not load
 
   report-ci-health:
     name: Report CI health
