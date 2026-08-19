@@ -196,24 +196,43 @@ async function dot(cmd) {
     // is created from a blob: URL - relative paths cannot resolve there.
     // Absolutize against the page origin first.
     const url = /^[a-z][a-z0-9+.-]*:/i.test(rest[0]) ? rest[0] : new URL(rest[0], location.origin).href;
-    let name = (url.split("/").pop() || "remote.h5ad").split("?")[0];
+    const baseName = (url.split("/").pop() || "remote.h5ad").split("?")[0];
+    const freshName = (n) => {
+      // an open file cannot be dropped (the extension may hold it in its
+      // file cache) - pick a fresh name rather than failing
+      for (let i = 2; registered.includes(n); i++) n = n.replace(/(~\d+)?$/, `~${i}`);
+      return n;
+    };
+    const tryRegister = async (regUrl) => {
+      const n = freshName(baseName);
+      try { await db.dropFile(n); } catch {}
+      await db.registerFileURL(n, regUrl, duckdb.DuckDBDataProtocol.HTTP, false);
+      registered.push(n);
+      return n;
+    };
+    let name;
     try {
-      try { await db.dropFile(name); } catch {}
-      // an open file cannot be dropped (the extension may hold it in its file
-      // cache) - fall back to a fresh name rather than failing
-      for (let i = 2; registered.includes(name); i++) {
-        name = name.replace(/(~\d+)?$/, `~${i}`);
-      }
-      await db.registerFileURL(name, url, duckdb.DuckDBDataProtocol.HTTP, false);
-      registered.push(name);
+      name = await tryRegister(url);
       line(`registered ${name} -> ${url} (lazy, HTTP range requests)`, "ok");
     } catch (e) {
       line(`register failed: ${e.message}`, "err");
       return;
     }
-    const ok = await run(`SELECT * FROM anndata_info('${name}')`);
+    let ok = await run(`SELECT * FROM anndata_info('${name}')`);
+    if (!ok && !url.startsWith(location.origin)) {
+      // Direct cross-origin access is blocked unless the HOST sends CORS
+      // headers - many public data servers do not. Retry through serve.py's
+      // same-origin range relay: still lazy, ranges only, no CORS involved.
+      line("direct access failed (usually CORS) - retrying via the local range relay…", "dim");
+      try {
+        name = await tryRegister(`${location.origin}/proxy/${encodeURIComponent(url)}`);
+        ok = await run(`SELECT * FROM anndata_info('${name}')`);
+      } catch (e) {
+        line(`relay register failed: ${e.message}`, "err");
+      }
+    }
     if (ok) line(`query it, e.g.  SELECT * FROM anndata_scan_obs('${name}') LIMIT 5;`, "dim");
-    else line("remote files need: Range support + Content-Length + CORS on the server", "dim");
+    else line("remote files need Range support + Content-Length, and either CORS on the host or the local relay", "dim");
     return;
   }
   line(`unknown command: ${cmd} — .help`, "err");

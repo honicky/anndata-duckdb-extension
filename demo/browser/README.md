@@ -56,6 +56,20 @@ a whole-file download. The demo opens the database with
 `filesystem: { reliableHeadRequests: true, forceFullHTTPReads: false }` -
 without these flags this duckdb-wasm build downloads whole files.
 
+**Most public data hosts do not send CORS headers** (e.g.
+`datasets.cellxgene.cziscience.com` returns 403 to the preflight), which
+blocks *any* in-browser reader - that is a browser platform rule, not an
+extension limitation; the same URL works from the terminal because native
+tools have no same-origin policy. `serve.py` therefore ships a **same-origin
+range relay** (`/proxy/<encoded-url>`): `.open` tries direct access first and
+falls back to the relay automatically. Laziness is preserved - only the
+ranges queries touch flow through (verified: `anndata_info` + `ATTACH` on a
+**7.1 GB** CZI dataset, 851,993 cells x 35,477 genes, cost ~8 MB / ~140 range
+requests). The relay also normalizes CloudFront's 200-for-HEAD-with-Range
+into the 206 duckdb-wasm's probe requires. Local demo tool only - do not
+deploy it as an open proxy; a hosted deployment needs its own CORS-fronting
+relay or a host that sends CORS.
+
 S3 uses the same machinery with SigV4 signing:
 
 ```sql
