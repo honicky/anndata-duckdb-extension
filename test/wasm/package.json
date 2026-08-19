@@ -1,0 +1,13 @@
+{
+  "name": "anndata-wasm-load-test",
+  "private": true,
+  "type": "module",
+  "description": "Tier 1 load smoke test: proves the built wasm extension actually LOADs inside duckdb-wasm (a green build alone does not - see scripts/wasm_symbol_check.py).",
+  "scripts": {
+    "test": "node run_node.mjs"
+  },
+  "dependencies": {
+    "@duckdb/duckdb-wasm": "1.33.1-dev64.0",
+    "web-worker": "1.2.0"
+  }
+}

@@ -21,7 +21,14 @@ jobs:
       ci_tools_version: main
       extension_name: anndata
       opt_in_archs: 'linux_amd64_musl'
-      exclude_archs: 'wasm_mvp;wasm_eh;wasm_threads'  # see issue #24 — wasm build does not load
+      # wasm_mvp/wasm_eh are BUILT again (HDF5 is now linked via LINKED_LIBS in
+      # CMakeLists.txt) and gated by the wasm-checks job below, but still NOT
+      # deployed: the extension cannot open any file until the duckdb::FileSystem
+      # VFD port lands (spec/wasm-support-spec.md, Phase 2+). wasm_threads stays
+      # excluded entirely: extension-ci-tools builds extensions without
+      # -fwasm-exceptions against a COI main module built with it, and the
+      # prebuilt HDF5 archives are non-pthread (issue #24).
+      exclude_archs: 'wasm_threads'
 
   code-quality-check:
     name: Code Quality Check
@@ -139,10 +146,67 @@ jobs:
 
           echo "=== All remote access tests passed ==="
 
+  # WASM gates: the side-module link (-sSIDE_MODULE=2) does NOT fail on
+  # unresolved symbols, so a green build can produce an artifact that dies at
+  # LOAD inside duckdb-wasm - which is what every wasm artifact published
+  # before these checks did (issue #24). Two layers:
+  #   1. symbol contract: imports(side) - exports(side) - exports(main) == {}
+  #   2. load smoke: INSTALL + LOAD + anndata_version() under real duckdb-wasm
+  wasm-checks:
+    name: WASM Checks
+    needs: duckdb-stable-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # On pull_request the upstream build runs in reduced_ci_mode, which
+        # builds only wasm_eh among the wasm arches - a wasm_mvp leg would fail
+        # at download-artifact. Full coverage on push/dispatch, eh-only on PRs.
+        include: ${{ github.event_name == 'pull_request'
+          && fromJSON('[{"duckdb_arch":"wasm_eh","main_module":"duckdb-eh.wasm"}]')
+          || fromJSON('[{"duckdb_arch":"wasm_mvp","main_module":"duckdb-mvp.wasm"},{"duckdb_arch":"wasm_eh","main_module":"duckdb-eh.wasm"}]') }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: anndata-v1.5.5-extension-${{ matrix.duckdb_arch }}
+          path: /tmp/extension
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install duckdb-wasm (pin must carry DuckDB v1.5.5 - see test/wasm/README.md)
+        working-directory: test/wasm
+        run: npm install
+
+      - name: Symbol contract check
+        run: |
+          python3 scripts/wasm_symbol_check.py \
+            /tmp/extension/anndata.duckdb_extension.wasm \
+            --main test/wasm/node_modules/@duckdb/duckdb-wasm/dist/${{ matrix.main_module }} \
+            --allowlist test/wasm/allowed_undefined.txt \
+            --expect-platform ${{ matrix.duckdb_arch }} \
+            --expect-duckdb v1.5.5
+
+      - name: Load smoke test (INSTALL + LOAD + version + functions)
+        working-directory: test/wasm
+        run: |
+          # Fresh HOME every run: the duckdb-wasm Node loader caches HTTP
+          # bodies (including error bodies) under ~/.duckdb/extensions/.
+          HOME="$(mktemp -d)" node run_node.mjs \
+            /tmp/extension/anndata.duckdb_extension.wasm \
+            ${{ matrix.duckdb_arch }} v1.5.5 "$(cat ../../VERSION)"
+
   # Auto-tag when version changes and deploy if tagged
   auto-tag:
     name: Create Version Tag
-    needs: duckdb-stable-build
+    # wasm-checks is in the needs chain deliberately: a wasm regression on main
+    # must block tagging/deploying a release, not just turn the run red.
+    needs: [duckdb-stable-build, wasm-checks]
     runs-on: ubuntu-latest
     # Only run on main branch after successful build
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'

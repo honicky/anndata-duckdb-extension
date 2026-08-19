@@ -609,6 +609,19 @@ jobs:
           UPSTREAM_VERSION=$(grep -m1 '^[[:space:]]*version:' /tmp/descriptor.yml | awk '{print $2}')
           UPSTREAM_REF=$(awk '/^repo:/{f=1; next} f && /^[^ ]/{f=0} f && /^[[:space:]]+ref:/{print $2; exit}' /tmp/descriptor.yml)
 
+          # The wasm artifacts do not work yet (issue #24): they are excluded
+          # from our own build/deploy, and the upstream descriptor must carry
+          # excluded_platforms so community-extensions stops publishing them.
+          # Without this check the exclusion could silently disappear upstream.
+          # NOTE: parses only the inline-scalar form (excluded_platforms: "a;b;c"),
+          # the upstream convention. A YAML block list would parse empty and
+          # raise a false 'stale' alarm - noisy, not silent, so acceptable.
+          UPSTREAM_EXCLUDED=$(grep -m1 '^[[:space:]]*excluded_platforms:' /tmp/descriptor.yml | sed 's/^[^:]*:[[:space:]]*//' | tr -d '"' || true)
+          WASM_EXCLUDED=yes
+          for a in wasm_mvp wasm_eh wasm_threads; do
+            case "${UPSTREAM_EXCLUDED}" in *"$a"*) ;; *) WASM_EXCLUDED=no ;; esac
+          done
+
           # Get our latest tag.
           #
           # auto-tag creates ANNOTATED tags, so the tag name resolves to two
@@ -622,6 +635,8 @@ jobs:
           OUR_TAG_OBJ_SHA=$(git rev-parse "${OUR_LATEST_TAG}" 2>/dev/null || echo "")
 
           echo "upstream_version=${UPSTREAM_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "upstream_excluded=${UPSTREAM_EXCLUDED}" >> "$GITHUB_OUTPUT"
+          echo "wasm_excluded=${WASM_EXCLUDED}" >> "$GITHUB_OUTPUT"
           echo "upstream_ref=${UPSTREAM_REF}" >> "$GITHUB_OUTPUT"
           echo "our_version=${OUR_LATEST_VERSION}" >> "$GITHUB_OUTPUT"
           echo "our_tag=${OUR_LATEST_TAG}" >> "$GITHUB_OUTPUT"
@@ -629,13 +644,14 @@ jobs:
           echo "our_tag_obj_sha=${OUR_TAG_OBJ_SHA}" >> "$GITHUB_OUTPUT"
 
           if [ "${UPSTREAM_VERSION}" = "${OUR_LATEST_VERSION}" ] \
+             && [ "${WASM_EXCLUDED}" = "yes" ] \
              && { [ "${UPSTREAM_REF}" = "${OUR_TAG_SHA}" ] || [ "${UPSTREAM_REF}" = "${OUR_TAG_OBJ_SHA}" ]; }; then
             echo "status=in_sync" >> "$GITHUB_OUTPUT"
           else
             echo "status=stale" >> "$GITHUB_OUTPUT"
           fi
 
-          echo "Upstream: v${UPSTREAM_VERSION} (${UPSTREAM_REF})"
+          echo "Upstream: v${UPSTREAM_VERSION} (${UPSTREAM_REF}) excluded_platforms='${UPSTREAM_EXCLUDED}'"
           echo "Ours:     ${OUR_LATEST_TAG} (commit ${OUR_TAG_SHA}, tag object ${OUR_TAG_OBJ_SHA})"
 
       - name: Open or close descriptor issue
@@ -649,6 +665,8 @@ jobs:
           OUR_TAG: ${{ steps.descriptor.outputs.our_tag }}
           OUR_SHA: ${{ steps.descriptor.outputs.our_sha }}
           OUR_TAG_OBJ_SHA: ${{ steps.descriptor.outputs.our_tag_obj_sha }}
+          UPSTREAM_EXCLUDED: ${{ steps.descriptor.outputs.upstream_excluded }}
+          WASM_EXCLUDED: ${{ steps.descriptor.outputs.wasm_excluded }}
         with:
           script: |
             const label = 'community-ext-stale';
@@ -711,6 +729,19 @@ jobs:
               `The \`ref\` above is the annotated tag object for ${process.env.OUR_TAG}, matching the convention ` +
               `already used upstream. The equivalent commit SHA (\`${process.env.OUR_SHA}\`) is also accepted.`,
               ``,
+              ...(process.env.WASM_EXCLUDED !== 'yes' ? [
+                `### WASM must stay excluded`,
+                ``,
+                `The descriptor does not exclude the wasm platforms ` +
+                `(current value: \`${process.env.UPSTREAM_EXCLUDED || '(absent)'}\`), so community-extensions ` +
+                `publishes wasm artifacts that cannot work (issue #24, spec/wasm-support-spec.md). ` +
+                `The same PR should set:`,
+                ``,
+                '```yaml',
+                `  excluded_platforms: "wasm_mvp;wasm_eh;wasm_threads"`,
+                '```',
+                ``,
+              ] : []),
               `This issue will close automatically when the upstream descriptor matches our latest tag.`,
             ].join('\n');
 

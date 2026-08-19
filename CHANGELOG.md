@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **WASM artifacts are now loadable** (`wasm_mvp`, `wasm_eh`). The wasm side module is produced by
+  a `POST_BUILD emcc -sSIDE_MODULE=2` step that links only the archives named in
+  `duckdb_extension_load`'s `LINKED_LIBS` — `target_link_libraries()` is a no-op there — so HDF5
+  was never linked in and `LOAD anndata` died at `dlopen` with 63 unresolved `H5*` symbols
+  ([#24](https://github.com/honicky/anndata-duckdb-extension/issues/24)). `CMakeLists.txt` now sets
+  `DUCKDB_EXTENSION_ANNDATA_LINKED_LIBS` with all four required archives (`libhdf5.a`, `libsz.a`,
+  `libaec.a`, `libz.a` — HDF5's static filter table references szip unconditionally, and
+  `libhdf5.a` alone still leaves `inflate`/`compress2`/`SZ_*` unresolved). The artifact grows from
+  446 KB (broken) to ~3 MB (loadable). The libhdf5-wasm FetchContent download is now pinned by
+  `URL_HASH`.
+
+### Added
+- **CI gates for wasm** (`wasm-checks` job), closing the hole that let non-loadable artifacts ship
+  green for eleven months: a link-level symbol contract check (`scripts/wasm_symbol_check.py` —
+  pure-Python wasm parser proving `imports(side) − exports(side) − exports(main) − allowlist = ∅`
+  against the pinned `@duckdb/duckdb-wasm` main module, plus size floor/ceiling and metadata
+  checks) and a Node load smoke test (`test/wasm/run_node.mjs` — real `INSTALL` + `LOAD` +
+  `anndata_version()` + function registration under duckdb-wasm). Version pins are documented in
+  `test/wasm/README.md` and must move in lockstep with `duckdb_version`.
+- The daily community-extensions descriptor monitor now also verifies the upstream descriptor
+  keeps `excluded_platforms: "wasm_mvp;wasm_eh;wasm_threads"` while wasm file access is
+  unimplemented, so the exclusion cannot silently disappear upstream.
+
+### Changed
+- `wasm_mvp`/`wasm_eh` are built and gated again (previously fully excluded); they remain
+  **undistributed** — file access requires the `duckdb::FileSystem` VFD port
+  (`spec/wasm-support-spec.md`, Phase 2+). `wasm_threads` remains excluded: extension-ci-tools
+  builds extensions without `-fwasm-exceptions` against a COI main module built with it, and the
+  prebuilt HDF5 archives are non-pthread.
+
 ## [0.14.6] - 2026-08-19
 
 ### Changed

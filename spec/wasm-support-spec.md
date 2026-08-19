@@ -548,6 +548,14 @@ falls into the local branch and dies with `File not found: s3://…`.
 
 ## Implementation Plan
 
+> **Status (2026-08-19):** Phase 0 landed in PR #34 (exclusion, deploy-matrix trim, docs).
+> Phase 1 landed with the `LINKED_LIBS` fix plus the Tier 0 symbol gate and Tier 1 Node load
+> smoke in CI (`wasm-checks` job); `wasm_mvp`/`wasm_eh` build and load (~3.0 MB artifacts)
+> but remain undistributed pending Phase 2. `wasm_threads` stays excluded (B4). Still open
+> from Phase 0: the upstream community-extensions `excluded_platforms` PR (Monitor 3 now
+> nags until it lands) and retraction of historical wasm objects from the S3 channel.
+
+
 ### Phase 0 — Stop shipping a broken artifact (about a week)
 
 1. Land `scripts/wasm_symbol_check.py` (Tier 0 below) **first, red**, against the current artifact,

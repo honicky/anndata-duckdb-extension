@@ -36,16 +36,40 @@ if(EMSCRIPTEN)
     FetchContent_Declare(
         libhdf5-wasm
         URL https://github.com/usnistgov/libhdf5-wasm/releases/download/v0.4.6_3.1.68/HDF5-1.14.6-Emscripten.tar.gz
+        URL_HASH SHA256=0c5de36a3c81e3854e57593c55274d89a43db3f8a7bbe6a0d9d5c560e9c222b1
     )
     FetchContent_MakeAvailable(libhdf5-wasm)
-    # Set up HDF5 libraries and includes for WASM
-    set(HDF5_LIBRARIES 
+    # Set up HDF5 libraries and includes for WASM (all four archives, matching
+    # DUCKDB_EXTENSION_ANNDATA_LINKED_LIBS below - libhdf5.a alone leaves
+    # inflate/compress2/SZ_* unresolved if anything ever links the static lib)
+    set(HDF5_LIBRARIES
         ${libhdf5-wasm_SOURCE_DIR}/lib/libhdf5.a
+        ${libhdf5-wasm_SOURCE_DIR}/lib/libsz.a
+        ${libhdf5-wasm_SOURCE_DIR}/lib/libaec.a
+        ${libhdf5-wasm_SOURCE_DIR}/lib/libz.a
     )
     set(HDF5_INCLUDE_DIRS ${libhdf5-wasm_SOURCE_DIR}/include)
     include_directories(${HDF5_INCLUDE_DIRS})
     message(STATUS "Using h5wasm libraries: ${HDF5_LIBRARIES}")
     message(STATUS "Using h5wasm includes: ${HDF5_INCLUDE_DIRS}")
+
+    # CRITICAL: the wasm loadable extension is produced by a POST_BUILD
+    # 'emcc -sSIDE_MODULE=2' command in duckdb/extension/extension_build_tools.cmake
+    # that links ONLY the archives named in DUCKDB_EXTENSION_<NAME>_LINKED_LIBS -
+    # target_link_libraries() on the loadable target is a no-op there (the target
+    # is a STATIC library under Emscripten). Without this, the artifact builds
+    # green but fails at LOAD time in duckdb-wasm with 63 unresolved H5* symbols
+    # (issue #24; see spec/wasm-support-spec.md and scripts/wasm_symbol_check.py).
+    #
+    # All four archives are required: libhdf5.a alone still leaves inflate/
+    # compress2/SZ_* unresolved (szip is referenced unconditionally by HDF5's
+    # static filter table). -sSIDE_MODULE=2 does not error on unresolved
+    # symbols, so only the symbol-check CI gate catches a mistake here.
+    #
+    # Must be one space-separated string: duckdb_extension_load's LINKED_LIBS is
+    # a oneValueArgs parameter, re-split later via separate_arguments().
+    set(DUCKDB_EXTENSION_ANNDATA_LINKED_LIBS
+        "${libhdf5-wasm_SOURCE_DIR}/lib/libhdf5.a ${libhdf5-wasm_SOURCE_DIR}/lib/libsz.a ${libhdf5-wasm_SOURCE_DIR}/lib/libaec.a ${libhdf5-wasm_SOURCE_DIR}/lib/libz.a")
 elseif(CLANG_TIDY)
     # For tidy-check builds, skip HDF5 dependency
     message(STATUS "Clang-tidy build detected - skipping HDF5 dependency")
