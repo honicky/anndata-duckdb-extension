@@ -6,7 +6,14 @@ never leaves the browser.
 
 ![demo](../demo.mp4)
 
-## Run it
+## Live
+
+Deployed from CI to GitHub Pages: **https://honicky.github.io/anndata-duckdb-extension/**
+(the `deploy-demo` job assembles the page + the gated wasm artifacts + the
+sample file; once the wasm build is published to community-extensions the
+bundled artifact goes away and `INSTALL anndata` uses the official repo).
+
+## Run it locally
 
 ```bash
 # 1. Build the wasm extension (once; needs emsdk - see spec/wasm-support-spec.md)

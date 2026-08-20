@@ -119,6 +119,12 @@ function renderTable(result) {
 let db = null, conn = null;
 const registered = [];
 
+// Base URL of the page's directory. The demo may be served from a subpath
+// (e.g. GitHub Pages at /anndata-duckdb-extension/), so same-site resources
+// (extension repository, sample data) must resolve relative to the page,
+// never to location.origin.
+const SITE_BASE = new URL(".", location.href).href;
+
 // URLs quoted inside SQL (ATTACH 'https://...', anndata_scan_obs('https://...'))
 // are rewritten to lazily registered names (registerFileURL) so queries issue
 // HTTP range requests instead of downloading whole files. The BROWSER fetches
@@ -225,7 +231,7 @@ async function dot(cmd) {
     // The HEAD/GET happens as sync XHR inside the duckdb-wasm worker, which
     // is created from a blob: URL - relative paths cannot resolve there.
     // Absolutize against the page origin first.
-    const url = /^[a-z][a-z0-9+.-]*:/i.test(rest[0]) ? rest[0] : new URL(rest[0], location.origin).href;
+    const url = /^[a-z][a-z0-9+.-]*:/i.test(rest[0]) ? rest[0] : new URL(rest[0], SITE_BASE).href;
     const baseName = (url.split("/").pop() || "remote.h5ad").split("?")[0];
     const freshName = (n) => {
       // an open file cannot be dropped (the extension may hold it in its
@@ -288,7 +294,7 @@ document.getElementById("loadsample").addEventListener("click", async () => {
   // registerFileURL (.open) - three byte sources, one VFD.
   line("D (load sample: fetch + registerFileBuffer)", "cmd");
   try {
-    const resp = await fetch("/data/test_small.h5ad");
+    const resp = await fetch(`${SITE_BASE}data/test_small.h5ad`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     await registerBytes("test_small.h5ad", new Uint8Array(await resp.arrayBuffer()));
   } catch (e) {
@@ -339,7 +345,7 @@ try {
   line(`DuckDB-WASM ${engineVersion} (${arch})`, "ok");
 
   statusEl.textContent = "loading anndata extension…";
-  await run(`SET custom_extension_repository='${location.origin}/extension'`);
+  await run(`SET custom_extension_repository='${SITE_BASE}extension'`);
   const okInstall = await run("INSTALL anndata") && await run("LOAD anndata");
   if (!okInstall) {
     line("", "");

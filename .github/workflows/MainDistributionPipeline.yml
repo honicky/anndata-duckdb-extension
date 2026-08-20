@@ -202,6 +202,54 @@ jobs:
             ${{ matrix.duckdb_arch }} v1.5.5 "$(cat ../../VERSION)" \
             ../data/test_small.h5ad
 
+  # Deploy the in-browser demo (demo/browser/) to GitHub Pages: the static
+  # page plus the freshly built + gated wasm artifacts at the extension-repo
+  # layout, plus the sample .h5ad. Serverless - the page loads duckdb-wasm
+  # from jsDelivr and fetches everything else same-origin from Pages.
+  # Once the wasm build is published to community-extensions, the bundled
+  # artifact (and the custom_extension_repository line in index.html) can go.
+  deploy-demo:
+    name: Deploy demo to GitHub Pages
+    needs: wasm-checks
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: anndata-v1.5.5-extension-wasm_eh
+          path: /tmp/wasm_eh
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: anndata-v1.5.5-extension-wasm_mvp
+          path: /tmp/wasm_mvp
+
+      - name: Assemble site
+        run: |
+          mkdir -p site/extension/v1.5.5/wasm_eh site/extension/v1.5.5/wasm_mvp site/data
+          cp demo/browser/index.html site/
+          cp /tmp/wasm_eh/anndata.duckdb_extension.wasm site/extension/v1.5.5/wasm_eh/
+          cp /tmp/wasm_mvp/anndata.duckdb_extension.wasm site/extension/v1.5.5/wasm_mvp/
+          cp test/data/test_small.h5ad site/data/
+          touch site/.nojekyll
+          ls -laR site
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
   # Auto-tag when version changes and deploy if tagged
   auto-tag:
     name: Create Version Tag
