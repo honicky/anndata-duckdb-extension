@@ -120,10 +120,11 @@ let db = null, conn = null;
 const registered = [];
 
 // URLs quoted inside SQL (ATTACH 'https://...', anndata_scan_obs('https://...'))
-// cannot be fetched directly by the worker unless the host sends CORS headers,
-// which most public data servers do not. Rewrite each cross-origin URL to a
-// lazily registered name backed by serve.py's same-origin range relay, so the
-// user's natural SQL just works. Same-origin URLs register directly.
+// are rewritten to lazily registered names (registerFileURL) so queries issue
+// HTTP range requests instead of downloading whole files. The BROWSER fetches
+// the URL directly, so the host must send CORS headers (with Range allowed in
+// the preflight) - e.g. the public CellxGene Census S3 bucket does. Hosts
+// that don't cannot be read by any in-browser tool.
 const urlNames = new Map(); // url -> registered name
 async function rewriteRemoteUrls(sql) {
   // never rewrite configuration statements - SET custom_extension_repository,
@@ -136,12 +137,10 @@ async function rewriteRemoteUrls(sql) {
     if (!name) {
       name = (url.split("/").pop() || "remote.h5ad").split("?")[0];
       for (let i = 2; registered.includes(name); i++) name = name.replace(/(~\d+)?$/, `~${i}`);
-      const sameOrigin = url.startsWith(location.origin);
-      const regUrl = sameOrigin ? url : `${location.origin}/proxy/${encodeURIComponent(url)}`;
-      await db.registerFileURL(name, regUrl, duckdb.DuckDBDataProtocol.HTTP, false);
+      await db.registerFileURL(name, url, duckdb.DuckDBDataProtocol.HTTP, false);
       registered.push(name);
       urlNames.set(url, name);
-      line(`registered ${name} -> ${url}${sameOrigin ? "" : " (via the local range relay)"} - lazy, range requests only`, "ok");
+      line(`registered ${name} -> ${url} (lazy, HTTP range requests)`, "ok");
     }
     sql = sql.split(`'${url}'`).join(`'${name}'`);
   }
@@ -203,8 +202,9 @@ Anything else runs as SQL. Useful starters:
   ATTACH 'file.h5ad' AS d (TYPE ANNDATA);  SHOW ALL TABLES;  SELECT * FROM d.obs LIMIT 5;
 Files must be registered first (drag & drop, Open, or Load sample) -
 registration is lazy: queries read only the byte ranges they touch.
-http(s):// and s3:// URLs can be queried directly (Range + CORS required):
-  SELECT * FROM anndata_scan_obs('https://host/file.h5ad') LIMIT 5;
+http(s):// and s3:// URLs can be queried directly (host must send CORS + Range),
+e.g. the public CellxGene Census bucket:
+  ATTACH 'https://cellxgene-census-public-us-west-2.s3.us-west-2.amazonaws.com/cell-census/2023-07-25/h5ads/0895c838-e550-48a3-a777-dbcd35d30272.h5ad' AS census (TYPE ANNDATA);
   SET s3_region='us-west-2'; SET s3_access_key_id='...'; SET s3_secret_access_key='...';
   SELECT * FROM anndata_scan_obs('s3://bucket/file.h5ad') LIMIT 5;`;
 
@@ -248,21 +248,16 @@ async function dot(cmd) {
       line(`register failed: ${e.message}`, "err");
       return;
     }
-    let ok = await run(`SELECT * FROM anndata_info('${name}')`);
-    if (!ok && !url.startsWith(location.origin)) {
-      // Direct cross-origin access is blocked unless the HOST sends CORS
-      // headers - many public data servers do not. Retry through serve.py's
-      // same-origin range relay: still lazy, ranges only, no CORS involved.
-      line("direct access failed (usually CORS) - retrying via the local range relay…", "dim");
-      try {
-        name = await tryRegister(`${location.origin}/proxy/${encodeURIComponent(url)}`);
-        ok = await run(`SELECT * FROM anndata_info('${name}')`);
-      } catch (e) {
-        line(`relay register failed: ${e.message}`, "err");
-      }
+    const ok = await run(`SELECT * FROM anndata_info('${name}')`);
+    if (ok) {
+      line(`query it, e.g.  SELECT * FROM anndata_scan_obs('${name}') LIMIT 5;`, "dim");
+    } else {
+      line("remote files are fetched by the BROWSER, so the host must send CORS headers", "dim");
+      line("(allow the Range request header) plus Range support and Content-Length.", "dim");
+      line("Known-good: the public CellxGene Census bucket. Hosts without CORS (e.g.", "dim");
+      line("datasets.cellxgene.cziscience.com) cannot be read by any in-browser tool -", "dim");
+      line("use the terminal extension, or download once and drag & drop.", "dim");
     }
-    if (ok) line(`query it, e.g.  SELECT * FROM anndata_scan_obs('${name}') LIMIT 5;`, "dim");
-    else line("remote files need Range support + Content-Length, and either CORS on the host or the local relay", "dim");
     return;
   }
   line(`unknown command: ${cmd} — .help`, "err");
