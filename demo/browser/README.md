@@ -13,14 +13,18 @@ Deployed from CI to GitHub Pages: **https://honicky.github.io/anndata-duckdb-ext
 sample file; once the wasm build is published to community-extensions the
 bundled artifact goes away and `INSTALL anndata` uses the official repo).
 
-Deploys happen automatically on every push to `main`. To **preview any branch
-pre-merge**, dispatch the pipeline on it (the Pages environment allows all
-branches; there is a single site, so the last deploy wins until the next
-`main` deploy restores it):
+Deploys: every push to `main` publishes the site root; every same-repo PR
+push (or a manual `gh workflow run MainDistributionPipeline.yml --ref
+my-branch`) publishes a **per-branch preview** at
 
-```bash
-gh workflow run MainDistributionPipeline.yml --ref my-branch
 ```
+https://honicky.github.io/anndata-duckdb-extension/preview/<branch-with-slashes-as-dashes>/
+```
+
+so the latest implementation is always viewable pre-merge without touching
+the root site. Previews are removed automatically when the PR closes
+(`CleanupPreview.yml`). The `gh-pages` branch is squashed to a single commit
+on every publish, so the bundled wasm artifacts never accumulate history.
 
 ## Run it locally
 

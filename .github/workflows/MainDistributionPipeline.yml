@@ -202,23 +202,33 @@ jobs:
             ${{ matrix.duckdb_arch }} v1.5.5 "$(cat ../../VERSION)" \
             ../data/test_small.h5ad
 
-  # Deploy the in-browser demo (demo/browser/) to GitHub Pages: the static
-  # page plus the freshly built + gated wasm artifacts at the extension-repo
-  # layout, plus the sample .h5ad. Serverless - the page loads duckdb-wasm
-  # from jsDelivr and fetches everything else same-origin from Pages.
+  # Deploy the in-browser demo (demo/browser/) to GitHub Pages.
+  #
+  # One site, many deployments: pushes to main publish the site ROOT; every
+  # same-repo PR push (and any manual dispatch from a branch) publishes a
+  # per-branch PREVIEW at /preview/<branch>/, so the latest implementation is
+  # always viewable pre-merge. CleanupPreview.yml removes a branch's preview
+  # folder when its PR closes. The gh-pages branch is kept at exactly ONE
+  # orphan commit per publish (no history), so the ~6 MB of wasm artifacts
+  # per deploy never accumulate in git history.
+  #
+  # PR runs build only wasm_eh (reduced CI), so the wasm_mvp artifact is
+  # optional - every modern browser selects the eh bundle anyway.
   # Once the wasm build is published to community-extensions, the bundled
   # artifact (and the custom_extension_repository line in index.html) can go.
   deploy-demo:
     name: Deploy demo to GitHub Pages
     needs: wasm-checks
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      contents: write
+    concurrency:
+      group: gh-pages-publish
+      cancel-in-progress: false
 
     steps:
       - uses: actions/checkout@v5
@@ -229,26 +239,57 @@ jobs:
           path: /tmp/wasm_eh
 
       - uses: actions/download-artifact@v7
+        continue-on-error: true
         with:
           name: anndata-v1.5.5-extension-wasm_mvp
           path: /tmp/wasm_mvp
 
-      - name: Assemble site
+      - name: Assemble site content
         run: |
-          mkdir -p site/extension/v1.5.5/wasm_eh site/extension/v1.5.5/wasm_mvp site/data
-          cp demo/browser/index.html site/
-          cp /tmp/wasm_eh/anndata.duckdb_extension.wasm site/extension/v1.5.5/wasm_eh/
-          cp /tmp/wasm_mvp/anndata.duckdb_extension.wasm site/extension/v1.5.5/wasm_mvp/
-          cp test/data/test_small.h5ad site/data/
+          mkdir -p content/extension/v1.5.5/wasm_eh content/data
+          cp demo/browser/index.html content/
+          cp /tmp/wasm_eh/anndata.duckdb_extension.wasm content/extension/v1.5.5/wasm_eh/
+          if [ -f /tmp/wasm_mvp/anndata.duckdb_extension.wasm ]; then
+            mkdir -p content/extension/v1.5.5/wasm_mvp
+            cp /tmp/wasm_mvp/anndata.duckdb_extension.wasm content/extension/v1.5.5/wasm_mvp/
+          fi
+          cp test/data/test_small.h5ad content/data/
+
+      - name: Publish to gh-pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # main -> site root; branches/PRs -> preview/<sanitized-branch>/
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BRANCH="${{ github.head_ref }}"
+          else
+            BRANCH="${{ github.ref_name }}"
+          fi
+          if [ "$BRANCH" = "main" ]; then DEST=""; else DEST="preview/$(echo "$BRANCH" | tr '/' '-')"; fi
+
+          git clone --depth 1 --branch gh-pages \
+            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" site \
+            || { mkdir site && git -C site init -b gh-pages; }
+
+          if [ -z "$DEST" ]; then
+            # replace the root, preserving all previews
+            find site -mindepth 1 -maxdepth 1 ! -name preview ! -name .git -exec rm -rf {} +
+            cp -R content/. site/
+          else
+            rm -rf "site/$DEST"
+            mkdir -p "site/$DEST"
+            cp -R content/. "site/$DEST/"
+          fi
           touch site/.nojekyll
-          ls -laR site
 
-      - uses: actions/upload-pages-artifact@v4
-        with:
-          path: site
-
-      - id: deployment
-        uses: actions/deploy-pages@v4
+          cd site
+          git checkout --orphan publish
+          git add -A
+          git -c user.name="github-actions[bot]" -c user.email="github-actions[bot]@users.noreply.github.com" \
+            commit -qm "deploy ${{ github.sha }} to ${DEST:-root}"
+          git push --force origin publish:gh-pages
+          echo "deployed to: https://honicky.github.io/anndata-duckdb-extension/${DEST:+$DEST/}" >> "$GITHUB_STEP_SUMMARY"
 
   # Auto-tag when version changes and deploy if tagged
   auto-tag:
