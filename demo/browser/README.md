@@ -13,6 +13,15 @@ Deployed from CI to GitHub Pages: **https://honicky.github.io/anndata-duckdb-ext
 sample file; once the wasm build is published to community-extensions the
 bundled artifact goes away and `INSTALL anndata` uses the official repo).
 
+Deploys happen automatically on every push to `main`. To **preview any branch
+pre-merge**, dispatch the pipeline on it (the Pages environment allows all
+branches; there is a single site, so the last deploy wins until the next
+`main` deploy restores it):
+
+```bash
+gh workflow run MainDistributionPipeline.yml --ref my-branch
+```
+
 ## Run it locally
 
 ```bash
