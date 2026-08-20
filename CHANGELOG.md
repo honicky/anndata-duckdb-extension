@@ -48,9 +48,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checks) and a Node load smoke test (`test/wasm/run_node.mjs` — real `INSTALL` + `LOAD` +
   `anndata_version()` + function registration under duckdb-wasm). Version pins are documented in
   `test/wasm/README.md` and must move in lockstep with `duckdb_version`.
-- The daily community-extensions descriptor monitor now also verifies the upstream descriptor
-  keeps `excluded_platforms: "wasm_mvp;wasm_eh;wasm_threads"` while wasm file access is
-  unimplemented, so the exclusion cannot silently disappear upstream.
 
 ### Changed
 - `wasm_mvp`/`wasm_eh` are built and gated again (previously fully excluded) and ship with the
