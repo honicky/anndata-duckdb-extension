@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.7] - 2026-08-20
+
 ### Added
 - **WASM file access via a ranged `duckdb::FileSystem` HDF5 driver** (`wasm_mvp`, `wasm_eh`):
   files reachable through duckdb-wasm - drag & drop (`registerFileHandle`/FileReaderSync),
