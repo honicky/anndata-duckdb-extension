@@ -51,11 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unimplemented, so the exclusion cannot silently disappear upstream.
 
 ### Changed
-- `wasm_mvp`/`wasm_eh` are built and gated again (previously fully excluded); they remain
-  **undistributed** — file access requires the `duckdb::FileSystem` VFD port
-  (`spec/wasm-support-spec.md`, Phase 2+). `wasm_threads` remains excluded: extension-ci-tools
-  builds extensions without `-fwasm-exceptions` against a COI main module built with it, and the
-  prebuilt HDF5 archives are non-pthread.
+- `wasm_mvp`/`wasm_eh` are built and gated again (previously fully excluded) and ship with the
+  next community-extensions release — file access works via the ranged `duckdb::FileSystem`
+  driver above. `wasm_threads` remains excluded: extension-ci-tools builds extensions without
+  `-fwasm-exceptions` against a COI main module built with it, and the prebuilt HDF5 archives
+  are non-pthread.
 
 ## [0.14.6] - 2026-08-19
 

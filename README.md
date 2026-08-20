@@ -223,12 +223,10 @@ SELECT * FROM anndata_scan_obs('s3://bucket/project/*.h5ad');
 
 - Read only
 - Windows HDF5 library limitations mean that we don't support threading on Windows. This limits the throughput of more complicated queries on Windows.
-- **WebAssembly (DuckDB-WASM) works but is not yet distributed** via the community-extensions
-  repository — try it at the [live demo](https://honicky.github.io/anndata-duckdb-extension/),
-  which bundles the wasm build. Local files and CORS-enabled remote URLs are read lazily
-  (ranged); hosts without CORS cannot be read by any in-browser tool. Full-matrix scans are
-  slower than native. Tracking issue:
-  [#24](https://github.com/honicky/anndata-duckdb-extension/issues/24).
+- **WebAssembly (DuckDB-WASM)**: local files and CORS-enabled remote URLs are read lazily
+  (ranged) — try the [live demo](https://honicky.github.io/anndata-duckdb-extension/). Hosts
+  without CORS cannot be read by any in-browser tool, and full-matrix scans are slower than
+  native. `wasm_threads` is not built (upstream toolchain limitation).
 
 ## Usage
 

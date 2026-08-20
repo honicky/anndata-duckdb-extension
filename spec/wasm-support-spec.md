@@ -560,8 +560,9 @@ falls into the local branch and dies with `File not found: s3://…`.
 > (`demo/browser/`). duckdb-wasm quirks worth recording: ranged HTTP requires
 > `filesystem: {reliableHeadRequests: true, forceFullHTTPReads: false}` at `db.open` (this
 > build otherwise force-downloads whole files), and its Node build cannot open `http://` paths
-> at all (no XHR in the worker). The artifacts remain undistributed pending the
-> un-exclusion criteria below; `wasm_threads` stays excluded (B4). One upstream limitation found:
+> at all (no XHR in the worker). The un-exclusion criteria below are MET (Tier 1 + the first
+> file-access assertions are green in CI), so `wasm_mvp`/`wasm_eh` ship with the next
+> community-extensions release; `wasm_threads` stays excluded (B4). One upstream limitation found:
 > on `wasm_mvp` a side-module C++ throw dies in the loader's invoke wrappers
 > (`_setThrew is not defined`) - happy paths are unaffected, error messages are eh-clean only.
 > Still open from Phase 0: the upstream community-extensions `excluded_platforms` PR (Monitor 3
