@@ -91,7 +91,11 @@ bool AnndataScanner::IsAnndataFile(const string &path) {
 	bool is_remote = (path.rfind("http://", 0) == 0 || path.rfind("https://", 0) == 0 || path.rfind("s3://", 0) == 0 ||
 	                  path.rfind("s3a://", 0) == 0 || path.rfind("gs://", 0) == 0);
 
-	// For local files, check if file exists and can be opened
+	// For local files, check if file exists and can be opened.
+	// Not on wasm: user files live in duckdb-wasm's WebFileSystem, which an
+	// ifstream (Emscripten MEMFS) cannot see - the open attempt below is the
+	// existence check there.
+#ifndef __EMSCRIPTEN__
 	if (!is_remote) {
 		std::ifstream file(path);
 		if (!file.good()) {
@@ -99,6 +103,7 @@ bool AnndataScanner::IsAnndataFile(const string &path) {
 		}
 		file.close();
 	}
+#endif
 
 	// Try to open as HDF5 and validate it's an AnnData file
 	// This allows files without .h5ad extension to work (e.g., UUID-named files)
@@ -110,15 +115,26 @@ bool AnndataScanner::IsAnndataFile(const string &path) {
 	} catch (const IOException &e) {
 		// IOException from H5FileCache::Open contains specific remote errors
 		// (HTTP 403, 404, timeout, etc.) - let these propagate for remote files
+#ifdef __EMSCRIPTEN__
+		// On wasm every open failure carries an actionable message (e.g. the
+		// registerFileBuffer hint from AnnDataOpenFileImage) - never swallow it
+		// into a misleading "not a valid AnnData file".
+		throw;
+#else
 		if (is_remote) {
 			throw;
 		}
 		return false;
+#endif
 	} catch (...) {
+#ifdef __EMSCRIPTEN__
+		throw;
+#else
 		if (is_remote) {
 			throw;
 		}
 		return false;
+#endif
 	}
 }
 
@@ -127,7 +143,11 @@ bool AnndataScanner::IsAnndataFile(ClientContext &context, const string &path) {
 	bool is_remote = (path.rfind("http://", 0) == 0 || path.rfind("https://", 0) == 0 || path.rfind("s3://", 0) == 0 ||
 	                  path.rfind("s3a://", 0) == 0 || path.rfind("gs://", 0) == 0);
 
-	// For local files, check if file exists and can be opened
+	// For local files, check if file exists and can be opened.
+	// Not on wasm: user files live in duckdb-wasm's WebFileSystem, which an
+	// ifstream (Emscripten MEMFS) cannot see - the open attempt below is the
+	// existence check there.
+#ifndef __EMSCRIPTEN__
 	if (!is_remote) {
 		std::ifstream file(path);
 		if (!file.good()) {
@@ -135,6 +155,7 @@ bool AnndataScanner::IsAnndataFile(ClientContext &context, const string &path) {
 		}
 		file.close();
 	}
+#endif
 
 	// Try to open as HDF5 and validate it's an AnnData file
 	// For S3 URLs, get credentials from DuckDB's secret manager or global settings
@@ -148,15 +169,25 @@ bool AnndataScanner::IsAnndataFile(ClientContext &context, const string &path) {
 		H5ReaderMultithreaded reader(path);
 		return reader.IsValidAnnData();
 	} catch (const IOException &e) {
+#ifdef __EMSCRIPTEN__
+		// See the path-only overload: wasm open failures carry actionable
+		// messages that must not be swallowed.
+		throw;
+#else
 		if (is_remote) {
 			throw;
 		}
 		return false;
+#endif
 	} catch (...) {
+#ifdef __EMSCRIPTEN__
+		throw;
+#else
 		if (is_remote) {
 			throw;
 		}
 		return false;
+#endif
 	}
 }
 

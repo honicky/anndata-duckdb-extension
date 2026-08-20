@@ -42,7 +42,6 @@ When you push a tag starting with `v`, the GitHub Actions workflow will:
    - Linux (x64, ARM64)
    - macOS (Intel, Apple Silicon)  
    - Windows (x64)
-   - WebAssembly
 
 2. **Test** the extension on each platform
 

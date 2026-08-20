@@ -7,6 +7,7 @@
 #include <cstring>
 #include <list>
 #include <fstream>
+#include "h5fd_duckdb_fs.hpp"
 #include <sys/stat.h>
 
 // Windows MSVC doesn't define S_ISDIR
@@ -130,6 +131,18 @@ public:
 		} else
 #endif
 		{
+#ifdef __EMSCRIPTEN__
+			// In DuckDB-WASM the POSIX filesystem (Emscripten MEMFS) never
+			// contains user files - they live in duckdb-wasm's WebFileSystem.
+			// Open through the duckdb::FileSystem-backed ranged VFD: only the
+			// byte ranges a query touches are read, so file size is bounded by
+			// the query's working set, not wasm32 memory. Remote URLs take the
+			// same path (DUCKDB_NO_REMOTE_VFD is defined on wasm) and become
+			// cached range requests via duckdb-wasm's HTTP/S3 client, CORS
+			// permitting.
+			file = AnndataOpenViaDuckdbFS(path);
+		}
+#else
 			// Local file - check existence and permissions before HDF5 operations
 			struct stat file_stat;
 			if (stat(path.c_str(), &file_stat) != 0) {
@@ -163,6 +176,7 @@ public:
 			file = H5Fopen(path.c_str(), H5F_ACC_RDONLY, fapl);
 			H5Pclose(fapl);
 		}
+#endif
 
 		if (file < 0) {
 			// Provide more specific error message based on context

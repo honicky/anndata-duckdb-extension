@@ -1,0 +1,10 @@
+# Symbols the wasm symbol check (scripts/wasm_symbol_check.py) may leave
+# unresolved in the side module even though neither the side module, the
+# duckdb-wasm main module, nor the emscripten loader exports them.
+#
+# Adding a line here is a DELIBERATE decision that must be justified in the
+# PR that adds it. An unresolved symbol aborts LOAD at dlopen time in
+# duckdb-wasm (eagerly, for GOT.mem globals), so entries here are only safe
+# if the symbol is genuinely never referenced at runtime.
+#
+# fnmatch patterns, one per line; '#' starts a comment. Currently empty.

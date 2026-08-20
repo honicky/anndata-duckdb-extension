@@ -2,6 +2,12 @@
 
 This extension provides DuckDB with the ability to read AnnData (`.h5ad`) files, which are the standard format for single-cell genomics data analysis.
 
+**🧬 Try it in your browser — no install:** **https://honicky.github.io/anndata-duckdb-extension/**
+— a SQL shell running DuckDB-WASM entirely client-side: drag & drop an `.h5ad` (any size — reads
+are lazy), or query CORS-enabled remote files like the public
+[CellxGene Census](https://chanzuckerberg.github.io/cellxgene-census/) bucket directly.
+Source and details in [`demo/browser/`](demo/browser/).
+
 ## Quick Start
 
 ### Install from the Community Extension Repository
@@ -211,12 +217,16 @@ SELECT * FROM anndata_scan_obs('s3://bucket/project/*.h5ad');
 - Configurable gene name columns for expression matrix
 - **Auto-detection of gene name columns** with manual override options
 - Efficient HDF5 data reading with proper memory management
-- Thread-safe operation on all platforms
+- Thread-safe operation on Linux and macOS
 
 ## Limitations
 
 - Read only
 - Windows HDF5 library limitations mean that we don't support threading on Windows. This limits the throughput of more complicated queries on Windows.
+- **WebAssembly (DuckDB-WASM)**: local files and CORS-enabled remote URLs are read lazily
+  (ranged) — try the [live demo](https://honicky.github.io/anndata-duckdb-extension/). Hosts
+  without CORS cannot be read by any in-browser tool, and full-matrix scans are slower than
+  native. `wasm_threads` is not built (upstream toolchain limitation).
 
 ## Usage
 

@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.7] - 2026-08-20
+
+### Added
+- **WASM file access via a ranged `duckdb::FileSystem` HDF5 driver** (`wasm_mvp`, `wasm_eh`):
+  files reachable through duckdb-wasm - drag & drop (`registerFileHandle`/FileReaderSync),
+  in-memory buffers (`registerFileBuffer`), and `http(s)://`/`s3://` URLs - can now be queried,
+  **lazily**. HDF5's default (POSIX) driver reads Emscripten MEMFS, which duckdb-wasm never
+  populates; the new driver (`src/vfd/h5fd_duckdb_fs.cpp`) maps HDF5's VFD callbacks onto
+  `duckdb::FileHandle` positional reads, so only the byte ranges a query touches are read - no
+  whole-file download, no wasm32 file-size ceiling, remote reads become HTTP range requests
+  (measured in Chrome: schema + a 150k-row aggregate on a 110 MB file = ~50 range requests,
+  ~12 MB transferred). Remote paths get a per-file 1 MiB-block LRU cache; unregistered paths
+  produce an actionable error naming `registerFileHandle`/`registerFileBuffer`. The CI load smoke
+  registers a real fixture and asserts scan results plus the `ATTACH (TYPE ANNDATA)` path end to
+  end. (An interim whole-file CORE-image bridge existed briefly within this release cycle and is
+  replaced by the driver.)
+- **In-browser demo** (`demo/browser/`): a terminal-style page that boots DuckDB-WASM from
+  jsDelivr (pinned in lockstep with `duckdb_version`), loads the locally built extension, and
+  queries `.h5ad` files dropped into the tab - entirely client-side. `python3 demo/browser/serve.py`
+  after `make wasm_eh`.
+
+### Fixed
+- **WASM artifacts are now loadable** (`wasm_mvp`, `wasm_eh`). The wasm side module is produced by
+  a `POST_BUILD emcc -sSIDE_MODULE=2` step that links only the archives named in
+  `duckdb_extension_load`'s `LINKED_LIBS` — `target_link_libraries()` is a no-op there — so HDF5
+  was never linked in and `LOAD anndata` died at `dlopen` with 63 unresolved `H5*` symbols
+  ([#24](https://github.com/honicky/anndata-duckdb-extension/issues/24)). `CMakeLists.txt` now sets
+  `DUCKDB_EXTENSION_ANNDATA_LINKED_LIBS` with all four required archives (`libhdf5.a`, `libsz.a`,
+  `libaec.a`, `libz.a` — HDF5's static filter table references szip unconditionally, and
+  `libhdf5.a` alone still leaves `inflate`/`compress2`/`SZ_*` unresolved). The artifact grows from
+  446 KB (broken) to ~3 MB (loadable). The libhdf5-wasm FetchContent download is now pinned by
+  `URL_HASH`.
+
+### Added
+- **CI gates for wasm** (`wasm-checks` job), closing the hole that let non-loadable artifacts ship
+  green for eleven months: a link-level symbol contract check (`scripts/wasm_symbol_check.py` —
+  pure-Python wasm parser proving `imports(side) − exports(side) − exports(main) − allowlist = ∅`
+  against the pinned `@duckdb/duckdb-wasm` main module, plus size floor/ceiling and metadata
+  checks) and a Node load smoke test (`test/wasm/run_node.mjs` — real `INSTALL` + `LOAD` +
+  `anndata_version()` + function registration under duckdb-wasm). Version pins are documented in
+  `test/wasm/README.md` and must move in lockstep with `duckdb_version`.
+
+### Changed
+- `wasm_mvp`/`wasm_eh` are built and gated again (previously fully excluded) and ship with the
+  next community-extensions release — file access works via the ranged `duckdb::FileSystem`
+  driver above. `wasm_threads` remains excluded: extension-ci-tools builds extensions without
+  `-fwasm-exceptions` against a COI main module built with it, and the prebuilt HDF5 archives
+  are non-pthread.
+
+## [0.14.6] - 2026-08-19
+
+### Changed
+- **WebAssembly builds are now excluded from CI and distribution** (`wasm_mvp`, `wasm_eh`,
+  `wasm_threads`). The published wasm artifacts could never be loaded: HDF5 is not linked into the
+  wasm side module, so `LOAD anndata` failed during `dlopen` with
+  `bad export type for 'H5T_NATIVE_INT32_g': undefined`. The wasm link step uses
+  `-sSIDE_MODULE=2`, which tolerates undefined symbols, so CI reported success while producing a
+  non-loadable 446 KB artifact containing 63 unresolved `H5*` imports. Excluding the platform means
+  users get a clear "not available" error instead of a cryptic load failure. See
+  [#24](https://github.com/honicky/anndata-duckdb-extension/issues/24); proper wasm support is
+  designed in `spec/wasm-support-spec.md`.
+
 ### Fixed
 - **CI: unbreak the `Build against duckdb/main` job.** All three `main-distribution` arches (`linux_amd64`, `linux_amd64_musl`, `linux_arm64`) started failing to compile once `duckdb/main` landed the new `duckdb::Identifier` type (`duckdb/common/identifier.hpp`) and rolled it out across the string-keyed APIs. `Identifier` is implicitly constructible from a *string literal* but **explicitly** from a runtime `string`, so every call site that handed DuckDB a `string` stopped compiling. Three distinct breakages, 31 errors total:
 
@@ -21,6 +83,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Verified locally with two full builds from the same tree: against `duckdb/main` (`f8e1c96a53`) and against the pinned stable `v1.5.5` (`d8cdaa33fd`). Both compile clean, and the extension suite passes on both with byte-identical per-file assertion counts across all 25 test files (20 cases; the 5 skips are the httpfs/S3-env-gated remote tests). `make format` and `make tidy-check` pass. No behavior change on the stable build — `compat::BindColumnNames` is exactly `vector<string>` there.
 
   Worth recording for next time: **`make format` does not currently check this extension's `src/` at all.** `extension-ci-tools` passes `T="--workdir $PWD --directories src test"` down to `make -C duckdb format-check`, but v1.5.5's recipe is `scripts/format.py --all --check` — `$(T)` is silently dropped, so format.py runs with DuckDB's own tree as its working directory. `duckdb/main`'s recipe appends `$(T)` and does honor it. The CI log for `duckdb-main-code-quality` shows the un-scoped form, so the gate is green today for both branches while 43 pre-existing violations sit in `src/` (42 in `anndata_scanner.cpp`, almost all the same missing space in `compat::SetChunkCardinality(output,count)`, plus one continuation indent in `anndata_storage.cpp`). Those are left alone here to keep this diff to the build fix, but they will surface the moment the scoping starts working. This change itself is format-neutral: measured against `origin/main` with the pinned clang-format 11.0.1, the violation count per touched file is unchanged.
+
+- Documentation accuracy: `README.md` no longer claims thread-safe operation on *all* platforms
+  (Windows is single-threaded) and now documents the WebAssembly gap; `RELEASE.md` no longer lists
+  WebAssembly as a built and tested platform.
 
 ## [0.14.5] - 2026-08-12
 
