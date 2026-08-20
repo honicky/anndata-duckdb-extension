@@ -1,0 +1,42 @@
+# Removes a branch's demo preview (gh-pages preview/<branch>/) when its PR
+# closes - merged or not. Counterpart of the deploy-demo job in
+# MainDistributionPipeline.yml, which publishes previews on PR pushes.
+name: Cleanup demo preview
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  cleanup:
+    # forks never get previews (deploy-demo skips them), so nothing to clean
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: gh-pages-publish
+      cancel-in-progress: false
+
+    steps:
+      - name: Remove preview folder
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          DEST="preview/$(echo "${{ github.head_ref }}" | tr '/' '-')"
+          git clone --depth 1 --branch gh-pages \
+            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" site \
+            || { echo "no gh-pages branch - nothing to clean"; exit 0; }
+          if [ ! -e "site/$DEST" ]; then
+            echo "no preview at $DEST - nothing to clean"
+            exit 0
+          fi
+          rm -rf "site/$DEST"
+          # drop the preview/ dir entirely if this was the last one
+          rmdir site/preview 2>/dev/null || true
+          cd site
+          git checkout --orphan publish
+          git add -A
+          git -c user.name="github-actions[bot]" -c user.email="github-actions[bot]@users.noreply.github.com" \
+            commit -qm "remove preview for ${{ github.head_ref }}"
+          git push --force origin publish:gh-pages

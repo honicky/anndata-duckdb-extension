@@ -609,6 +609,7 @@ jobs:
           UPSTREAM_VERSION=$(grep -m1 '^[[:space:]]*version:' /tmp/descriptor.yml | awk '{print $2}')
           UPSTREAM_REF=$(awk '/^repo:/{f=1; next} f && /^[^ ]/{f=0} f && /^[[:space:]]+ref:/{print $2; exit}' /tmp/descriptor.yml)
 
+
           # Get our latest tag.
           #
           # auto-tag creates ANNOTATED tags, so the tag name resolves to two

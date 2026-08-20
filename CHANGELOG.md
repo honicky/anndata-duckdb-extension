@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **WASM file access via a ranged `duckdb::FileSystem` HDF5 driver** (`wasm_mvp`, `wasm_eh`):
+  files reachable through duckdb-wasm - drag & drop (`registerFileHandle`/FileReaderSync),
+  in-memory buffers (`registerFileBuffer`), and `http(s)://`/`s3://` URLs - can now be queried,
+  **lazily**. HDF5's default (POSIX) driver reads Emscripten MEMFS, which duckdb-wasm never
+  populates; the new driver (`src/vfd/h5fd_duckdb_fs.cpp`) maps HDF5's VFD callbacks onto
+  `duckdb::FileHandle` positional reads, so only the byte ranges a query touches are read - no
+  whole-file download, no wasm32 file-size ceiling, remote reads become HTTP range requests
+  (measured in Chrome: schema + a 150k-row aggregate on a 110 MB file = ~50 range requests,
+  ~12 MB transferred). Remote paths get a per-file 1 MiB-block LRU cache; unregistered paths
+  produce an actionable error naming `registerFileHandle`/`registerFileBuffer`. The CI load smoke
+  registers a real fixture and asserts scan results plus the `ATTACH (TYPE ANNDATA)` path end to
+  end. (An interim whole-file CORE-image bridge existed briefly within this release cycle and is
+  replaced by the driver.)
+- **In-browser demo** (`demo/browser/`): a terminal-style page that boots DuckDB-WASM from
+  jsDelivr (pinned in lockstep with `duckdb_version`), loads the locally built extension, and
+  queries `.h5ad` files dropped into the tab - entirely client-side. `python3 demo/browser/serve.py`
+  after `make wasm_eh`.
+
+### Fixed
+- **WASM artifacts are now loadable** (`wasm_mvp`, `wasm_eh`). The wasm side module is produced by
+  a `POST_BUILD emcc -sSIDE_MODULE=2` step that links only the archives named in
+  `duckdb_extension_load`'s `LINKED_LIBS` — `target_link_libraries()` is a no-op there — so HDF5
+  was never linked in and `LOAD anndata` died at `dlopen` with 63 unresolved `H5*` symbols
+  ([#24](https://github.com/honicky/anndata-duckdb-extension/issues/24)). `CMakeLists.txt` now sets
+  `DUCKDB_EXTENSION_ANNDATA_LINKED_LIBS` with all four required archives (`libhdf5.a`, `libsz.a`,
+  `libaec.a`, `libz.a` — HDF5's static filter table references szip unconditionally, and
+  `libhdf5.a` alone still leaves `inflate`/`compress2`/`SZ_*` unresolved). The artifact grows from
+  446 KB (broken) to ~3 MB (loadable). The libhdf5-wasm FetchContent download is now pinned by
+  `URL_HASH`.
+
+### Added
+- **CI gates for wasm** (`wasm-checks` job), closing the hole that let non-loadable artifacts ship
+  green for eleven months: a link-level symbol contract check (`scripts/wasm_symbol_check.py` —
+  pure-Python wasm parser proving `imports(side) − exports(side) − exports(main) − allowlist = ∅`
+  against the pinned `@duckdb/duckdb-wasm` main module, plus size floor/ceiling and metadata
+  checks) and a Node load smoke test (`test/wasm/run_node.mjs` — real `INSTALL` + `LOAD` +
+  `anndata_version()` + function registration under duckdb-wasm). Version pins are documented in
+  `test/wasm/README.md` and must move in lockstep with `duckdb_version`.
+- The daily community-extensions descriptor monitor now also verifies the upstream descriptor
+  keeps `excluded_platforms: "wasm_mvp;wasm_eh;wasm_threads"` while wasm file access is
+  unimplemented, so the exclusion cannot silently disappear upstream.
+
+### Changed
+- `wasm_mvp`/`wasm_eh` are built and gated again (previously fully excluded) and ship with the
+  next community-extensions release — file access works via the ranged `duckdb::FileSystem`
+  driver above. `wasm_threads` remains excluded: extension-ci-tools builds extensions without
+  `-fwasm-exceptions` against a COI main module built with it, and the prebuilt HDF5 archives
+  are non-pthread.
+
 ## [0.14.6] - 2026-08-19
 
 ### Changed

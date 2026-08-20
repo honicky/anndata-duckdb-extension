@@ -548,6 +548,27 @@ falls into the local branch and dies with `File not found: s3://…`.
 
 ## Implementation Plan
 
+> **Status (2026-08-19):** Phase 0 landed in PR #34 (exclusion, deploy-matrix trim, docs).
+> Phase 1 landed with the `LINKED_LIBS` fix plus the Tier 0 symbol gate and Tier 1 Node load
+> smoke in CI (`wasm-checks` job); `wasm_mvp`/`wasm_eh` build and load (~3.0 MB artifacts).
+> Phase 2 landed beyond the minimal path: the **ranged `duckdb::FileSystem` VFD**
+> (`src/vfd/h5fd_duckdb_fs.cpp`, wasm-only scope for now - the native swap still waits on the
+> performance gates) makes every duckdb-wasm byte source queryable lazily: drag & drop files
+> (FileReaderSync), buffers, and HTTP/S3 range requests (measured in Chrome: 110 MB file,
+> schema + 150k-row aggregate = ~50 range requests / ~12 MB). Scan functions and `ATTACH`
+> verified on both arches; real-fixture phase in the CI load smoke; in-browser demo
+> (`demo/browser/`). duckdb-wasm quirks worth recording: ranged HTTP requires
+> `filesystem: {reliableHeadRequests: true, forceFullHTTPReads: false}` at `db.open` (this
+> build otherwise force-downloads whole files), and its Node build cannot open `http://` paths
+> at all (no XHR in the worker). The un-exclusion criteria below are MET (Tier 1 + the first
+> file-access assertions are green in CI), so `wasm_mvp`/`wasm_eh` ship with the next
+> community-extensions release; `wasm_threads` stays excluded (B4). One upstream limitation found:
+> on `wasm_mvp` a side-module C++ throw dies in the loader's invoke wrappers
+> (`_setThrew is not defined`) - happy paths are unaffected, error messages are eh-clean only.
+> Still open from Phase 0: the upstream community-extensions `excluded_platforms` PR (Monitor 3
+> nags until it lands) and retraction of historical wasm objects from the S3 channel.
+
+
 ### Phase 0 — Stop shipping a broken artifact (about a week)
 
 1. Land `scripts/wasm_symbol_check.py` (Tier 0 below) **first, red**, against the current artifact,
