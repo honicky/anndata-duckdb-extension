@@ -47,6 +47,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   multi-file scan, the harmonized column is `VARCHAR` and the values are spelled `True`/`False`
   like plain boolean columns. Plain (non-nullable) boolean datasets keep their existing `VARCHAR`
   `True`/`False` representation for backward compatibility.
+- **The wasm demo preview URL is posted on every pull request.** The `deploy-demo` job already
+  published each same-repo PR push to
+  `https://honicky.github.io/anndata-duckdb-extension/preview/<branch>/`, but the only trace was a
+  line in the job summary. It now keeps a sticky PR comment up to date with the link and the PR head
+  commit it was built from (also used for the gh-pages deploy commit and the job summary), so a PR
+  can be exercised in the browser without downloading artifacts.
+
 ### Fixed
 - **`anndata_scan_obs` / `anndata_scan_var` crashed on a pattern that matched exactly one file** with
   `INTERNAL Error: Attempted to access index 0 within vector of size 0` (for example

@@ -212,6 +212,11 @@ jobs:
   # orphan commit per publish (no history), so the ~6 MB of wasm artifacts
   # per deploy never accumulate in git history.
   #
+  # Where the URL surfaces: on a PR it is posted as a STICKY PR comment (one
+  # comment per PR, edited in place on every push, found again via a hidden
+  # HTML marker) - that is where reviewers look. It is also written to the
+  # job summary on every deploy, PR or not.
+  #
   # PR runs build only wasm_eh (reduced CI), so the wasm_mvp artifact is
   # optional - every modern browser selects the eh bundle anyway.
   # Once the wasm build is published to community-extensions, the bundled
@@ -225,7 +230,8 @@ jobs:
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write        # push to gh-pages
+      pull-requests: write   # sticky preview-URL comment on the PR
     concurrency:
       group: gh-pages-publish
       cancel-in-progress: false
@@ -256,8 +262,14 @@ jobs:
           cp test/data/test_small.h5ad content/data/
 
       - name: Publish to gh-pages
+        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
+          # The SHA stamped on the deploy commit, the summary and the PR
+          # comment. On pull_request, github.sha is the synthetic merge commit
+          # (refs/pull/N/merge) that nobody can find in the PR; the PR head is
+          # what reviewers recognise and what the checkout is derived from.
+          DEPLOY_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           # main -> site root; branches/PRs -> preview/<sanitized-branch>/
@@ -267,6 +279,20 @@ jobs:
             BRANCH="${{ github.ref_name }}"
           fi
           if [ "$BRANCH" = "main" ]; then DEST=""; else DEST="preview/$(echo "$BRANCH" | tr '/' '-')"; fi
+
+          # This job runs 15-20 minutes after the push. If the PR was merged or closed in the
+          # meantime, CleanupPreview.yml has already removed the preview folder and we must not
+          # recreate it (nothing would ever remove it again). The check happens inside the
+          # gh-pages-publish concurrency group, so a cleanup cannot slip in between it and the push.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            STATE="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}" --jq .state)"
+            if [ "$STATE" != "open" ]; then
+              echo "PR #${{ github.event.pull_request.number }} is ${STATE}; not publishing a preview"
+              echo "skipped=true" >> "$GITHUB_OUTPUT"
+              echo "Demo preview skipped: PR is ${STATE}" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          fi
 
           git clone --depth 1 --branch gh-pages \
             "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" site \
@@ -287,9 +313,62 @@ jobs:
           git checkout --orphan publish
           git add -A
           git -c user.name="github-actions[bot]" -c user.email="github-actions[bot]@users.noreply.github.com" \
-            commit -qm "deploy ${{ github.sha }} to ${DEST:-root}"
+            commit -qm "deploy ${DEPLOY_SHA} to ${DEST:-root}"
           git push --force origin publish:gh-pages
-          echo "deployed to: https://honicky.github.io/anndata-duckdb-extension/${DEST:+$DEST/}" >> "$GITHUB_STEP_SUMMARY"
+
+          URL="https://honicky.github.io/anndata-duckdb-extension/${DEST:+$DEST/}"
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+          echo "sha=${DEPLOY_SHA}" >> "$GITHUB_OUTPUT"
+          echo "skipped=false" >> "$GITHUB_OUTPUT"
+          echo "Demo preview: [${URL}](${URL}) (commit ${DEPLOY_SHA:0:7})" >> "$GITHUB_STEP_SUMMARY"
+
+      # Sticky comment: exactly one per PR, edited in place on every push so
+      # the thread does not fill with stale URLs. The comment is found again
+      # by the hidden HTML marker in its body (author github-actions[bot]).
+      # The body goes through a file (-F body=@file) so no quoting of SQL or
+      # markdown is needed on the command line.
+      - name: Comment preview URL on PR
+        if: github.event_name == 'pull_request' && steps.publish.outputs.skipped == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.base_ref }}
+          PREVIEW_URL: ${{ steps.publish.outputs.url }}
+        run: |
+          set -euo pipefail
+          MARKER='<!-- anndata-demo-preview -->'
+
+          BODY_FILE="$(mktemp)"
+          cat > "$BODY_FILE" <<EOF
+          ${MARKER}
+          ### Wasm demo preview
+
+          [${PREVIEW_URL}](${PREVIEW_URL})
+
+          Built from PR head \`${HEAD_SHA:0:7}\` (\`${HEAD_SHA}\`) merged into \`${BASE_REF}\` (the CI merge ref) at the time of this run.
+
+          GitHub Pages can take a minute to serve a fresh deploy - if the page looks stale, hard-reload (Ctrl/Cmd+Shift+R).
+
+          Try it: open the link, click **Load sample .h5ad**, run \`SELECT * FROM anndata_info('test_small.h5ad');\` - or drop your own \`.h5ad\` onto the page.
+
+          This preview is removed automatically when the PR closes (\`CleanupPreview.yml\`).
+          EOF
+
+          # Find the existing sticky comment, if any. gh applies --jq per page
+          # under --paginate, so slurp the pages in jq and take the first hit.
+          EXISTING_ID="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments?per_page=100" --paginate \
+            | jq -rs --arg marker "$MARKER" \
+                '[ .[][] | select(.user.login == "github-actions[bot]" and (.body | contains($marker))) | .id ] | first // empty')"
+
+          if [ -n "$EXISTING_ID" ]; then
+            gh api --silent -X PATCH "repos/${REPO}/issues/comments/${EXISTING_ID}" -F body=@"$BODY_FILE"
+            echo "updated sticky comment ${EXISTING_ID} on PR #${PR_NUMBER}: ${PREVIEW_URL}"
+          else
+            gh api --silent -X POST "repos/${REPO}/issues/${PR_NUMBER}/comments" -F body=@"$BODY_FILE"
+            echo "posted sticky comment on PR #${PR_NUMBER}: ${PREVIEW_URL}"
+          fi
 
   # Auto-tag when version changes and deploy if tagged
   auto-tag:
