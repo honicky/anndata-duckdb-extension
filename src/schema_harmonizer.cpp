@@ -49,17 +49,9 @@ HarmonizedSchema SchemaHarmonizer::ComputeObsVarSchema(const vector<FileSchema> 
 		return result;
 	}
 
-	if (file_schemas.size() == 1) {
-		// Single file - just copy the schema
-		result.columns = file_schemas[0].columns;
-		result.file_column_mappings.emplace_back();
-		for (idx_t i = 0; i < result.columns.size(); i++) {
-			result.file_column_mappings[0].push_back(static_cast<int>(i));
-		}
-		result.file_row_counts.push_back(file_schemas[0].n_obs > 0 ? file_schemas[0].n_obs : file_schemas[0].n_var);
-		result.total_row_count = result.file_row_counts[0];
-		return result;
-	}
+	// A single file goes through the general path below: the intersection or union of one schema is
+	// that schema, and it fills file_original_names, which ObsScan/VarScan need. (An earlier shortcut
+	// skipped that field and crashed every pattern that matched exactly one file.)
 
 	// Build column name -> info map for each file
 	vector<unordered_map<string, pair<idx_t, AnndataColumnInfo>>> file_column_maps;

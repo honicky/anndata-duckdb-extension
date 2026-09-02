@@ -31,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SELECT SUM(CAST(value AS BIGINT)) FROM anndata_info('samples/*.h5ad') WHERE property = 'n_obs';`.
   `ATTACH` with a glob pattern remains unsupported.
 
+### Fixed
+- **`anndata_scan_obs` / `anndata_scan_var` crashed on a pattern that matched exactly one file** with
+  `INTERNAL Error: Attempted to access index 0 within vector of size 0` (for example
+  `anndata_scan_obs('data/sample[1].h5ad')`), and an INTERNAL error invalidates the whole DuckDB
+  connection. `SchemaHarmonizer::ComputeObsVarSchema` had a single-file shortcut that copied the
+  columns but never filled the per-file original HDF5 names that the multi-file obs/var scan reads
+  for every column. The shortcut is gone; one file now takes the general intersection/union path,
+  which yields the same schema and fills every mapping. X, layers, obsm/varm, obsp/varp, uns and info
+  were not affected.
+
 ## [0.14.7] - 2026-08-20
 
 ### Added
