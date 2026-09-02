@@ -333,6 +333,25 @@ SELECT COUNT(DISTINCT _file_name) FROM anndata_scan_obsm('test/data/wildcard_sam
 ----
 1
 
+# obsp/varp used to fall back to the single-file schema (no _file_name) for a one-file pattern
+query II
+SELECT COUNT(DISTINCT _file_name), COUNT(*) > 0 FROM anndata_scan_obsp('test/data/wildcard_sample[1].h5ad', 'distances');
+----
+1	true
+
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM anndata_scan_varp('test/data/wildcard_sample[1].h5ad', 'correlations')) LIMIT 1;
+----
+_file_name
+
+# and the pattern result equals the literal result apart from _file_name
+query I
+SELECT COUNT(*) FROM (
+    SELECT * EXCLUDE (_file_name) FROM anndata_scan_obsp('test/data/wildcard_sample[1].h5ad', 'distances')
+    EXCEPT ALL SELECT * FROM anndata_scan_obsp('test/data/wildcard_sample1.h5ad', 'distances'));
+----
+0
+
 # =============================================================================
 # Test 16: Empty pattern should error
 # =============================================================================

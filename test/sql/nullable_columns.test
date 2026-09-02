@@ -1,0 +1,324 @@
+# name: test/sql/nullable_columns.test
+# description: Nullable (masked) integer/boolean obs/var columns, and user columns named obs_idx / var_idx
+# group: [sql]
+
+require anndata
+
+# Fixture (test/python/create_test_nullable.py): pandas Int64 / Int32 / boolean columns with missing values are
+# written by anndata as a GROUP (encoding-type nullable-integer / nullable-boolean) holding "values" + "mask".
+#   obs: n_int Int64 [10, NA, 30, NA, 50, 60]; flag boolean [T, NA, F, T, NA, F]; small_int Int32 [1, 2, NA, 4, 5, 6];
+#        score float64 [1.5, nan, 2.5, 3.5, nan, 4.5]; cell_type categorical; label str; obs_idx int64 [100..105]
+#        u8 UInt8 [200, NA, 255, 0, 1, 2]; u16 UInt16 [60000, 65535, NA, 1, 2, 3]; u32 UInt32 [4000000000, NA, 4294967295, 1, 2, 3]
+#        u64 UInt64 [2^64-1, NA, 5, 1, 2, 3]; nstr string [p, NA, q, p, q, r]; nstr_uniq string [s0, NA, s2, s3, s4, s5]
+#        (both string columns are written as categoricals whose categories are a nullable-string-array group)
+#   var: n_cells_expr Int64 [5, NA, 3]; is_hv boolean [T, F, NA]; gene_name str; var_idx int64 [7, 8, 9]
+#   test_nullable_plain.h5ad: the same obs column names with plain dtypes (n_int int64 1..6, flag numpy bool,
+#        small_int int32 7..12, u8 uint8 200..205, score, cell_type, label, obs_idx 900..905) for harmonization tests
+
+# =============================================================================
+# Test 1: nullable columns bind with their value type, masked entries are NULL
+# =============================================================================
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM anndata_scan_obs('test/data/test_nullable.h5ad'));
+----
+obs_idx	BIGINT
+_index	VARCHAR
+cell_type	VARCHAR
+flag	BOOLEAN
+label	VARCHAR
+n_int	BIGINT
+nstr	VARCHAR
+nstr_uniq	VARCHAR
+obs_idx_	BIGINT
+score	DOUBLE
+small_int	INTEGER
+u16	USMALLINT
+u32	UINTEGER
+u64	UBIGINT
+u8	UTINYINT
+
+query IIIII
+SELECT obs_idx, n_int, flag, small_int, cell_type FROM anndata_scan_obs('test/data/test_nullable.h5ad') ORDER BY obs_idx;
+----
+0	10	true	1	A
+1	NULL	NULL	2	B
+2	30	false	NULL	A
+3	NULL	true	4	B
+4	50	NULL	5	A
+5	60	false	6	B
+
+# NULL semantics: COUNT skips masked entries, aggregates ignore them, IS NULL finds them
+query IIIII
+SELECT COUNT(*), COUNT(n_int), COUNT(flag), SUM(n_int), SUM(small_int) FROM anndata_scan_obs('test/data/test_nullable.h5ad');
+----
+6	4	4	150	18
+
+query I
+SELECT obs_idx FROM anndata_scan_obs('test/data/test_nullable.h5ad') WHERE n_int IS NULL ORDER BY obs_idx;
+----
+1
+3
+
+# BOOLEAN semantics: a bare boolean column works as a predicate and NULL is neither true nor false
+query I
+SELECT obs_idx FROM anndata_scan_obs('test/data/test_nullable.h5ad') WHERE flag ORDER BY obs_idx;
+----
+0
+3
+
+query I
+SELECT obs_idx FROM anndata_scan_obs('test/data/test_nullable.h5ad') WHERE NOT flag ORDER BY obs_idx;
+----
+2
+5
+
+# A plain float column with NaN is not masked: NaN stays NaN, not NULL
+query II
+SELECT COUNT(score), COUNT(*) FILTER (WHERE isnan(score)) FROM anndata_scan_obs('test/data/test_nullable.h5ad');
+----
+6	2
+
+# Unsigned nullable integers keep their full range (a signed read would have saturated 200 to 127)
+query IIIII
+SELECT obs_idx, u8, u16, u32, u64 FROM anndata_scan_obs('test/data/test_nullable.h5ad') ORDER BY obs_idx;
+----
+0	200	60000	4000000000	18446744073709551615
+1	NULL	65535	NULL	NULL
+2	255	NULL	4294967295	5
+3	0	1	1	1
+4	1	2	2	2
+5	2	3	3	3
+
+# pandas string columns with missing values (categorical with nullable-string-array categories)
+query III
+SELECT obs_idx, nstr, nstr_uniq FROM anndata_scan_obs('test/data/test_nullable.h5ad') ORDER BY obs_idx;
+----
+0	p	s0
+1	NULL	NULL
+2	q	s2
+3	p	s3
+4	q	s4
+5	r	s5
+
+query II
+SELECT nstr, COUNT(*) FROM anndata_scan_obs('test/data/test_nullable.h5ad') GROUP BY nstr ORDER BY nstr NULLS FIRST;
+----
+NULL	1
+p	2
+q	2
+r	1
+
+# Plain string and categorical columns next to nullable ones are unaffected
+query II
+SELECT label, cell_type FROM anndata_scan_obs('test/data/test_nullable.h5ad') WHERE obs_idx = 4;
+----
+c4	A
+
+# =============================================================================
+# Test 2: nullable var columns
+# =============================================================================
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM anndata_scan_var('test/data/test_nullable.h5ad'));
+----
+var_idx	BIGINT
+_index	VARCHAR
+gene_name	VARCHAR
+is_hv	BOOLEAN
+n_cells_expr	BIGINT
+sym	VARCHAR
+var_idx_	BIGINT
+
+query IIII
+SELECT var_idx, gene_name, n_cells_expr, is_hv FROM anndata_scan_var('test/data/test_nullable.h5ad') ORDER BY var_idx;
+----
+0	g0	5	true
+1	g1	NULL	false
+2	g2	3	NULL
+
+# =============================================================================
+# Test 3: a user column literally named obs_idx / var_idx keeps its own values
+# =============================================================================
+
+# The synthetic index stays obs_idx (0..n-1); the user's column is exposed as obs_idx_ with its stored values
+query II
+SELECT obs_idx, obs_idx_ FROM anndata_scan_obs('test/data/test_nullable.h5ad') ORDER BY obs_idx;
+----
+0	100
+1	101
+2	102
+3	103
+4	104
+5	105
+
+query II
+SELECT var_idx, var_idx_ FROM anndata_scan_var('test/data/test_nullable.h5ad') ORDER BY var_idx;
+----
+0	7
+1	8
+2	9
+
+query I
+SELECT SUM(obs_idx_) - SUM(obs_idx) FROM anndata_scan_obs('test/data/test_nullable.h5ad');
+----
+600
+
+# =============================================================================
+# Test 4: the same through ATTACH views
+# =============================================================================
+
+statement ok
+ATTACH 'test/data/test_nullable.h5ad' AS nb (TYPE ANNDATA);
+
+query III
+SELECT n_int, flag, obs_idx_ FROM nb.obs WHERE obs_idx = 1;
+----
+NULL	NULL	101
+
+query II
+SELECT n_cells_expr, var_idx_ FROM nb.var WHERE var_idx = 1;
+----
+NULL	8
+
+query I
+SELECT COUNT(*) FROM nb.obs WHERE small_int IS NULL;
+----
+1
+
+statement ok
+DETACH nb;
+
+# =============================================================================
+# Test 5: the same through a glob pattern (multi-file mode)
+# =============================================================================
+
+query IIII
+SELECT _file_name, obs_idx, n_int, flag FROM anndata_scan_obs('test/data/test_nullabl?.h5ad') WHERE obs_idx IN (1, 3) ORDER BY obs_idx;
+----
+test_nullable.h5ad	1	NULL	NULL
+test_nullable.h5ad	3	NULL	true
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM anndata_scan_var('test/data/test_nullabl?.h5ad'))
+WHERE column_name IN ('is_hv', 'n_cells_expr', 'var_idx_') ORDER BY column_name;
+----
+is_hv	BOOLEAN
+n_cells_expr	BIGINT
+var_idx_	BIGINT
+
+# =============================================================================
+# Test 6: harmonization with a plain-typed twin file (test_nullable_plain.h5ad)
+# =============================================================================
+
+# Same-typed integers keep their type; a nullable boolean meeting a plain (VARCHAR 'True'/'False') boolean
+# becomes VARCHAR with the same spelling; a plain uint8 column is UTINYINT too
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM anndata_scan_obs('test/data/test_nullable*.h5ad'))
+WHERE column_name IN ('n_int', 'flag', 'small_int', 'u8', 'score', 'obs_idx_') ORDER BY column_name;
+----
+flag	VARCHAR
+n_int	BIGINT
+obs_idx_	BIGINT
+score	DOUBLE
+small_int	INTEGER
+u8	UTINYINT
+
+query IIIIII
+SELECT _file_name, obs_idx, n_int, flag, small_int, u8 FROM anndata_scan_obs('test/data/test_nullable*.h5ad')
+WHERE obs_idx IN (0, 1) ORDER BY _file_name, obs_idx;
+----
+test_nullable.h5ad	0	10	True	1	200
+test_nullable.h5ad	1	NULL	NULL	2	NULL
+test_nullable_plain.h5ad	0	1	True	7	200
+test_nullable_plain.h5ad	1	2	False	8	201
+
+query II
+SELECT flag, COUNT(*) FROM anndata_scan_obs('test/data/test_nullable*.h5ad') GROUP BY flag ORDER BY flag NULLS FIRST;
+----
+NULL	2
+False	5
+True	5
+
+# Union mode adds the columns only one file has, NULL-filled for the other
+query III
+SELECT _file_name, COUNT(*), COUNT(u64)
+FROM anndata_scan_obs('test/data/test_nullable*.h5ad', schema_mode := 'union')
+GROUP BY _file_name ORDER BY _file_name;
+----
+test_nullable.h5ad	6	5
+test_nullable_plain.h5ad	6	0
+
+# The plain twin on its own: an unsigned column reads its true values
+query II
+SELECT MIN(u8), MAX(u8) FROM anndata_scan_obs('test/data/test_nullable_plain.h5ad');
+----
+200	205
+
+# =============================================================================
+# Test 7: a malformed group must not hide the columns after it or fail the scan
+# =============================================================================
+
+# test_malformed_group.h5ad: m_broken claims nullable-integer but has no values dataset
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM anndata_scan_obs('test/data/test_malformed_group.h5ad'));
+----
+obs_idx	BIGINT
+_index	VARCHAR
+a_ok	BIGINT
+m_broken	VARCHAR
+zz_last	VARCHAR
+
+query IIII
+SELECT obs_idx, a_ok, m_broken, zz_last FROM anndata_scan_obs('test/data/test_malformed_group.h5ad') WHERE obs_idx < 2 ORDER BY obs_idx;
+----
+0	0	NULL	c0
+1	1	NULL	c1
+
+# =============================================================================
+# Test 8: integer promotion across three files keeps the widest type
+# =============================================================================
+
+# nullable UInt64 (UBIGINT) meets int64 (BIGINT) -> HUGEINT, and stays HUGEINT when a uint8 file joins
+query I
+SELECT column_type FROM (DESCRIBE SELECT * FROM anndata_scan_obs('test/data/test_nullable*.h5ad', schema_mode := 'union'))
+WHERE column_name = 'u64';
+----
+UBIGINT
+
+query I
+SELECT SUM(u8) FROM anndata_scan_obs('test/data/test_nullable*.h5ad');
+----
+1673
+
+# =============================================================================
+# Test 9: unsigned values elsewhere: sparse layer data, uns entries, X column names from a
+#         nullable-string var column
+# =============================================================================
+
+# A uint32 CSR layer binds UINTEGER and keeps values above 2^31
+query I
+SELECT column_type FROM (DESCRIBE SELECT * FROM anndata_scan_layers('test/data/test_nullable.h5ad', 'counts_u32')) WHERE column_name = 'g1';
+----
+UINTEGER
+
+query IIII
+SELECT obs_idx, g0, g1, g2 FROM anndata_scan_layers('test/data/test_nullable.h5ad', 'counts_u32') WHERE obs_idx < 3 ORDER BY obs_idx;
+----
+0	0	4000000000	4294967295
+1	0	0	3
+2	2147483648	0	0
+
+# uns unsigned entries are labelled and read as unsigned
+query III
+SELECT key, dtype, coalesce(value.scalar, CAST(value.arr AS VARCHAR)) FROM anndata_scan_uns('test/data/test_nullable.h5ad')
+WHERE key IN ('big_u64', 'u64_arr') ORDER BY key;
+----
+big_u64	uint64	18446744073709551615
+u64_arr	uint64	[18446744073709551615, 5]
+
+# X column names taken from a nullable-string var column: the missing name falls back to var_<i>
+query IIII
+SELECT obs_idx, S0, var_1, S2 FROM anndata_scan_x('test/data/test_nullable.h5ad', 'sym') WHERE obs_idx = 1;
+----
+1	3	4	5

@@ -221,6 +221,7 @@ SELECT * FROM anndata_scan_obs('s3://bucket/project/*.h5ad');
 - Query pairwise matrices from `.obsp` and `.varp`
 - Query alternative expression matrices from `.layers`
 - Query unstructured metadata from `.uns`
+- Nullable integer and boolean columns (pandas `Int64`, `boolean`, ...) with SQL `NULL` for missing values
 - Configurable gene name columns for expression matrix
 - **Auto-detection of gene name columns** with manual override options
 - Efficient HDF5 data reading with proper memory management
