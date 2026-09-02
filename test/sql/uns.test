@@ -40,6 +40,12 @@ pca/params/n_comps	50
 pca/params/random_state	42
 pca/params/use_highly_variable	true
 
+# Test that nested array values are read (key contains '/')
+query II
+SELECT shape, len(value.arr) FROM anndata_scan_uns('test/data/test_uns.h5ad') WHERE key = 'pca/variance';
+----
+(50)	50
+
 # Test array shapes are correctly displayed
 query I
 SELECT shape FROM anndata_scan_uns('test/data/test_uns.h5ad') WHERE key = 'batch_effects';

@@ -47,6 +47,7 @@ anndata_scan_obsp(file_pattern, matrix_name)  -- Special handling required
 anndata_scan_varp(file_pattern, matrix_name)  -- Special handling required
 anndata_scan_layers(file_pattern, layer_name, [var_name_column], schema_mode := 'intersection')
 anndata_scan_uns(file_pattern)
+anndata_info(file_pattern, [var_name_column, var_id_column])
 ```
 
 ### Output Schema
@@ -221,6 +222,62 @@ JOIN anndata_scan_obs('samples/*.h5ad') o2
 Error: Matrix 'connectivities' not found in file 'sample_c.h5ad'
 Files matched: sample_a.h5ad, sample_b.h5ad, sample_c.h5ad
 Hint: All files must contain the obsp matrix when using wildcards
+```
+
+## Unstructured Data and File Info (uns/info): File-Scoped Rows
+
+### The Problem
+
+`anndata_scan_uns` and `anndata_info` return key/value style rows rather than a per-cell or per-gene table:
+- uns keys are arbitrary and file-specific - there is no meaningful intersection or union of `pca/params/n_comps` across files
+- info properties are a fixed list per file (`file_path`, `n_obs`, `n_vars`, `x_shape`, ...) whose values differ by file
+
+### Solution: File-Scoped Rows Only
+
+Both functions treat each matched file independently, exactly like obsp/varp: every file's rows are concatenated in sorted file order, a `_file_name` column is prepended, and there is no `schema_mode` parameter.
+
+```sql
+-- Each file's uns entries returned separately, distinguished by _file_name
+SELECT _file_name, key, value.scalar
+FROM anndata_scan_uns('samples/*.h5ad')
+WHERE key = 'pca/params/n_comps';
+-- Returns:
+-- _file_name    | key                | scalar
+-- sample_a.h5ad | pca/params/n_comps | 50
+-- sample_b.h5ad | pca/params/n_comps | 30
+```
+
+```sql
+-- Each file's complete property list, distinguished by _file_name
+SELECT _file_name, property, value
+FROM anndata_info('samples/*.h5ad')
+WHERE property IN ('n_obs', 'n_vars');
+-- Returns:
+-- _file_name    | property | value
+-- sample_a.h5ad | n_obs    | 2638
+-- sample_a.h5ad | n_vars   | 1838
+-- sample_b.h5ad | n_obs    | 3120
+-- sample_b.h5ad | n_vars   | 1838
+
+-- Total cells across all matched files
+SELECT SUM(CAST(value AS BIGINT)) AS total_obs
+FROM anndata_info('samples/*.h5ad')
+WHERE property = 'n_obs';
+```
+
+### Behavior Specification
+
+1. **No schema_mode parameter** for uns/info - keys and properties are not harmonized
+2. **Multi-file schema is fixed** - `_file_name, key, type, dtype, shape, value` for uns and `_file_name, property, value` for info. A pattern that matches exactly one file still gets the `_file_name` column, so the schema does not depend on how many files match. As for every scanner, any input containing `*`, `?` or `[` is a pattern, even if a file of that literal name exists
+3. **Files without uns data contribute zero rows** - if no matched file has uns data the result is empty but keeps the six-column schema; the single-file "No uns data in file" message row is not emitted in multi-file mode
+4. **info reports every property for every file** - the `file_path` property keeps the full path, and the optional `var_name_column` / `var_id_column` arguments apply to every matched file
+5. **Every matched file is validated as AnnData at bind time**
+6. **Single literal paths are unchanged** - original columns, no `_file_name`
+
+### Error Handling
+
+```
+IO Error: No files found that match the pattern "samples/*.h5ad"
 ```
 
 ## Implementation Architecture
@@ -405,7 +462,7 @@ SET anndata_eager_schema = false;  -- default: lazy for X/layers
 
 ### No Files Match Pattern
 ```
-Error: No files matching pattern 'data/*.h5ad' found
+IO Error: No files found that match the pattern "data/*.h5ad"
 ```
 
 ### No Common Columns (Intersection Mode)
@@ -548,8 +605,8 @@ SELECT COUNT(DISTINCT _file_name) FROM anndata_scan_obsp('data/samples/*.h5ad', 
 
 ### Backward Compatibility
 
-- Single file paths continue to work unchanged
-- No `_file_name` column added for single-file queries
+- Single file paths continue to work unchanged, including `anndata_scan_uns` and `anndata_info`
+- No `_file_name` column added for literal single-file paths (a glob pattern that matches exactly one file still gets it)
 - Default schema_mode is 'intersection' for safe batch processing
 
 ### Breaking Changes
