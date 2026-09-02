@@ -158,6 +158,9 @@ LOAD anndata;
 -- Get file information
 SELECT * FROM anndata_info('data.h5ad');
 
+-- Get file information for every file matching a pattern (adds a _file_name column)
+SELECT _file_name, value AS n_obs FROM anndata_info('samples/*.h5ad') WHERE property = 'n_obs';
+
 -- Query observation (cell) metadata
 SELECT * FROM anndata_scan_obs('data.h5ad');
 
@@ -191,6 +194,8 @@ SELECT * FROM anndata_scan_x('samples/*.h5ad', schema_mode := 'union');
 SELECT * FROM anndata_scan_layers('samples/*.h5ad', 'raw');
 SELECT * FROM anndata_scan_obsm('samples/*.h5ad', 'X_pca');
 SELECT * FROM anndata_scan_obsp('samples/*.h5ad', 'distances');
+SELECT * FROM anndata_scan_uns('samples/*.h5ad');
+SELECT * FROM anndata_info('samples/*.h5ad');
 
 -- Works with S3 paths
 SELECT * FROM anndata_scan_obs('s3://bucket/project/*.h5ad');
@@ -199,6 +204,8 @@ SELECT * FROM anndata_scan_obs('s3://bucket/project/*.h5ad');
 **Schema modes:**
 - **`intersection`** (default): Only columns/genes present in ALL files are included. Safest for analysis across heterogeneous datasets.
 - **`union`**: All columns/genes from all files are included. Missing values are filled with NULL.
+
+**File-scoped functions:** `anndata_scan_uns`, `anndata_info`, `anndata_scan_obsp` and `anndata_scan_varp` do not take `schema_mode`. Their rows are concatenated per file (in sorted file order) and distinguished by `_file_name`; nothing is harmonized across files.
 
 
 ## Features
@@ -293,6 +300,11 @@ SELECT * FROM anndata_scan_uns('data.h5ad');
 SELECT key, dtype, value
 FROM anndata_scan_uns('data.h5ad')
 WHERE type = 'scalar';
+
+-- Compare a processing parameter across files
+SELECT _file_name, key, value.scalar
+FROM anndata_scan_uns('samples/*.h5ad')
+WHERE key = 'pca/params/n_comps';
 ```
 
 ### Gene Name Column Configuration

@@ -280,7 +280,7 @@ vector<TableViewInfo> DiscoverAnndataTables(const string &file_path, const strin
 
 	// Check for uns data (independent of obs/var)
 	try {
-		auto uns_keys = reader->GetUnsKeys();
+		auto uns_keys = reader->GetUnsKeys(false);
 		if (!uns_keys.empty()) {
 			tables.push_back({"uns", "uns", "", var_name_column, var_id_column});
 		}

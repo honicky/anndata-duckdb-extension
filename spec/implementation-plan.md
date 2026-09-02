@@ -261,8 +261,9 @@ SELECT * FROM anndata_scan_obs('s3://bucket/project/*.h5ad');
    - X, layers: schema_mode for gene columns + projection pushdown
    - obsm, varm: schema_mode for dimension count (min/max)
    - obsp, varp: file-scoped pairs (concatenated, no schema_mode needed)
+   - uns, info: file-scoped rows (concatenated per file with _file_name, no schema_mode)
 
-**Testing**: 34 assertions for local wildcard queries, S3 wildcard test suite
+**Testing**: 34 assertions for local wildcard queries (`test/sql/wildcard_local.test`), local uns/info wildcard assertions (`test/sql/wildcard_info_uns.test`), S3 wildcard test suite
 
 ### Phase 12: ATTACH/DETACH Interface 📋
 **Goal**: Provide standard DuckDB attachment semantics

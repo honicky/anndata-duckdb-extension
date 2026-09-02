@@ -1,0 +1,406 @@
+# name: test/sql/wildcard_info_uns.test
+# description: Test wildcard (multi-file) support for anndata_scan_uns and anndata_info
+# group: [sql]
+
+require anndata
+
+# Fixtures (test/python/create_test_wildcard_uns.py):
+#   wildcard_uns_sample1.h5ad: n_obs 5, uns {dataset_name, n_cells, normalization, qc_thresholds(2), pca/params/n_comps, alpha_only}
+#   wildcard_uns_sample2.h5ad: n_obs 6, uns {dataset_name, n_cells, normalization, qc_thresholds(3), pca/params/n_comps, beta_only}
+#   wildcard_uns_sample3.h5ad: n_obs 7, uns {dataset_name, n_cells, normalization, qc_thresholds(1), pca/params/n_comps, gamma_only}
+#   wildcard_uns_yempty.h5ad:  n_obs 3, empty /uns group (sorts after the samples)
+#   wildcard_uns_zlast.h5ad:   n_obs 2, uns {dataset_name, n_cells} (sorts last)
+# The pre-existing wildcard_sample*.h5ad fixtures have an empty /uns group and sort before every wildcard_uns_* file.
+
+# =============================================================================
+# Test 1: anndata_scan_uns with wildcards - file-scoped rows
+# =============================================================================
+
+# 6 flattened uns entries per file, 3 files
+query I
+SELECT COUNT(*) FROM anndata_scan_uns('test/data/wildcard_uns_sample*.h5ad');
+----
+18
+
+query I
+SELECT COUNT(DISTINCT _file_name) FROM anndata_scan_uns('test/data/wildcard_uns_sample*.h5ad');
+----
+3
+
+# Schema: _file_name followed by the single-file columns
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM anndata_scan_uns('test/data/wildcard_uns_sample*.h5ad'));
+----
+_file_name	VARCHAR
+key	VARCHAR
+type	VARCHAR
+dtype	VARCHAR
+shape	VARCHAR
+value	UNION(scalar VARCHAR, arr VARCHAR[])
+
+# Every file contributes its own entries
+query II
+SELECT _file_name, COUNT(*) FROM anndata_scan_uns('test/data/wildcard_uns_sample*.h5ad')
+GROUP BY _file_name ORDER BY _file_name;
+----
+wildcard_uns_sample1.h5ad	6
+wildcard_uns_sample2.h5ad	6
+wildcard_uns_sample3.h5ad	6
+
+# Rows are emitted file by file in sorted file order (the scan is single-threaded)
+query I
+SELECT _file_name FROM anndata_scan_uns('test/data/wildcard_uns_sample*.h5ad') LIMIT 1;
+----
+wildcard_uns_sample1.h5ad
+
+# A shared scalar key compared across files (the demo use case)
+query III
+SELECT _file_name, key, value.scalar FROM anndata_scan_uns('test/data/wildcard_uns_sample*.h5ad')
+WHERE key = 'pca/params/n_comps' ORDER BY _file_name;
+----
+wildcard_uns_sample1.h5ad	pca/params/n_comps	30
+wildcard_uns_sample2.h5ad	pca/params/n_comps	50
+wildcard_uns_sample3.h5ad	pca/params/n_comps	20
+
+# Keys present in every file (no key harmonization is applied - do it in SQL)
+query I
+SELECT key FROM anndata_scan_uns('test/data/wildcard_uns_sample*.h5ad')
+GROUP BY key HAVING COUNT(DISTINCT _file_name) = 3 ORDER BY key;
+----
+dataset_name
+n_cells
+normalization
+pca/params/n_comps
+qc_thresholds
+
+# Keys unique to one file
+query II
+SELECT key, _file_name FROM anndata_scan_uns('test/data/wildcard_uns_sample*.h5ad')
+QUALIFY COUNT(*) OVER (PARTITION BY key) = 1 ORDER BY key;
+----
+alpha_only	wildcard_uns_sample1.h5ad
+beta_only	wildcard_uns_sample2.h5ad
+gamma_only	wildcard_uns_sample3.h5ad
+
+# type / dtype / shape are reported per file
+query IIIII
+SELECT _file_name, type, dtype, shape, union_tag(value) FROM anndata_scan_uns('test/data/wildcard_uns_sample*.h5ad')
+WHERE key = 'qc_thresholds' ORDER BY _file_name;
+----
+wildcard_uns_sample1.h5ad	array	float64	(2)	arr
+wildcard_uns_sample2.h5ad	array	float64	(3)	arr
+wildcard_uns_sample3.h5ad	array	float64	(1)	arr
+
+# Array values are file-scoped
+query II
+SELECT _file_name, len(value.arr) FROM anndata_scan_uns('test/data/wildcard_uns_sample*.h5ad')
+WHERE key = 'qc_thresholds' ORDER BY _file_name;
+----
+wildcard_uns_sample1.h5ad	2
+wildcard_uns_sample2.h5ad	3
+wildcard_uns_sample3.h5ad	1
+
+# Array contents are file-scoped (values are read from the owning file when the row is emitted)
+query II
+SELECT _file_name, value.arr FROM anndata_scan_uns('test/data/wildcard_uns_sample*.h5ad')
+WHERE key IN ('qc_thresholds', 'gamma_only') ORDER BY _file_name, key;
+----
+wildcard_uns_sample1.h5ad	[200, 2500]
+wildcard_uns_sample2.h5ad	[150, 3000, 5]
+wildcard_uns_sample3.h5ad	[a, b, c]
+wildcard_uns_sample3.h5ad	[100]
+
+# String arrays and scalars keep their per-file dtype
+query IIII
+SELECT _file_name, key, dtype, coalesce(value.scalar, CAST(len(value.arr) AS VARCHAR) || ' values')
+FROM anndata_scan_uns('test/data/wildcard_uns_sample*.h5ad')
+WHERE key IN ('alpha_only', 'beta_only', 'gamma_only') ORDER BY _file_name;
+----
+wildcard_uns_sample1.h5ad	alpha_only	string	only in sample one
+wildcard_uns_sample2.h5ad	beta_only	int64	42
+wildcard_uns_sample3.h5ad	gamma_only	string	3 values
+
+# Aggregate a numeric scalar across files
+query I
+SELECT SUM(CAST(value.scalar AS BIGINT)) FROM anndata_scan_uns('test/data/wildcard_uns_sample*.h5ad')
+WHERE key = 'n_cells';
+----
+18
+
+# Per-file values differ for the same key
+query II
+SELECT key, COUNT(DISTINCT value.scalar) FROM anndata_scan_uns('test/data/wildcard_uns_sample*.h5ad')
+WHERE key IN ('dataset_name', 'normalization') GROUP BY key ORDER BY key;
+----
+dataset_name	3
+normalization	2
+
+# =============================================================================
+# Test 2: files without uns data contribute no rows
+# =============================================================================
+
+# wildcard_sample*.h5ad have an empty /uns group: the result is empty but keeps the six-column schema
+query I
+SELECT COUNT(*) FROM anndata_scan_uns('test/data/wildcard_sample*.h5ad');
+----
+0
+
+query I
+SELECT COUNT(*) FROM (DESCRIBE SELECT * FROM anndata_scan_uns('test/data/wildcard_sample*.h5ad'));
+----
+6
+
+# Mixed pattern: wildcard_*sample1.h5ad matches wildcard_sample1.h5ad (no uns) and wildcard_uns_sample1.h5ad (6 keys)
+query II
+SELECT _file_name, COUNT(*) FROM anndata_scan_uns('test/data/wildcard_*sample1.h5ad')
+GROUP BY _file_name ORDER BY _file_name;
+----
+wildcard_uns_sample1.h5ad	6
+
+# Mixed pattern where both files without uns data sort first (wildcard_sample1, wildcard_sample3, then the two uns files)
+query II
+SELECT _file_name, key FROM anndata_scan_uns('test/data/wildcard_*sample[13].h5ad')
+WHERE key = 'dataset_name' ORDER BY _file_name;
+----
+wildcard_uns_sample1.h5ad	dataset_name
+wildcard_uns_sample3.h5ad	dataset_name
+
+# An empty-uns file in the MIDDLE of the match list: wildcard_uns_yempty.h5ad sorts between sample3 and zlast
+query II
+SELECT _file_name, COUNT(*) FROM anndata_scan_uns('test/data/wildcard_uns_*.h5ad')
+GROUP BY _file_name ORDER BY _file_name;
+----
+wildcard_uns_sample1.h5ad	6
+wildcard_uns_sample2.h5ad	6
+wildcard_uns_sample3.h5ad	6
+wildcard_uns_zlast.h5ad	2
+
+# Rows stay in file order across the skipped file: row 18 is sample3's last key, row 19 is zlast's first
+query I
+SELECT _file_name FROM anndata_scan_uns('test/data/wildcard_uns_*.h5ad') QUALIFY row_number() OVER () IN (18, 19);
+----
+wildcard_uns_sample3.h5ad
+wildcard_uns_zlast.h5ad
+
+# An empty-uns file at the END of the match list: the scan terminates through the trailing empty file
+query II
+SELECT COUNT(*), COUNT(DISTINCT _file_name) FROM anndata_scan_uns('test/data/wildcard_uns_[sy]*.h5ad');
+----
+18	3
+
+# anndata_info still reports the empty-uns files
+query I
+SELECT COUNT(DISTINCT _file_name) FROM anndata_info('test/data/wildcard_uns_[sy]*.h5ad');
+----
+4
+
+query II
+SELECT _file_name, value FROM anndata_info('test/data/wildcard_uns_[yz]*.h5ad')
+WHERE property = 'groups' ORDER BY _file_name;
+----
+wildcard_uns_yempty.h5ad	obs, var, X
+wildcard_uns_zlast.h5ad	obs, var, X, uns
+
+# =============================================================================
+# Test 3: a pattern that matches a single file still has _file_name
+# =============================================================================
+
+query II
+SELECT _file_name, COUNT(*) FROM anndata_scan_uns('test/data/wildcard_uns_sample[2].h5ad') GROUP BY _file_name;
+----
+wildcard_uns_sample2.h5ad	6
+
+# =============================================================================
+# Test 4: single literal paths are unchanged
+# =============================================================================
+
+statement error
+SELECT _file_name FROM anndata_scan_uns('test/data/wildcard_uns_sample1.h5ad') LIMIT 1;
+----
+_file_name
+
+query III
+SELECT key, type, value.scalar FROM anndata_scan_uns('test/data/wildcard_uns_sample1.h5ad') WHERE key = 'dataset_name';
+----
+dataset_name	scalar	Sample One
+
+query I
+SELECT COUNT(*) FROM anndata_scan_uns('test/data/wildcard_uns_sample1.h5ad');
+----
+6
+
+# A single file without uns data keeps the legacy message row
+query I
+SELECT message FROM anndata_scan_uns('test/data/wildcard_sample1.h5ad');
+----
+No uns data in file
+
+# =============================================================================
+# Test 5: error handling
+# =============================================================================
+
+statement error
+SELECT * FROM anndata_scan_uns('test/data/nonexistent_*.h5ad');
+----
+No files found
+
+statement error
+SELECT * FROM anndata_scan_uns('test/data/does_not_exist.h5ad');
+----
+not a valid AnnData file
+
+# =============================================================================
+# Test 6: anndata_info with wildcards
+# =============================================================================
+
+query I
+SELECT COUNT(DISTINCT _file_name) FROM anndata_info('test/data/wildcard_uns_sample*.h5ad');
+----
+3
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM anndata_info('test/data/wildcard_uns_sample*.h5ad'));
+----
+_file_name	VARCHAR
+property	VARCHAR
+value	VARCHAR
+
+# Every file contributes its full property set (9 rows each for these fixtures)
+query II
+SELECT _file_name, COUNT(*) FROM anndata_info('test/data/wildcard_uns_sample*.h5ad')
+GROUP BY _file_name ORDER BY _file_name;
+----
+wildcard_uns_sample1.h5ad	9
+wildcard_uns_sample2.h5ad	9
+wildcard_uns_sample3.h5ad	9
+
+# Rows are emitted file by file in sorted file order
+query II
+SELECT _file_name, property FROM anndata_info('test/data/wildcard_uns_sample*.h5ad') LIMIT 1;
+----
+wildcard_uns_sample1.h5ad	file_path
+
+# Per-file n_obs
+query II
+SELECT _file_name, value FROM anndata_info('test/data/wildcard_uns_sample*.h5ad')
+WHERE property = 'n_obs' ORDER BY _file_name;
+----
+wildcard_uns_sample1.h5ad	5
+wildcard_uns_sample2.h5ad	6
+wildcard_uns_sample3.h5ad	7
+
+# Aggregate across files
+query I
+SELECT SUM(CAST(value AS BIGINT)) FROM anndata_info('test/data/wildcard_uns_sample*.h5ad') WHERE property = 'n_obs';
+----
+18
+
+# file_path keeps the full path of each file
+query I
+SELECT value FROM anndata_info('test/data/wildcard_uns_sample*.h5ad') WHERE property = 'file_path' ORDER BY value;
+----
+test/data/wildcard_uns_sample1.h5ad
+test/data/wildcard_uns_sample2.h5ad
+test/data/wildcard_uns_sample3.h5ad
+
+# groups / tables reflect each file
+query II
+SELECT property, value FROM anndata_info('test/data/wildcard_uns_sample*.h5ad')
+WHERE _file_name = 'wildcard_uns_sample3.h5ad' AND property IN ('groups', 'tables', 'x_shape', 'x_sparse') ORDER BY property;
+----
+groups	obs, var, X, uns
+tables	obs, var, info, X, uns
+x_shape	7 x 3
+x_sparse	false
+
+# Heterogeneous files: wildcard_sample*.h5ad carry obsm/varm/layers/obsp/varp and no uns data
+query II
+SELECT _file_name, value FROM anndata_info('test/data/wildcard_sample*.h5ad')
+WHERE property = 'groups' ORDER BY _file_name;
+----
+wildcard_sample1.h5ad	obs, var, X, obsm, varm, layers, obsp, varp
+wildcard_sample2.h5ad	obs, var, X, obsm, varm, layers, obsp, varp
+wildcard_sample3.h5ad	obs, var, X, obsm, varm, layers, obsp, varp
+
+# 15 properties per file for those fixtures
+query I
+SELECT COUNT(*) FROM anndata_info('test/data/wildcard_sample*.h5ad');
+----
+45
+
+# Properties present in only some of the matched files
+query II
+SELECT _file_name, value FROM anndata_info('test/data/wildcard_*sample1.h5ad')
+WHERE property = 'obsm_keys' ORDER BY _file_name;
+----
+wildcard_sample1.h5ad	X_pca, X_umap
+
+# The optional var column arguments apply to every file
+query II
+SELECT DISTINCT property, value FROM anndata_info('test/data/wildcard_uns_sample*.h5ad', 'gene_name', '_index')
+WHERE property IN ('var_name_column', 'var_id_column') ORDER BY property;
+----
+var_id_column	_index
+var_name_column	gene_name
+
+# A pattern that matches a single file still has _file_name
+query II
+SELECT _file_name, value FROM anndata_info('test/data/wildcard_uns_sample[2].h5ad') WHERE property = 'n_obs';
+----
+wildcard_uns_sample2.h5ad	6
+
+# Single literal paths are unchanged
+statement error
+SELECT _file_name FROM anndata_info('test/data/wildcard_uns_sample1.h5ad');
+----
+_file_name
+
+query I
+SELECT COUNT(*) FROM anndata_info('test/data/wildcard_uns_sample1.h5ad');
+----
+9
+
+query I
+SELECT value FROM anndata_info('test/data/wildcard_uns_sample1.h5ad') WHERE property = 'file_path';
+----
+test/data/wildcard_uns_sample1.h5ad
+
+# Error handling
+statement error
+SELECT * FROM anndata_info('test/data/nonexistent_*.h5ad');
+----
+No files found
+
+statement error
+SELECT * FROM anndata_info('test/data/does_not_exist.h5ad');
+----
+not a valid AnnData file
+
+# =============================================================================
+# Test 7: joining file-scoped results across functions by _file_name
+# =============================================================================
+
+# uns metadata joined with file info
+query III
+SELECT i._file_name, i.value AS n_obs, u.value.scalar AS n_cells
+FROM anndata_info('test/data/wildcard_uns_sample*.h5ad') i
+JOIN anndata_scan_uns('test/data/wildcard_uns_sample*.h5ad') u ON i._file_name = u._file_name
+WHERE i.property = 'n_obs' AND u.key = 'n_cells'
+ORDER BY i._file_name;
+----
+wildcard_uns_sample1.h5ad	5	5
+wildcard_uns_sample2.h5ad	6	6
+wildcard_uns_sample3.h5ad	7	7
+
+# uns metadata joined with the obs table: n_cells matches the observation count of every file
+query III
+SELECT o._file_name, COUNT(*) AS cells, ANY_VALUE(CAST(u.value.scalar AS BIGINT)) AS n_cells
+FROM anndata_scan_obs('test/data/wildcard_uns_sample*.h5ad') o
+JOIN anndata_scan_uns('test/data/wildcard_uns_sample*.h5ad') u ON o._file_name = u._file_name AND u.key = 'n_cells'
+GROUP BY o._file_name
+HAVING COUNT(*) = ANY_VALUE(CAST(u.value.scalar AS BIGINT))
+ORDER BY o._file_name;
+----
+wildcard_uns_sample1.h5ad	5	5
+wildcard_uns_sample2.h5ad	6	6
+wildcard_uns_sample3.h5ad	7	7

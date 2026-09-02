@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Glob patterns for `anndata_scan_uns` and `anndata_info`.** These were the only two table
+  functions that still rejected a wildcard: `anndata_scan_uns('samples/*.h5ad')` and
+  `anndata_info('samples/*.h5ad')` treated the pattern as a literal path and failed with
+  `File is not a valid AnnData file`, so summarizing a directory of files meant a shell loop or one
+  `UNION ALL` branch per file. Both now expand `*`, `?` and `[...]` patterns (local and S3) exactly
+  like the other scanners, validate every matched file at bind time, and prepend a `_file_name`
+  column. Rows are file-scoped, the same treatment obsp/varp get: each file's flattened uns entries,
+  or its complete `anndata_info` property list (`file_path`, `n_obs`, `n_vars`, `x_shape`, ...,
+  `var_name_column`, `var_id_column`), are concatenated in sorted file order with no key
+  harmonization and no `schema_mode` parameter, because uns keys and info properties are per-file
+  facts with no meaningful intersection or union. A file without uns data contributes no rows (the
+  single-file "No uns data in file" message row is not emitted in multi-file mode), a pattern that
+  matches exactly one file still gets `_file_name` so the schema does not depend on how many files
+  match, and a pattern that matches nothing raises DuckDB's `No files found that match the pattern "<pattern>"`.
+  Single literal paths are unchanged (as for every scanner, a literal name containing `*`, `?` or `[` is
+  treated as a pattern). The optional `var_name_column` / `var_id_column` arguments to `anndata_info`
+  apply to every matched file. To keep bind cheap across many files, `anndata_scan_uns` now reads
+  array values only when it emits the row (`H5ReaderMultithreaded::GetUnsKeys(false)` +
+  `ReadUnsArrayAsStrings`); key discovery for `anndata_info` and `ATTACH` no longer reads any array
+  data either. Typical use:
+  `SELECT SUM(CAST(value AS BIGINT)) FROM anndata_info('samples/*.h5ad') WHERE property = 'n_obs';`.
+  `ATTACH` with a glob pattern remains unsupported.
+
 ## [0.14.7] - 2026-08-20
 
 ### Added

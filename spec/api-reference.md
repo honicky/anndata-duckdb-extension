@@ -152,6 +152,11 @@ SELECT * FROM anndata_scan_uns('path');
 ```
 Returns scalar metadata from the uns (unstructured) group.
 
+**Parameters:**
+- `path`: File path or glob pattern
+
+uns entries are file-scoped (keys are not harmonized across files), so no schema_mode parameter is needed. When using glob patterns, each file's entries are concatenated in sorted file order and a `_file_name` column is added. A file without uns data contributes no rows.
+
 ### Wildcard Query Parameters
 
 When using glob patterns in any scan function:
@@ -159,6 +164,8 @@ When using glob patterns in any scan function:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `schema_mode` | VARCHAR | `'intersection'` | How to combine schemas across files: `'intersection'` (common columns only) or `'union'` (all columns, NULL for missing) |
+
+`schema_mode` applies to `anndata_scan_obs`, `anndata_scan_var`, `anndata_scan_x`, `anndata_scan_layers`, `anndata_scan_obsm` and `anndata_scan_varm`. `anndata_scan_uns`, `anndata_info`, `anndata_scan_obsp` and `anndata_scan_varp` are file-scoped (each file's rows are concatenated, distinguished by `_file_name`) and accept no `schema_mode`.
 
 **Special columns added for multi-file queries:**
 
@@ -182,8 +189,11 @@ Returns metadata about an AnnData file as a table function.
 
 #### Syntax
 ```sql
-SELECT * FROM anndata_info('path');
+SELECT * FROM anndata_info('path' [, var_name_column, var_id_column]);
+SELECT * FROM anndata_info('data/*.h5ad');
 ```
+
+`path` may be a file path or a glob pattern. The optional `var_name_column` / `var_id_column` arguments apply to every matched file.
 
 #### Returns
 Table with two columns:
@@ -192,13 +202,16 @@ Table with two columns:
 | `property` | VARCHAR | Property name |
 | `value` | VARCHAR | Property value |
 
+When using a glob pattern, a `_file_name` column (VARCHAR, the base filename) is prepended and each matched file contributes its complete property list, in sorted file order. The `file_path` property keeps the full path. Rows are file-scoped, so there is no `schema_mode` parameter.
+
 Properties include:
 - `n_obs`: Number of observations
 - `n_vars`: Number of variables  
 - `obsm_keys`: Available obsm matrices (comma-separated)
 - `varm_keys`: Available varm matrices (comma-separated)
 - `layers`: Available layers (comma-separated)
-- `uns_keys`: Available uns keys (comma-separated)
+- `groups`: HDF5 groups present in the file (comma-separated, includes `uns` when uns data exists)
+- `tables`: SQL-accessible tables (comma-separated)
 - `obsp_keys`: Available obsp matrices (comma-separated)
 - `varp_keys`: Available varp matrices (comma-separated)
 
@@ -213,6 +226,24 @@ SELECT * FROM anndata_info('data.h5ad');
 -- obsm_keys   | X_pca, X_umap
 -- layers      | raw, normalized
 -- ...
+```
+
+#### Multi-File Example
+```sql
+-- Per-file cell counts
+SELECT _file_name, value AS n_obs
+FROM anndata_info('data/*.h5ad')
+WHERE property = 'n_obs';
+-- Returns:
+-- _file_name    | n_obs
+-- --------------|------
+-- sample_a.h5ad | 2638
+-- sample_b.h5ad | 3120
+
+-- Total cells across all files
+SELECT SUM(CAST(value AS BIGINT)) AS total_obs
+FROM anndata_info('data/*.h5ad')
+WHERE property = 'n_obs';
 ```
 
 ## Configuration Parameters

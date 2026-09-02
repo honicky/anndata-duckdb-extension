@@ -179,8 +179,12 @@ public:
 		std::vector<std::string> array_values; // For array values (as strings)
 	};
 
-	// Get list of uns keys
-	std::vector<UnsInfo> GetUnsKeys();
+	// Get list of uns keys. With read_array_values = false, array entries carry key/type/dtype/shape
+	// only and their values are left to ReadUnsArrayAsStrings, which keeps discovery cheap.
+	std::vector<UnsInfo> GetUnsKeys(bool read_array_values = true);
+
+	// Read every element of a uns array dataset as strings (same formatting as GetUnsKeys)
+	std::vector<std::string> ReadUnsArrayAsStrings(const std::string &key);
 
 	// Read uns scalar value
 	Value ReadUnsScalar(const std::string &key);

@@ -2861,7 +2861,7 @@ static std::vector<std::string> ReadArrayAsStrings(hid_t file_handle, const std:
 // Helper function to recursively collect uns items
 static void CollectUnsItems(hid_t file_handle, const std::string &base_path, const std::string &key_prefix,
                             std::vector<H5ReaderMultithreaded::UnsInfo> &uns_keys,
-                            LogicalType (*H5TypeToDuckDBType)(hid_t)) {
+                            LogicalType (*H5TypeToDuckDBType)(hid_t), bool read_array_values) {
 	H5GroupHandle group(file_handle, base_path);
 
 	hsize_t num_objs;
@@ -2941,25 +2941,27 @@ static void CollectUnsItems(hid_t file_handle, const std::string &base_path, con
 				H5Sget_simple_extent_dims(dataspace.get(), dims.data(), nullptr);
 				info.shape = dims;
 
-				// Calculate total size and read array values
-				hsize_t total_size = 1;
-				for (int j = 0; j < rank; j++) {
-					total_size *= dims[j];
-				}
+				if (read_array_values) {
+					// Calculate total size and read array values
+					hsize_t total_size = 1;
+					for (int j = 0; j < rank; j++) {
+						total_size *= dims[j];
+					}
 
-				hid_t dtype_id = H5Dget_type(dataset.get());
-				info.array_values = ReadArrayAsStrings(file_handle, obj_path, dtype_id, total_size, type_class);
-				H5Tclose(dtype_id);
+					hid_t dtype_id = H5Dget_type(dataset.get());
+					info.array_values = ReadArrayAsStrings(file_handle, obj_path, dtype_id, total_size, type_class);
+					H5Tclose(dtype_id);
+				}
 			}
 			uns_keys.push_back(info);
 		} else if (obj_info.type == H5O_TYPE_GROUP) {
 			// Recursively process subgroup
-			CollectUnsItems(file_handle, obj_path, full_key, uns_keys, H5TypeToDuckDBType);
+			CollectUnsItems(file_handle, obj_path, full_key, uns_keys, H5TypeToDuckDBType, read_array_values);
 		}
 	}
 }
 
-std::vector<H5ReaderMultithreaded::UnsInfo> H5ReaderMultithreaded::GetUnsKeys() {
+std::vector<H5ReaderMultithreaded::UnsInfo> H5ReaderMultithreaded::GetUnsKeys(bool read_array_values) {
 	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
 	auto h5_lock = H5GlobalLock::Acquire();
 
@@ -2971,9 +2973,34 @@ std::vector<H5ReaderMultithreaded::UnsInfo> H5ReaderMultithreaded::GetUnsKeys() 
 	}
 
 	// Recursively collect all items with flattened paths
-	CollectUnsItems(*file_handle, "/uns", "", uns_keys, H5ReaderMultithreaded::H5TypeToDuckDBType);
+	CollectUnsItems(*file_handle, "/uns", "", uns_keys, H5ReaderMultithreaded::H5TypeToDuckDBType, read_array_values);
 
 	return uns_keys;
+}
+
+std::vector<std::string> H5ReaderMultithreaded::ReadUnsArrayAsStrings(const std::string &key) {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
+	std::string path = "/uns/" + key;
+	H5DatasetHandle dataset(*file_handle, path);
+	H5DataspaceHandle dataspace(dataset.get());
+	H5TypeHandle datatype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
+
+	int rank = H5Sget_simple_extent_ndims(dataspace.get());
+	if (rank <= 0) {
+		return {}; // scalar dataset: nothing to read as an array
+	}
+	std::vector<hsize_t> dims(rank);
+	H5Sget_simple_extent_dims(dataspace.get(), dims.data(), nullptr);
+	hsize_t total_size = 1;
+	for (int j = 0; j < rank; j++) {
+		total_size *= dims[j];
+	}
+	if (total_size == 0) {
+		return {};
+	}
+	return ReadArrayAsStrings(*file_handle, path, datatype.get(), total_size, H5Tget_class(datatype.get()));
 }
 
 Value H5ReaderMultithreaded::ReadUnsScalar(const std::string &key) {
