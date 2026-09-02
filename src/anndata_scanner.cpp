@@ -1979,6 +1979,27 @@ static void FillUnsRow(ClientContext &context, AnndataGlobalState &gstate, const
 	case LogicalTypeId::INTEGER:
 		dtype_str = "int32";
 		break;
+	case LogicalTypeId::SMALLINT:
+		dtype_str = "int16";
+		break;
+	case LogicalTypeId::TINYINT:
+		dtype_str = "int8";
+		break;
+	case LogicalTypeId::UBIGINT:
+		dtype_str = "uint64";
+		break;
+	case LogicalTypeId::UINTEGER:
+		dtype_str = "uint32";
+		break;
+	case LogicalTypeId::USMALLINT:
+		dtype_str = "uint16";
+		break;
+	case LogicalTypeId::UTINYINT:
+		dtype_str = "uint8";
+		break;
+	case LogicalTypeId::FLOAT:
+		dtype_str = "float32";
+		break;
 	case LogicalTypeId::DOUBLE:
 		dtype_str = "float64";
 		break;
@@ -2189,6 +2210,9 @@ unique_ptr<FunctionData> AnndataScanner::ObspBind(ClientContext &context, TableF
 	auto bind_data =
 	    make_uniq<AnndataBindData>(glob_result.matched_files, glob_result.is_pattern ? file_path_input : "");
 	bind_data->is_obsp_scan = true;
+	// A pattern always selects multi-file mode, even when it matches a single file (same rule as
+	// every other scanner), so the output schema does not depend on how many files match.
+	bind_data->is_multi_file = glob_result.is_pattern || glob_result.matched_files.size() > 1;
 	bind_data->pairwise_matrix_name = matrix_name;
 
 	// Validate all files and collect nnz counts
@@ -2338,6 +2362,7 @@ unique_ptr<FunctionData> AnndataScanner::VarpBind(ClientContext &context, TableF
 	auto bind_data =
 	    make_uniq<AnndataBindData>(glob_result.matched_files, glob_result.is_pattern ? file_path_input : "");
 	bind_data->is_varp_scan = true;
+	bind_data->is_multi_file = glob_result.is_pattern || glob_result.matched_files.size() > 1;
 	bind_data->pairwise_matrix_name = matrix_name;
 
 	// Validate all files and collect nnz counts

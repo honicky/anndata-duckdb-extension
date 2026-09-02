@@ -150,7 +150,7 @@ Returns alternative expression matrices with same format as anndata_scan_x.
 ```sql
 SELECT * FROM anndata_scan_uns('path');
 ```
-Returns scalar metadata from the uns (unstructured) group.
+Returns every entry of the uns (unstructured) group, flattened: nested groups become `/`-separated keys (`pca/params/n_comps`), scalars are returned in `value.scalar`, and arrays in `value.arr` as lists of strings. Columns: `key`, `type` (`scalar` or `array`), `dtype`, `shape`, `value` (a `UNION(scalar VARCHAR, arr VARCHAR[])`).
 
 **Parameters:**
 - `path`: File path or glob pattern
@@ -175,7 +175,7 @@ When using glob patterns in any scan function:
 
 **Supported glob patterns:**
 - `*` matches any number of characters (e.g., `'data/*.h5ad'`)
-- `?` matches a single character (e.g., `'sample?.h5ad'`)
+- `?` matches a single character (e.g., `'sample?.h5ad'`) on local paths only: in an `s3://` URL httpfs reads `?` as the start of the query string, so use `*` or `[...]` for remote patterns
 - `[...]` matches character ranges (e.g., `'sample[1-3].h5ad'`)
 
 **Supported path types:**
@@ -292,14 +292,20 @@ SET anndata_cache_size = '2GB';
 | np.int16 | SMALLINT | |
 | np.int32 | INTEGER | |
 | np.int64 | BIGINT | |
-| np.uint8 | SMALLINT | Promoted to signed |
-| np.uint16 | INTEGER | Promoted to signed |
-| np.uint32 | BIGINT | Promoted to signed |
-| np.uint64 | HUGEINT | If supported |
-| bool | BOOLEAN | |
+| np.uint8 | UTINYINT | |
+| np.uint16 | USMALLINT | |
+| np.uint32 | UINTEGER | |
+| np.uint64 | UBIGINT | Exact in obs/var/uns; layer values pass through DOUBLE (exact up to 2^53) |
+| bool | VARCHAR | `True` / `False` strings (legacy representation) |
+| pd.Int8 ... pd.Int64 (nullable) | TINYINT ... BIGINT | Masked entries are `NULL` |
+| pd.UInt8 ... pd.UInt64 (nullable) | UTINYINT ... UBIGINT | Masked entries are `NULL` |
+| pd.StringDtype (nullable string) | VARCHAR | Missing entries are `NULL` |
+| pd.boolean (nullable) | BOOLEAN | Masked entries are `NULL` |
 | str | VARCHAR | |
 | bytes | BLOB | |
-| pd.Categorical | ENUM/VARCHAR | ENUM if cardinality < 256 |
+| pd.Categorical | VARCHAR | Codes resolved to their category strings |
+
+When a glob pattern harmonizes columns of different types across files, numeric types promote to the smallest type that holds both (signed with unsigned integers to `BIGINT`, or `HUGEINT` when `UBIGINT` is involved; anything with a float to `DOUBLE`), and everything else falls back to `VARCHAR`, in which boolean columns are spelled `True`/`False`.
 
 ### Complex Types
 

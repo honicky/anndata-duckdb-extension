@@ -30,6 +30,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data either. Typical use:
   `SELECT SUM(CAST(value AS BIGINT)) FROM anndata_info('samples/*.h5ad') WHERE property = 'n_obs';`.
   `ATTACH` with a glob pattern remains unsupported.
+- **Nullable integer and boolean columns** (`encoding-type` `nullable-integer` / `nullable-boolean`, i.e.
+  pandas `Int64`/`Int32`/... and `boolean` dtypes with missing values). AnnData stores these as a group
+  holding a `values` dataset and a `mask` dataset; the extension mistook the group for a categorical
+  column, the category read failed silently, and every row came back as an empty VARCHAR string.
+  They now bind as the value dataset's integer type (`BIGINT`, `INTEGER`, ..., and `UTINYINT` ...
+  `UBIGINT` for pandas `UInt*`) or `BOOLEAN`, with masked entries returned as SQL `NULL`, in `obs`,
+  `var` and `raw/var`, through `ATTACH` views and glob patterns alike. Group columns are dispatched
+  on their `encoding-type` attribute (falling back to the datasets present). Categoricals with a
+  plain `categories` dataset are unchanged; categoricals whose `categories` is a
+  nullable-string-array group (what anndata writes for pandas `string` columns under
+  `allow_write_nullable_strings`) and top-level nullable-string-array columns now read correctly
+  too. A group with an unrecognised layout reads as `NULL` instead of garbage, and a column whose
+  data cannot be read now raises an error naming the column instead of silently returning empty
+  strings. When a nullable boolean column meets a differently typed column of the same name in a
+  multi-file scan, the harmonized column is `VARCHAR` and the values are spelled `True`/`False`
+  like plain boolean columns. Plain (non-nullable) boolean datasets keep their existing `VARCHAR`
+  `True`/`False` representation for backward compatibility.
+- **The wasm demo preview URL is posted on every pull request.** The `deploy-demo` job already
+  published each same-repo PR push to
+  `https://honicky.github.io/anndata-duckdb-extension/preview/<branch>/`, but the only trace was a
+  line in the job summary. It now keeps a sticky PR comment up to date with the link and the PR head
+  commit it was built from (also used for the gh-pages deploy commit and the job summary), so a PR
+  can be exercised in the browser without downloading artifacts.
 
 ### Fixed
 - **`anndata_scan_obs` / `anndata_scan_var` crashed on a pattern that matched exactly one file** with
@@ -40,6 +63,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for every column. The shortcut is gone; one file now takes the general intersection/union path,
   which yields the same schema and fills every mapping. X, layers, obsm/varm, obsp/varp, uns and info
   were not affected.
+- **Unsigned integers bind as DuckDB unsigned types and round-trip.** Plain `np.uint8/16/32/64`
+  obs/var columns (and the nullable `UInt*` columns above), compound-dataset members, layer values,
+  uns entries and integer categories were mapped by byte size to the signed type of the same width
+  and read through HDF5's signed conversion, which saturates: `uint8` 200 came back as 127 and
+  `uint64` 2^64-1 as 2^63-1. They are now `UTINYINT` / `USMALLINT` / `UINTEGER` / `UBIGINT` and
+  are read with the matching unsigned memory type. Layer values still pass through a `DOUBLE`
+  staging buffer, so `uint64` values above 2^53 lose precision there; obs/var/uns values are exact.
+  Across files, unsigned and signed integers of the same column harmonize to `BIGINT`, or to
+  `HUGEINT` when a `UBIGINT` is involved.
+- **A user column literally named `obs_idx` (or `var_idx`) read back the synthetic row index.** The
+  column was correctly renamed to `obs_idx_` to avoid the clash with the index column, but the reader
+  dispatched the index on the original HDF5 name, so both columns returned `0, 1, 2, ...`. The
+  synthetic index column now carries an internal original name that cannot be an HDF5 link name
+  (`/obs_idx`, `/var_idx`), and `obs_idx_` returns the stored values. Compound-dataset (old-format)
+  files get the same treatment.
+- **`anndata_scan_obsp` / `anndata_scan_varp` returned the single-file schema (no `_file_name`) for a
+  pattern that matched exactly one file**, unlike every other scanner. They now follow the shared
+  rule: any pattern selects multi-file mode.
 
 ## [0.14.7] - 2026-08-20
 

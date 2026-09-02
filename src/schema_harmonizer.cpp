@@ -32,8 +32,23 @@ LogicalType SchemaHarmonizer::CoerceTypes(const LogicalType &type1, const Logica
 		if (type1 == LogicalType::FLOAT || type2 == LogicalType::FLOAT) {
 			return LogicalType::DOUBLE;
 		}
-		if (type1 == LogicalType::BIGINT || type2 == LogicalType::BIGINT) {
-			return LogicalType::BIGINT;
+		// Integers: unsigned with unsigned stays unsigned; unsigned with signed needs one more bit
+		// than the unsigned width, so UBIGINT falls back to HUGEINT and everything else fits BIGINT
+		auto is_unsigned = [](const LogicalType &t) {
+			return t.id() == LogicalTypeId::UTINYINT || t.id() == LogicalTypeId::USMALLINT ||
+			       t.id() == LogicalTypeId::UINTEGER || t.id() == LogicalTypeId::UBIGINT;
+		};
+		// A HUGEINT already holds every integer we produce, so it wins over any further integer
+		if (type1.id() == LogicalTypeId::HUGEINT || type2.id() == LogicalTypeId::HUGEINT) {
+			return LogicalType::HUGEINT;
+		}
+		bool u1 = is_unsigned(type1), u2 = is_unsigned(type2);
+		if (u1 && u2) {
+			return LogicalType::UBIGINT;
+		}
+		if (u1 != u2) {
+			const LogicalType &unsigned_type = u1 ? type1 : type2;
+			return unsigned_type.id() == LogicalTypeId::UBIGINT ? LogicalType::HUGEINT : LogicalType::BIGINT;
 		}
 		return LogicalType::BIGINT;
 	}
