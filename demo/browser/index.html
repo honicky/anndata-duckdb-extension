@@ -153,11 +153,25 @@ async function rewriteRemoteUrls(sql) {
   return sql;
 }
 
+// Printed when a query against a remote URL fails at the network layer.
+// duckdb-wasm's own message ("File not found ... must be registered") is
+// misleading: the file WAS registered; the browser refused the request.
+function corsHint() {
+  line("remote files are fetched by the BROWSER, so the host must send CORS headers", "dim");
+  line("(allow the Range request header) plus Range support and Content-Length.", "dim");
+  line("Known-good: the public CellxGene Census bucket. Hosts without CORS (e.g.", "dim");
+  line("datasets.cellxgene.cziscience.com) cannot be read by any in-browser tool -", "dim");
+  line("use the terminal extension, or download once and drag & drop.", "dim");
+}
+
 async function run(sql, { echo = true } = {}) {
   if (echo) line(`D ${sql}`, "cmd");
   const t0 = performance.now();
+  let remote = false;
   try {
-    sql = await rewriteRemoteUrls(sql);
+    const rewritten = await rewriteRemoteUrls(sql);
+    remote = rewritten !== sql;
+    sql = rewritten;
     const result = await conn.query(sql);
     const ms = (performance.now() - t0).toFixed(0);
     if (result.numRows > 0 || result.numCols > 0) {
@@ -168,7 +182,9 @@ async function run(sql, { echo = true } = {}) {
     }
     return true;
   } catch (e) {
-    line(String(e?.message ?? e).trim(), "err");
+    const msg = String(e?.message ?? e).trim();
+    line(msg, "err");
+    if (remote && /NetworkError|Failed to load|File not found/i.test(msg)) corsHint();
     return false;
   }
 }
@@ -258,11 +274,7 @@ async function dot(cmd) {
     if (ok) {
       line(`query it, e.g.  SELECT * FROM anndata_scan_obs('${name}') LIMIT 5;`, "dim");
     } else {
-      line("remote files are fetched by the BROWSER, so the host must send CORS headers", "dim");
-      line("(allow the Range request header) plus Range support and Content-Length.", "dim");
-      line("Known-good: the public CellxGene Census bucket. Hosts without CORS (e.g.", "dim");
-      line("datasets.cellxgene.cziscience.com) cannot be read by any in-browser tool -", "dim");
-      line("use the terminal extension, or download once and drag & drop.", "dim");
+      corsHint();
     }
     return;
   }
