@@ -1920,52 +1920,202 @@ unique_ptr<FunctionData> RawVarmBindError(ClientContext &context, TableFunctionB
 }
 
 // Table function implementations for uns (unstructured) data
+
+// Append the fixed uns column schema: key, type, dtype, shape, value
+static void AddUnsColumns(vector<LogicalType> &return_types, compat::BindColumnNames &names) {
+	names.emplace_back("key");
+	return_types.push_back(LogicalType::VARCHAR);
+
+	names.emplace_back("type");
+	return_types.push_back(LogicalType::VARCHAR);
+
+	names.emplace_back("dtype");
+	return_types.push_back(LogicalType::VARCHAR);
+
+	names.emplace_back("shape");
+	return_types.push_back(LogicalType::VARCHAR);
+
+	names.emplace_back("value");
+	// UNION type: scalar VARCHAR or arr LIST(VARCHAR)
+	child_list_t<LogicalType> union_members;
+	union_members.emplace_back("scalar", LogicalType::VARCHAR);
+	union_members.emplace_back("arr", LogicalType::LIST(LogicalType::VARCHAR));
+	return_types.push_back(LogicalType::UNION(std::move(union_members)));
+}
+
+// Number of elements in a uns array entry (0 for scalars and empty arrays)
+static hsize_t UnsArrayElementCount(const H5ReaderMultithreaded::UnsInfo &uns_info) {
+	if (uns_info.shape.empty()) {
+		return 0;
+	}
+	hsize_t count = 1;
+	for (auto dim : uns_info.shape) {
+		count *= dim;
+	}
+	return count;
+}
+
+// Fill one output row of the uns table. col_offset is 0 in single-file mode and 1 in multi-file
+// mode, where column 0 holds _file_name. Scalar values were captured during key discovery; array
+// values are read on demand from the owning file, which is opened on first use, so files with only
+// scalar entries (and DESCRIBE / LIMIT queries) never open the file at scan time.
+static void FillUnsRow(ClientContext &context, AnndataGlobalState &gstate, const AnndataBindData &bind_data,
+                       DataChunk &output, idx_t col_offset, idx_t row, const H5ReaderMultithreaded::UnsInfo &uns_info) {
+	// Key column
+	output.data[col_offset].SetValue(row, Value(uns_info.key));
+
+	// Type column
+	output.data[col_offset + 1].SetValue(row, Value(uns_info.type));
+
+	// Dtype column
+	string dtype_str;
+	switch (uns_info.dtype.id()) {
+	case LogicalTypeId::VARCHAR:
+		dtype_str = "string";
+		break;
+	case LogicalTypeId::BIGINT:
+		dtype_str = "int64";
+		break;
+	case LogicalTypeId::INTEGER:
+		dtype_str = "int32";
+		break;
+	case LogicalTypeId::SMALLINT:
+		dtype_str = "int16";
+		break;
+	case LogicalTypeId::TINYINT:
+		dtype_str = "int8";
+		break;
+	case LogicalTypeId::UBIGINT:
+		dtype_str = "uint64";
+		break;
+	case LogicalTypeId::UINTEGER:
+		dtype_str = "uint32";
+		break;
+	case LogicalTypeId::USMALLINT:
+		dtype_str = "uint16";
+		break;
+	case LogicalTypeId::UTINYINT:
+		dtype_str = "uint8";
+		break;
+	case LogicalTypeId::FLOAT:
+		dtype_str = "float32";
+		break;
+	case LogicalTypeId::DOUBLE:
+		dtype_str = "float64";
+		break;
+	case LogicalTypeId::BOOLEAN:
+		dtype_str = "bool";
+		break;
+	default:
+		dtype_str = "unknown";
+		break;
+	}
+	output.data[col_offset + 2].SetValue(row, Value(dtype_str));
+
+	// Shape column
+	if (uns_info.type == "scalar") {
+		output.data[col_offset + 3].SetValue(row, Value("()"));
+	} else if (uns_info.type == "array" && !uns_info.shape.empty()) {
+		string shape_str = "(";
+		for (size_t j = 0; j < uns_info.shape.size(); j++) {
+			if (j > 0) {
+				shape_str += ", ";
+			}
+			shape_str += to_string(uns_info.shape[j]);
+		}
+		shape_str += ")";
+		output.data[col_offset + 3].SetValue(row, Value(shape_str));
+	} else {
+		output.data[col_offset + 3].SetValue(row, Value()); // NULL for groups, dataframes and empty arrays
+	}
+
+	// Value column - UNION type with scalar or arr variant
+	child_list_t<LogicalType> union_members;
+	union_members.emplace_back("scalar", LogicalType::VARCHAR);
+	union_members.emplace_back("arr", LogicalType::LIST(LogicalType::VARCHAR));
+
+	if (uns_info.type == "scalar") {
+		// Scalar value - use the "scalar" variant of the UNION (tag 0). Key discovery reads every
+		// supported scalar class, so an empty string here is NULL.
+		if (!uns_info.value_str.empty()) {
+			output.data[col_offset + 4].SetValue(row, Value::UNION(union_members, 0, Value(uns_info.value_str)));
+		} else {
+			output.data[col_offset + 4].SetValue(row, Value());
+		}
+	} else if (uns_info.type == "array" && UnsArrayElementCount(uns_info) > 0) {
+		// Array value - use the "arr" variant of the UNION (tag 1)
+		if (!gstate.h5_reader) {
+			gstate.OpenCurrentFile(context, bind_data);
+		}
+		auto array_values = gstate.h5_reader->ReadUnsArrayAsStrings(uns_info.key);
+		if (!array_values.empty()) {
+			vector<Value> list_values;
+			list_values.reserve(array_values.size());
+			for (const auto &val : array_values) {
+				list_values.emplace_back(val);
+			}
+			Value list_val = Value::LIST(LogicalType::VARCHAR, std::move(list_values));
+			output.data[col_offset + 4].SetValue(row, Value::UNION(union_members, 1, std::move(list_val)));
+		} else {
+			output.data[col_offset + 4].SetValue(row, Value()); // NULL for unsupported element types
+		}
+	} else {
+		output.data[col_offset + 4].SetValue(row, Value()); // NULL for empty arrays or other types
+	}
+}
+
 unique_ptr<FunctionData> AnndataScanner::UnsBind(ClientContext &context, TableFunctionBindInput &input,
                                                  vector<LogicalType> &return_types, compat::BindColumnNames &names) {
-	auto bind_data = make_uniq<AnndataBindData>(input.inputs[0].GetValue<string>());
+	string file_pattern = input.inputs[0].GetValue<string>();
+
+	// Expand glob pattern
+	auto glob_result = GlobHandler::ExpandGlobPattern(context, file_pattern);
+	if (glob_result.matched_files.empty()) {
+		throw InvalidInputException("No files found matching pattern: " + file_pattern);
+	}
+
+	auto bind_data = make_uniq<AnndataBindData>(glob_result.matched_files, glob_result.is_pattern ? file_pattern : "");
 	bind_data->is_uns_scan = true;
+	// A pattern always selects multi-file mode, even when it matches a single file, so the output
+	// schema does not depend on how many files happen to match (same rule as obs/var/X).
+	bind_data->is_multi_file = glob_result.is_pattern || glob_result.matched_files.size() > 1;
 
-	if (!IsAnndataFile(context, bind_data->file_path)) {
-		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
+	// Validate every file and collect its uns keys. Rows are file-scoped: each file's keys are
+	// appended in file order and file_row_counts delimits them for the scan.
+	for (const auto &file_path : bind_data->file_paths) {
+		if (!IsAnndataFile(context, file_path)) {
+			throw InvalidInputException("File is not a valid AnnData file: " + file_path);
+		}
+
+		auto reader_ptr = CreateH5Reader(context, file_path);
+		auto &reader = *reader_ptr;
+
+		if (!reader.IsValidAnnData()) {
+			throw InvalidInputException("File is not a valid AnnData format: " + file_path);
+		}
+
+		auto file_keys = reader.GetUnsKeys(false); // metadata only; array values are read at scan
+		bind_data->harmonized_schema.file_row_counts.push_back(file_keys.size());
+		for (auto &key : file_keys) {
+			bind_data->uns_keys.push_back(std::move(key));
+		}
 	}
+	bind_data->harmonized_schema.total_row_count = bind_data->uns_keys.size();
 
-	// Open the HDF5 file to get uns keys
-	auto reader_ptr = CreateH5Reader(context, bind_data->file_path);
-	auto &reader = *reader_ptr;
-
-	if (!reader.IsValidAnnData()) {
-		throw InvalidInputException("File is not a valid AnnData format: " + bind_data->file_path);
-	}
-
-	// Get uns keys
-	bind_data->uns_keys = reader.GetUnsKeys();
-
-	if (bind_data->uns_keys.empty()) {
+	if (bind_data->is_multi_file) {
+		// Multi-file: fixed schema with _file_name first. Files without uns data contribute no
+		// rows, so the result may be empty but its shape never changes.
+		names.emplace_back("_file_name");
+		return_types.push_back(LogicalType::VARCHAR);
+		AddUnsColumns(return_types, names);
+		bind_data->row_count = bind_data->uns_keys.size();
+	} else if (bind_data->uns_keys.empty()) {
 		// No uns data - return empty result with just a message column
 		names.emplace_back("message");
 		return_types.push_back(LogicalType::VARCHAR);
 		bind_data->row_count = 1;
 	} else {
-		// Set up column schema
-		names.emplace_back("key");
-		return_types.push_back(LogicalType::VARCHAR);
-
-		names.emplace_back("type");
-		return_types.push_back(LogicalType::VARCHAR);
-
-		names.emplace_back("dtype");
-		return_types.push_back(LogicalType::VARCHAR);
-
-		names.emplace_back("shape");
-		return_types.push_back(LogicalType::VARCHAR);
-
-		names.emplace_back("value");
-		// UNION type: scalar VARCHAR or arr LIST(VARCHAR)
-		child_list_t<LogicalType> union_members;
-		union_members.emplace_back("scalar", LogicalType::VARCHAR);
-		union_members.emplace_back("arr", LogicalType::LIST(LogicalType::VARCHAR));
-		return_types.push_back(LogicalType::UNION(std::move(union_members)));
-
+		AddUnsColumns(return_types, names);
 		bind_data->row_count = bind_data->uns_keys.size();
 	}
 
@@ -1980,114 +2130,60 @@ void AnndataScanner::UnsScan(ClientContext &context, TableFunctionInput &data, D
 	auto &bind_data = (AnndataBindData &)*data.bind_data;
 	auto &gstate = (AnndataGlobalState &)*data.global_state;
 
-	// Open file on first scan
-	if (!gstate.h5_reader) {
-		gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
-	}
-
-	if (bind_data.uns_keys.empty()) {
-		// No uns data - return single row with message
-		if (gstate.current_row == 0) {
-			output.data[0].SetValue(0, Value("No uns data in file"));
-			compat::SetChunkCardinality(output, 1);
-			gstate.current_row = 1;
+	if (!bind_data.is_multi_file) {
+		// Single file mode
+		if (bind_data.uns_keys.empty()) {
+			// No uns data - return single row with message
+			if (gstate.current_row == 0) {
+				output.data[0].SetValue(0, Value("No uns data in file"));
+				compat::SetChunkCardinality(output, 1);
+				gstate.current_row = 1;
+			}
+			return;
 		}
+
+		idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
+		if (count == 0) {
+			return;
+		}
+
+		for (idx_t i = 0; i < count; i++) {
+			FillUnsRow(context, gstate, bind_data, output, 0, i, bind_data.uns_keys[gstate.current_row + i]);
+		}
+
+		gstate.current_row += count;
+		compat::SetChunkCardinality(output, count);
 		return;
 	}
 
-	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.row_count - gstate.current_row);
-	if (count == 0) {
+	// Multi-file mode: emit each file's keys in file order, tagged with _file_name in column 0
+	const auto &file_row_counts = bind_data.harmonized_schema.file_row_counts;
+	idx_t n_files = bind_data.file_paths.size();
+
+	// Move past files whose keys are exhausted (or that have no uns data)
+	while (gstate.current_file_idx < n_files &&
+	       gstate.current_row_in_file >= file_row_counts[gstate.current_file_idx]) {
+		gstate.current_file_idx++;
+		gstate.current_row_in_file = 0;
+		gstate.h5_reader.reset(); // the next file is opened on demand by FillUnsRow
+	}
+	if (gstate.current_file_idx >= n_files) {
+		compat::SetChunkCardinality(output, 0);
 		return;
 	}
 
-	// Fill columns with uns metadata
+	// Rows are emitted strictly in order, so current_row is also the index of the next key in the
+	// flat uns_keys vector (files are concatenated there in the same order)
+	idx_t count =
+	    MinValue<idx_t>(STANDARD_VECTOR_SIZE, file_row_counts[gstate.current_file_idx] - gstate.current_row_in_file);
+	string file_name = GlobHandler::GetBaseName(bind_data.file_paths[gstate.current_file_idx]);
+	auto &file_name_vec = output.data[0];
 	for (idx_t i = 0; i < count; i++) {
-		idx_t idx = gstate.current_row + i;
-		const auto &uns_info = bind_data.uns_keys[idx];
-
-		// Key column
-		output.data[0].SetValue(i, Value(uns_info.key));
-
-		// Type column
-		output.data[1].SetValue(i, Value(uns_info.type));
-
-		// Dtype column
-		string dtype_str;
-		switch (uns_info.dtype.id()) {
-		case LogicalTypeId::VARCHAR:
-			dtype_str = "string";
-			break;
-		case LogicalTypeId::BIGINT:
-			dtype_str = "int64";
-			break;
-		case LogicalTypeId::INTEGER:
-			dtype_str = "int32";
-			break;
-		case LogicalTypeId::DOUBLE:
-			dtype_str = "float64";
-			break;
-		case LogicalTypeId::BOOLEAN:
-			dtype_str = "bool";
-			break;
-		default:
-			dtype_str = "unknown";
-			break;
-		}
-		output.data[2].SetValue(i, Value(dtype_str));
-
-		// Shape column
-		if (uns_info.type == "scalar") {
-			output.data[3].SetValue(i, Value("()"));
-		} else if (uns_info.type == "array" && !uns_info.shape.empty()) {
-			string shape_str = "(";
-			for (size_t j = 0; j < uns_info.shape.size(); j++) {
-				if (j > 0)
-					shape_str += ", ";
-				shape_str += to_string(uns_info.shape[j]);
-			}
-			shape_str += ")";
-			output.data[3].SetValue(i, Value(shape_str));
-		} else if (uns_info.type == "group" || uns_info.type == "dataframe") {
-			output.data[3].SetValue(i, Value()); // NULL for groups
-		} else {
-			output.data[3].SetValue(i, Value());
-		}
-
-		// Value column - UNION type with scalar or arr variant
-		// Create members list for UNION value creation
-		child_list_t<LogicalType> union_members;
-		union_members.emplace_back("scalar", LogicalType::VARCHAR);
-		union_members.emplace_back("arr", LogicalType::LIST(LogicalType::VARCHAR));
-
-		if (uns_info.type == "scalar") {
-			// Scalar value - use the "scalar" variant of the UNION (tag 0)
-			string scalar_str;
-			if (!uns_info.value_str.empty()) {
-				scalar_str = uns_info.value_str;
-			} else {
-				Value scalar_value = gstate.h5_reader->ReadUnsScalar(uns_info.key);
-				if (!scalar_value.IsNull()) {
-					scalar_str = scalar_value.ToString();
-				}
-			}
-			if (!scalar_str.empty()) {
-				output.data[4].SetValue(i, Value::UNION(union_members, 0, Value(scalar_str)));
-			} else {
-				output.data[4].SetValue(i, Value());
-			}
-		} else if (uns_info.type == "array" && !uns_info.array_values.empty()) {
-			// Array value - use the "arr" variant of the UNION (tag 1)
-			vector<Value> list_values;
-			for (const auto &val : uns_info.array_values) {
-				list_values.emplace_back(val);
-			}
-			Value list_val = Value::LIST(LogicalType::VARCHAR, std::move(list_values));
-			output.data[4].SetValue(i, Value::UNION(union_members, 1, std::move(list_val)));
-		} else {
-			output.data[4].SetValue(i, Value()); // NULL for empty arrays or other types
-		}
+		compat::FlatVectorGetData<string_t>(file_name_vec)[i] = StringVector::AddString(file_name_vec, file_name);
+		FillUnsRow(context, gstate, bind_data, output, 1, i, bind_data.uns_keys[gstate.current_row + i]);
 	}
 
+	gstate.current_row_in_file += count;
 	gstate.current_row += count;
 	compat::SetChunkCardinality(output, count);
 }
@@ -2114,6 +2210,9 @@ unique_ptr<FunctionData> AnndataScanner::ObspBind(ClientContext &context, TableF
 	auto bind_data =
 	    make_uniq<AnndataBindData>(glob_result.matched_files, glob_result.is_pattern ? file_path_input : "");
 	bind_data->is_obsp_scan = true;
+	// A pattern always selects multi-file mode, even when it matches a single file (same rule as
+	// every other scanner), so the output schema does not depend on how many files match.
+	bind_data->is_multi_file = glob_result.is_pattern || glob_result.matched_files.size() > 1;
 	bind_data->pairwise_matrix_name = matrix_name;
 
 	// Validate all files and collect nnz counts
@@ -2263,6 +2362,7 @@ unique_ptr<FunctionData> AnndataScanner::VarpBind(ClientContext &context, TableF
 	auto bind_data =
 	    make_uniq<AnndataBindData>(glob_result.matched_files, glob_result.is_pattern ? file_path_input : "");
 	bind_data->is_varp_scan = true;
+	bind_data->is_multi_file = glob_result.is_pattern || glob_result.matched_files.size() > 1;
 	bind_data->pairwise_matrix_name = matrix_name;
 
 	// Validate all files and collect nnz counts
@@ -2391,25 +2491,285 @@ void AnndataScanner::VarpScan(ClientContext &context, TableFunctionInput &data, 
 }
 
 // Table function for info
+
+// Collect the (property, value) rows describing one AnnData file
+static vector<pair<string, string>> CollectInfoRows(H5ReaderMultithreaded &reader, const string &file_path,
+                                                    const AnndataBindData &bind_data) {
+	vector<pair<string, string>> info_rows;
+
+	bool has_obs = reader.HasObs();
+	bool has_var = reader.HasVar();
+	bool has_X = reader.HasX();
+
+	// Declare at outer scope so groups/tables blocks can reference them
+	H5ReaderMultithreaded::XMatrixInfo x_info;
+	vector<H5ReaderMultithreaded::MatrixInfo> obsm_matrices;
+	vector<H5ReaderMultithreaded::MatrixInfo> varm_matrices;
+	vector<H5ReaderMultithreaded::LayerInfo> layers;
+	vector<string> obsp_keys;
+	vector<string> varp_keys;
+
+	// Basic file info
+	info_rows.emplace_back("file_path", file_path);
+	info_rows.emplace_back("n_obs", has_obs ? to_string(reader.GetObsCount()) : "N/A");
+	info_rows.emplace_back("n_vars", has_var ? to_string(reader.GetVarCount()) : "N/A");
+
+	// X matrix info
+	if (has_X) {
+		try {
+			x_info = reader.GetXMatrixInfo();
+			info_rows.emplace_back("x_shape", to_string(x_info.n_obs) + " x " + to_string(x_info.n_var));
+			info_rows.emplace_back("x_sparse", x_info.is_sparse ? "true" : "false");
+			if (x_info.is_sparse) {
+				info_rows.emplace_back("x_format", x_info.sparse_format);
+			}
+		} catch (...) {
+		}
+	}
+
+	// Count obsm matrices
+	if (has_obs) {
+		try {
+			obsm_matrices = reader.GetObsmMatrices();
+			if (!obsm_matrices.empty()) {
+				string obsm_list;
+				for (size_t i = 0; i < obsm_matrices.size(); ++i) {
+					if (i > 0) {
+						obsm_list += ", ";
+					}
+					obsm_list += obsm_matrices[i].name;
+				}
+				info_rows.emplace_back("obsm_keys", obsm_list);
+			}
+		} catch (...) {
+		}
+	}
+
+	// Count varm matrices
+	if (has_var) {
+		try {
+			varm_matrices = reader.GetVarmMatrices();
+			if (!varm_matrices.empty()) {
+				string varm_list;
+				for (size_t i = 0; i < varm_matrices.size(); ++i) {
+					if (i > 0) {
+						varm_list += ", ";
+					}
+					varm_list += varm_matrices[i].name;
+				}
+				info_rows.emplace_back("varm_keys", varm_list);
+			}
+		} catch (...) {
+		}
+	}
+
+	// Count layers
+	if (has_obs && has_var) {
+		try {
+			layers = reader.GetLayers();
+			if (!layers.empty()) {
+				string layer_list;
+				for (size_t i = 0; i < layers.size(); ++i) {
+					if (i > 0) {
+						layer_list += ", ";
+					}
+					layer_list += layers[i].name;
+				}
+				info_rows.emplace_back("layers", layer_list);
+			}
+		} catch (...) {
+		}
+	}
+
+	// Count obsp/varp
+	if (has_obs) {
+		try {
+			obsp_keys = reader.GetObspKeys();
+			if (!obsp_keys.empty()) {
+				string obsp_list;
+				for (size_t i = 0; i < obsp_keys.size(); ++i) {
+					if (i > 0) {
+						obsp_list += ", ";
+					}
+					obsp_list += obsp_keys[i];
+				}
+				info_rows.emplace_back("obsp_keys", obsp_list);
+			}
+		} catch (...) {
+		}
+	}
+
+	if (has_var) {
+		try {
+			varp_keys = reader.GetVarpKeys();
+			if (!varp_keys.empty()) {
+				string varp_list;
+				for (size_t i = 0; i < varp_keys.size(); ++i) {
+					if (i > 0) {
+						varp_list += ", ";
+					}
+					varp_list += varp_keys[i];
+				}
+				info_rows.emplace_back("varp_keys", varp_list);
+			}
+		} catch (...) {
+		}
+	}
+
+	// Check for uns data (metadata only: whether any entry exists)
+	auto uns_keys = reader.GetUnsKeys(false);
+
+	// Build list of available groups (HDF5 top-level groups present in the file)
+	{
+		string groups_list;
+		// obs and var are always present in valid AnnData
+		groups_list = "obs, var";
+		if (x_info.n_obs > 0 && x_info.n_var > 0) {
+			groups_list += ", X";
+		}
+		if (!obsm_matrices.empty()) {
+			groups_list += ", obsm";
+		}
+		if (!varm_matrices.empty()) {
+			groups_list += ", varm";
+		}
+		if (!layers.empty()) {
+			groups_list += ", layers";
+		}
+		if (!obsp_keys.empty()) {
+			groups_list += ", obsp";
+		}
+		if (!varp_keys.empty()) {
+			groups_list += ", varp";
+		}
+		if (!uns_keys.empty()) {
+			groups_list += ", uns";
+		}
+		info_rows.emplace_back("groups", groups_list);
+	}
+
+	// Build list of available tables (SQL-accessible views)
+	{
+		string tables_list = "obs, var, info";
+		if (x_info.n_obs > 0 && x_info.n_var > 0) {
+			tables_list += ", X";
+		}
+		for (const auto &m : obsm_matrices) {
+			tables_list += ", obsm_" + m.name;
+		}
+		for (const auto &m : varm_matrices) {
+			tables_list += ", varm_" + m.name;
+		}
+		for (const auto &l : layers) {
+			tables_list += ", layers_" + l.name;
+		}
+		for (const auto &k : obsp_keys) {
+			tables_list += ", obsp_" + k;
+		}
+		for (const auto &k : varp_keys) {
+			tables_list += ", varp_" + k;
+		}
+		if (!uns_keys.empty()) {
+			tables_list += ", uns";
+		}
+		info_rows.emplace_back("tables", tables_list);
+	}
+
+	// Var columns: read from bind data (same source as anndata_scan_x)
+	info_rows.emplace_back("var_name_column", bind_data.var_name_column);
+	info_rows.emplace_back("var_id_column", bind_data.var_id_column);
+
+	// Raw section info
+	if (reader.HasRawData()) {
+		info_rows.emplace_back("raw", "true");
+		try {
+			info_rows.emplace_back("raw_n_vars", to_string(reader.GetRawVarCount()));
+		} catch (...) {
+		}
+		try {
+			auto raw_x_info = reader.GetRawXMatrixInfo();
+			info_rows.emplace_back("raw_x_shape", to_string(raw_x_info.n_obs) + " x " + to_string(raw_x_info.n_var));
+			info_rows.emplace_back("raw_x_sparse", raw_x_info.is_sparse ? "true" : "false");
+			if (raw_x_info.is_sparse) {
+				info_rows.emplace_back("raw_x_format", raw_x_info.sparse_format);
+			}
+		} catch (...) {
+		}
+		try {
+			auto raw_varm = reader.GetRawVarmMatrices();
+			if (!raw_varm.empty()) {
+				string raw_varm_list;
+				for (size_t i = 0; i < raw_varm.size(); ++i) {
+					if (i > 0) {
+						raw_varm_list += ", ";
+					}
+					raw_varm_list += raw_varm[i].name;
+				}
+				info_rows.emplace_back("raw_varm_keys", raw_varm_list);
+			}
+		} catch (...) {
+		}
+	}
+
+	return info_rows;
+}
+
+// Write info rows into the chunk starting at column col_offset. Returns the number written,
+// capped at the vector size.
+static idx_t EmitInfoRows(DataChunk &output, idx_t col_offset, const vector<pair<string, string>> &info_rows) {
+	auto &property_vec = output.data[col_offset];
+	auto &value_vec = output.data[col_offset + 1];
+	idx_t result_idx = 0;
+	for (const auto &row : info_rows) {
+		if (result_idx >= STANDARD_VECTOR_SIZE) {
+			break;
+		}
+		compat::FlatVectorGetData<string_t>(property_vec)[result_idx] =
+		    StringVector::AddString(property_vec, row.first);
+		compat::FlatVectorGetData<string_t>(value_vec)[result_idx] = StringVector::AddString(value_vec, row.second);
+		result_idx++;
+	}
+	return result_idx;
+}
+
+// Open a file for the info scan, converting open failures into a user-facing error
+static unique_ptr<H5ReaderMultithreaded> OpenInfoReader(ClientContext &context, const string &file_path) {
+	try {
+		return CreateH5Reader(context, file_path);
+	} catch (const std::exception &e) {
+		throw InvalidInputException("Failed to open AnnData file '%s': %s", file_path.c_str(), e.what());
+	} catch (...) {
+		throw InvalidInputException("Failed to open AnnData file '%s'", file_path.c_str());
+	}
+}
+
 unique_ptr<FunctionData> AnndataScanner::InfoBind(ClientContext &context, TableFunctionBindInput &input,
                                                   vector<LogicalType> &return_types, compat::BindColumnNames &names) {
 	if (input.inputs.empty()) {
 		throw InvalidInputException("anndata_info requires at least 1 parameter: file_path");
 	}
 
-	auto file_path = input.inputs[0].GetValue<string>();
-	auto bind_data = make_uniq<AnndataBindData>(file_path);
+	auto file_pattern = input.inputs[0].GetValue<string>();
 
-	// Basic file extension check
-	if (!IsAnndataFile(context, bind_data->file_path)) {
-		throw InvalidInputException("File is not a valid AnnData file: " + bind_data->file_path);
+	// Expand glob pattern
+	auto glob_result = GlobHandler::ExpandGlobPattern(context, file_pattern);
+	if (glob_result.matched_files.empty()) {
+		throw InvalidInputException("No files found matching pattern: " + file_pattern);
 	}
 
-	// We'll validate the file content when we actually open it in InfoScan
-	// to avoid opening the file twice
+	auto bind_data = make_uniq<AnndataBindData>(glob_result.matched_files, glob_result.is_pattern ? file_pattern : "");
 	bind_data->is_info_scan = true;
+	// A pattern always selects multi-file mode, even when it matches a single file (see UnsBind)
+	bind_data->is_multi_file = glob_result.is_pattern || glob_result.matched_files.size() > 1;
 
-	// Check for optional var_name_column and var_id_column parameters
+	// Basic validation of every file; each file is opened again in InfoScan to read its properties
+	for (const auto &file_path : bind_data->file_paths) {
+		if (!IsAnndataFile(context, file_path)) {
+			throw InvalidInputException("File is not a valid AnnData file: " + file_path);
+		}
+	}
+
+	// Check for optional var_name_column and var_id_column parameters (they apply to every file)
 	if (input.inputs.size() > 1) {
 		bind_data->var_name_column = input.inputs[1].GetValue<string>();
 	}
@@ -2417,14 +2777,18 @@ unique_ptr<FunctionData> AnndataScanner::InfoBind(ClientContext &context, TableF
 		bind_data->var_id_column = input.inputs[2].GetValue<string>();
 	}
 
-	// Define output schema for info table
+	// Define output schema for info table; multi-file mode adds _file_name first
+	if (bind_data->is_multi_file) {
+		names.emplace_back("_file_name");
+		return_types.emplace_back(LogicalType::VARCHAR);
+	}
 	names.emplace_back("property");
 	return_types.emplace_back(LogicalType::VARCHAR);
 	names.emplace_back("value");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
 	// We'll create multiple rows with different properties
-	bind_data->row_count = 10; // Approximate number of info rows
+	bind_data->row_count = 10 * bind_data->file_paths.size(); // Approximate number of info rows
 
 	return std::move(bind_data);
 }
@@ -2433,263 +2797,43 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 	auto &bind_data = (AnndataBindData &)*data.bind_data;
 	auto &gstate = (AnndataGlobalState &)*data.global_state;
 
-	// Initialize H5Reader if not already done
-	if (!gstate.h5_reader) {
-		try {
-			gstate.h5_reader = CreateH5Reader(context, bind_data.file_path);
-		} catch (const std::exception &e) {
-			throw InvalidInputException("Failed to open AnnData file '%s': %s", bind_data.file_path.c_str(), e.what());
-		} catch (...) {
-			throw InvalidInputException("Failed to open AnnData file '%s'", bind_data.file_path.c_str());
-		}
-	}
-
 	compat::SetChunkCardinality(output, 0);
-	idx_t result_idx = 0;
 
-	// Prepare output vectors
-	auto &property_vec = output.data[0];
-	auto &value_vec = output.data[1];
-
-	// Collect all info in one scan
-	if (gstate.current_row == 0) {
-		vector<pair<string, string>> info_rows;
-
-		bool has_obs = gstate.h5_reader->HasObs();
-		bool has_var = gstate.h5_reader->HasVar();
-		bool has_X = gstate.h5_reader->HasX();
-
-		// Declare at outer scope so groups/tables blocks can reference them
-		H5ReaderMultithreaded::XMatrixInfo x_info;
-		vector<H5ReaderMultithreaded::MatrixInfo> obsm_matrices;
-		vector<H5ReaderMultithreaded::MatrixInfo> varm_matrices;
-		vector<H5ReaderMultithreaded::LayerInfo> layers;
-		vector<string> obsp_keys;
-		vector<string> varp_keys;
-
-		// Basic file info
-		info_rows.emplace_back("file_path", bind_data.file_path);
-		info_rows.emplace_back("n_obs", has_obs ? to_string(gstate.h5_reader->GetObsCount()) : "N/A");
-		info_rows.emplace_back("n_vars", has_var ? to_string(gstate.h5_reader->GetVarCount()) : "N/A");
-
-		// X matrix info
-		if (has_X) {
-			try {
-				x_info = gstate.h5_reader->GetXMatrixInfo();
-				info_rows.emplace_back("x_shape", to_string(x_info.n_obs) + " x " + to_string(x_info.n_var));
-				info_rows.emplace_back("x_sparse", x_info.is_sparse ? "true" : "false");
-				if (x_info.is_sparse) {
-					info_rows.emplace_back("x_format", x_info.sparse_format);
-				}
-			} catch (...) {
-			}
+	if (!bind_data.is_multi_file) {
+		// Single file mode: every row is produced by the first call
+		if (gstate.current_row > 0) {
+			return;
 		}
-
-		// Count obsm matrices
-		if (has_obs) {
-			try {
-				obsm_matrices = gstate.h5_reader->GetObsmMatrices();
-				if (!obsm_matrices.empty()) {
-					string obsm_list;
-					for (size_t i = 0; i < obsm_matrices.size(); ++i) {
-						if (i > 0) {
-							obsm_list += ", ";
-						}
-						obsm_list += obsm_matrices[i].name;
-					}
-					info_rows.emplace_back("obsm_keys", obsm_list);
-				}
-			} catch (...) {
-			}
+		if (!gstate.h5_reader) {
+			gstate.h5_reader = OpenInfoReader(context, bind_data.file_path);
 		}
-
-		// Count varm matrices
-		if (has_var) {
-			try {
-				varm_matrices = gstate.h5_reader->GetVarmMatrices();
-				if (!varm_matrices.empty()) {
-					string varm_list;
-					for (size_t i = 0; i < varm_matrices.size(); ++i) {
-						if (i > 0) {
-							varm_list += ", ";
-						}
-						varm_list += varm_matrices[i].name;
-					}
-					info_rows.emplace_back("varm_keys", varm_list);
-				}
-			} catch (...) {
-			}
-		}
-
-		// Count layers
-		if (has_obs && has_var) {
-			try {
-				layers = gstate.h5_reader->GetLayers();
-				if (!layers.empty()) {
-					string layer_list;
-					for (size_t i = 0; i < layers.size(); ++i) {
-						if (i > 0) {
-							layer_list += ", ";
-						}
-						layer_list += layers[i].name;
-					}
-					info_rows.emplace_back("layers", layer_list);
-				}
-			} catch (...) {
-			}
-		}
-
-		// Count obsp/varp
-		if (has_obs) {
-			try {
-				obsp_keys = gstate.h5_reader->GetObspKeys();
-				if (!obsp_keys.empty()) {
-					string obsp_list;
-					for (size_t i = 0; i < obsp_keys.size(); ++i) {
-						if (i > 0) {
-							obsp_list += ", ";
-						}
-						obsp_list += obsp_keys[i];
-					}
-					info_rows.emplace_back("obsp_keys", obsp_list);
-				}
-			} catch (...) {
-			}
-		}
-
-		if (has_var) {
-			try {
-				varp_keys = gstate.h5_reader->GetVarpKeys();
-				if (!varp_keys.empty()) {
-					string varp_list;
-					for (size_t i = 0; i < varp_keys.size(); ++i) {
-						if (i > 0) {
-							varp_list += ", ";
-						}
-						varp_list += varp_keys[i];
-					}
-					info_rows.emplace_back("varp_keys", varp_list);
-				}
-			} catch (...) {
-			}
-		}
-
-		// Check for uns data
-		auto uns_keys = gstate.h5_reader->GetUnsKeys();
-
-		// Build list of available groups (HDF5 top-level groups present in the file)
-		{
-			string groups_list;
-			// obs and var are always present in valid AnnData
-			groups_list = "obs, var";
-			if (x_info.n_obs > 0 && x_info.n_var > 0) {
-				groups_list += ", X";
-			}
-			if (!obsm_matrices.empty()) {
-				groups_list += ", obsm";
-			}
-			if (!varm_matrices.empty()) {
-				groups_list += ", varm";
-			}
-			if (!layers.empty()) {
-				groups_list += ", layers";
-			}
-			if (!obsp_keys.empty()) {
-				groups_list += ", obsp";
-			}
-			if (!varp_keys.empty()) {
-				groups_list += ", varp";
-			}
-			if (!uns_keys.empty()) {
-				groups_list += ", uns";
-			}
-			info_rows.emplace_back("groups", groups_list);
-		}
-
-		// Build list of available tables (SQL-accessible views)
-		{
-			string tables_list = "obs, var, info";
-			if (x_info.n_obs > 0 && x_info.n_var > 0) {
-				tables_list += ", X";
-			}
-			for (const auto &m : obsm_matrices) {
-				tables_list += ", obsm_" + m.name;
-			}
-			for (const auto &m : varm_matrices) {
-				tables_list += ", varm_" + m.name;
-			}
-			for (const auto &l : layers) {
-				tables_list += ", layers_" + l.name;
-			}
-			for (const auto &k : obsp_keys) {
-				tables_list += ", obsp_" + k;
-			}
-			for (const auto &k : varp_keys) {
-				tables_list += ", varp_" + k;
-			}
-			if (!uns_keys.empty()) {
-				tables_list += ", uns";
-			}
-			info_rows.emplace_back("tables", tables_list);
-		}
-
-		// Var columns: read from bind data (same source as anndata_scan_x)
-		info_rows.emplace_back("var_name_column", bind_data.var_name_column);
-		info_rows.emplace_back("var_id_column", bind_data.var_id_column);
-
-		// Raw section info
-		if (gstate.h5_reader->HasRawData()) {
-			info_rows.emplace_back("raw", "true");
-			try {
-				info_rows.emplace_back("raw_n_vars", to_string(gstate.h5_reader->GetRawVarCount()));
-			} catch (...) {
-			}
-			try {
-				auto raw_x_info = gstate.h5_reader->GetRawXMatrixInfo();
-				info_rows.emplace_back("raw_x_shape",
-				                       to_string(raw_x_info.n_obs) + " x " + to_string(raw_x_info.n_var));
-				info_rows.emplace_back("raw_x_sparse", raw_x_info.is_sparse ? "true" : "false");
-				if (raw_x_info.is_sparse) {
-					info_rows.emplace_back("raw_x_format", raw_x_info.sparse_format);
-				}
-			} catch (...) {
-			}
-			try {
-				auto raw_varm = gstate.h5_reader->GetRawVarmMatrices();
-				if (!raw_varm.empty()) {
-					string raw_varm_list;
-					for (size_t i = 0; i < raw_varm.size(); ++i) {
-						if (i > 0) {
-							raw_varm_list += ", ";
-						}
-						raw_varm_list += raw_varm[i].name;
-					}
-					info_rows.emplace_back("raw_varm_keys", raw_varm_list);
-				}
-			} catch (...) {
-			}
-		}
-
-		// Output rows
-		for (const auto &row : info_rows) {
-			if (result_idx >= STANDARD_VECTOR_SIZE) {
-				break;
-			}
-			compat::FlatVectorGetData<string_t>(property_vec)[result_idx] =
-			    StringVector::AddString(property_vec, row.first);
-			compat::FlatVectorGetData<string_t>(value_vec)[result_idx] = StringVector::AddString(value_vec, row.second);
-			result_idx++;
-		}
-
+		auto info_rows = CollectInfoRows(*gstate.h5_reader, bind_data.file_path, bind_data);
+		idx_t result_idx = EmitInfoRows(output, 0, info_rows);
 		gstate.current_row = info_rows.size();
+		compat::SetChunkCardinality(output, result_idx);
+		return;
 	}
 
+	// Multi-file mode: one file per call, its rows tagged with _file_name in column 0. Every file
+	// yields at least its file_path row, so the loop only guards against an empty chunk ending the
+	// scan early.
+	idx_t result_idx = 0;
+	while (result_idx == 0 && gstate.current_file_idx < bind_data.file_paths.size()) {
+		const string &file_path = bind_data.file_paths[gstate.current_file_idx];
+		auto reader = OpenInfoReader(context, file_path);
+		auto info_rows = CollectInfoRows(*reader, file_path, bind_data);
+		result_idx = EmitInfoRows(output, 1, info_rows);
+
+		string file_name = GlobHandler::GetBaseName(file_path);
+		auto &file_name_vec = output.data[0];
+		for (idx_t i = 0; i < result_idx; i++) {
+			compat::FlatVectorGetData<string_t>(file_name_vec)[i] = StringVector::AddString(file_name_vec, file_name);
+		}
+
+		gstate.current_row += result_idx;
+		gstate.current_file_idx++;
+	}
 	compat::SetChunkCardinality(output, result_idx);
-
-	// If we've output all rows, we're done
-	if (result_idx == 0) {
-		compat::SetChunkCardinality(output, 0);
-	}
 }
 
 // Register the table functions

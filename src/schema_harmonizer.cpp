@@ -32,8 +32,23 @@ LogicalType SchemaHarmonizer::CoerceTypes(const LogicalType &type1, const Logica
 		if (type1 == LogicalType::FLOAT || type2 == LogicalType::FLOAT) {
 			return LogicalType::DOUBLE;
 		}
-		if (type1 == LogicalType::BIGINT || type2 == LogicalType::BIGINT) {
-			return LogicalType::BIGINT;
+		// Integers: unsigned with unsigned stays unsigned; unsigned with signed needs one more bit
+		// than the unsigned width, so UBIGINT falls back to HUGEINT and everything else fits BIGINT
+		auto is_unsigned = [](const LogicalType &t) {
+			return t.id() == LogicalTypeId::UTINYINT || t.id() == LogicalTypeId::USMALLINT ||
+			       t.id() == LogicalTypeId::UINTEGER || t.id() == LogicalTypeId::UBIGINT;
+		};
+		// A HUGEINT already holds every integer we produce, so it wins over any further integer
+		if (type1.id() == LogicalTypeId::HUGEINT || type2.id() == LogicalTypeId::HUGEINT) {
+			return LogicalType::HUGEINT;
+		}
+		bool u1 = is_unsigned(type1), u2 = is_unsigned(type2);
+		if (u1 && u2) {
+			return LogicalType::UBIGINT;
+		}
+		if (u1 != u2) {
+			const LogicalType &unsigned_type = u1 ? type1 : type2;
+			return unsigned_type.id() == LogicalTypeId::UBIGINT ? LogicalType::HUGEINT : LogicalType::BIGINT;
 		}
 		return LogicalType::BIGINT;
 	}
@@ -49,17 +64,9 @@ HarmonizedSchema SchemaHarmonizer::ComputeObsVarSchema(const vector<FileSchema> 
 		return result;
 	}
 
-	if (file_schemas.size() == 1) {
-		// Single file - just copy the schema
-		result.columns = file_schemas[0].columns;
-		result.file_column_mappings.emplace_back();
-		for (idx_t i = 0; i < result.columns.size(); i++) {
-			result.file_column_mappings[0].push_back(static_cast<int>(i));
-		}
-		result.file_row_counts.push_back(file_schemas[0].n_obs > 0 ? file_schemas[0].n_obs : file_schemas[0].n_var);
-		result.total_row_count = result.file_row_counts[0];
-		return result;
-	}
+	// A single file goes through the general path below: the intersection or union of one schema is
+	// that schema, and it fills file_original_names, which ObsScan/VarScan need. (An earlier shortcut
+	// skipped that field and crashed every pattern that matched exactly one file.)
 
 	// Build column name -> info map for each file
 	vector<unordered_map<string, pair<idx_t, AnndataColumnInfo>>> file_column_maps;

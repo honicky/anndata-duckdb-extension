@@ -16,6 +16,9 @@ require httpfs
 #   wildcard_sample1.h5ad
 #   wildcard_sample2.h5ad
 #   wildcard_sample3.h5ad
+#   wildcard_uns_sample1.h5ad
+#   wildcard_uns_sample2.h5ad
+#   wildcard_uns_sample3.h5ad
 
 require-env ANNDATA_TEST_S3_ENDPOINT
 
@@ -212,6 +215,60 @@ SELECT COUNT(*) FROM (
 );
 ----
 15
+
+# =============================================================================
+# Test 12: anndata_scan_uns with S3 wildcards (file-scoped rows)
+# =============================================================================
+
+# wildcard_uns_sample{1,2,3}.h5ad each carry 6 flattened uns entries
+query I
+SELECT COUNT(*) FROM anndata_scan_uns('s3://data/wildcard_uns_sample*.h5ad');
+----
+18
+
+query I
+SELECT COUNT(DISTINCT _file_name) FROM anndata_scan_uns('s3://data/wildcard_uns_sample*.h5ad');
+----
+3
+
+query III
+SELECT _file_name, key, value.scalar FROM anndata_scan_uns('s3://data/wildcard_uns_sample*.h5ad')
+WHERE key = 'pca/params/n_comps' ORDER BY _file_name;
+----
+wildcard_uns_sample1.h5ad	pca/params/n_comps	30
+wildcard_uns_sample2.h5ad	pca/params/n_comps	50
+wildcard_uns_sample3.h5ad	pca/params/n_comps	20
+
+# Files with an empty /uns group contribute no rows
+query I
+SELECT COUNT(*) FROM anndata_scan_uns('s3://data/wildcard_sample*.h5ad');
+----
+0
+
+# =============================================================================
+# Test 13: anndata_info with S3 wildcards (file-scoped rows)
+# =============================================================================
+
+query II
+SELECT _file_name, value FROM anndata_info('s3://data/wildcard_uns_sample*.h5ad')
+WHERE property = 'n_obs' ORDER BY _file_name;
+----
+wildcard_uns_sample1.h5ad	5
+wildcard_uns_sample2.h5ad	6
+wildcard_uns_sample3.h5ad	7
+
+query I
+SELECT SUM(CAST(value AS BIGINT)) FROM anndata_info('s3://data/wildcard_sample*.h5ad') WHERE property = 'n_obs';
+----
+60
+
+# file_path keeps the full S3 URL
+query I
+SELECT value FROM anndata_info('s3://data/wildcard_uns_sample*.h5ad') WHERE property = 'file_path' ORDER BY value;
+----
+s3://data/wildcard_uns_sample1.h5ad
+s3://data/wildcard_uns_sample2.h5ad
+s3://data/wildcard_uns_sample3.h5ad
 
 # =============================================================================
 # Cleanup

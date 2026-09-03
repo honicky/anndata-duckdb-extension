@@ -275,6 +275,84 @@ SELECT _file_name FROM anndata_scan_obs('test/data/wildcard_sample1.h5ad') LIMIT
 _file_name
 
 # =============================================================================
+# Test 16b: A pattern that matches exactly one file
+# =============================================================================
+
+# obs/var used to fail with an INTERNAL error here (per-file original names were not filled for one file)
+query II
+SELECT COUNT(*), COUNT(DISTINCT _file_name) FROM anndata_scan_obs('test/data/wildcard_sample[1].h5ad');
+----
+20	1
+
+# Every column of that file is readable, including the one unique to it
+query I
+SELECT COUNT(*) FROM anndata_scan_obs('test/data/wildcard_sample[1].h5ad')
+WHERE cell_type IS NOT NULL AND n_counts IS NOT NULL AND metric_alpha IS NOT NULL;
+----
+20
+
+query I
+SELECT COUNT(*) FROM anndata_scan_obs('test/data/wildcard_sample1*.h5ad', schema_mode := 'union')
+WHERE metric_alpha IS NOT NULL;
+----
+20
+
+query II
+SELECT COUNT(*), COUNT(DISTINCT _index) FROM anndata_scan_var('test/data/wildcard_sample[1].h5ad');
+----
+4	4
+
+query I
+SELECT COUNT(*) FROM anndata_scan_var('test/data/wildcard_sample[1].h5ad') WHERE gene_name IS NOT NULL;
+----
+4
+
+# The one-file pattern returns exactly the literal-path rows; only _file_name is added
+query I
+SELECT COUNT(*) FROM (
+    SELECT * EXCLUDE (_file_name) FROM anndata_scan_obs('test/data/wildcard_sample[1].h5ad')
+    EXCEPT ALL SELECT * FROM anndata_scan_obs('test/data/wildcard_sample1.h5ad'));
+----
+0
+
+query I
+SELECT COUNT(*) FROM (
+    SELECT * EXCLUDE (_file_name) FROM anndata_scan_var('test/data/wildcard_sample[1].h5ad', schema_mode := 'union')
+    EXCEPT ALL SELECT * FROM anndata_scan_var('test/data/wildcard_sample1.h5ad'));
+----
+0
+
+# The other scanners already handled this case
+query I
+SELECT COUNT(*) FROM anndata_scan_x('test/data/wildcard_sample[1].h5ad') WHERE Gene_A IS NOT NULL;
+----
+20
+
+query I
+SELECT COUNT(DISTINCT _file_name) FROM anndata_scan_obsm('test/data/wildcard_sample[1].h5ad', 'X_umap');
+----
+1
+
+# obsp/varp used to fall back to the single-file schema (no _file_name) for a one-file pattern
+query II
+SELECT COUNT(DISTINCT _file_name), COUNT(*) > 0 FROM anndata_scan_obsp('test/data/wildcard_sample[1].h5ad', 'distances');
+----
+1	true
+
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM anndata_scan_varp('test/data/wildcard_sample[1].h5ad', 'correlations')) LIMIT 1;
+----
+_file_name
+
+# and the pattern result equals the literal result apart from _file_name
+query I
+SELECT COUNT(*) FROM (
+    SELECT * EXCLUDE (_file_name) FROM anndata_scan_obsp('test/data/wildcard_sample[1].h5ad', 'distances')
+    EXCEPT ALL SELECT * FROM anndata_scan_obsp('test/data/wildcard_sample1.h5ad', 'distances'));
+----
+0
+
+# =============================================================================
 # Test 16: Empty pattern should error
 # =============================================================================
 

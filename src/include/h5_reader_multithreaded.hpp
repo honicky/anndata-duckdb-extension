@@ -48,6 +48,12 @@ public:
 		std::vector<std::string> categories;
 	};
 
+	// original_name of the synthetic row-index columns (displayed as obs_idx / var_idx). A leading '/'
+	// can never occur in an HDF5 link name, so a user column that is literally called obs_idx
+	// (displayed as obs_idx_) is never mistaken for the index when a column is read by original name.
+	static constexpr const char *OBS_INDEX_ORIGINAL_NAME = "/obs_idx";
+	static constexpr const char *VAR_INDEX_ORIGINAL_NAME = "/var_idx";
+
 	std::vector<ColumnInfo> GetObsColumns();
 	std::vector<ColumnInfo> GetVarColumns();
 
@@ -179,8 +185,12 @@ public:
 		std::vector<std::string> array_values; // For array values (as strings)
 	};
 
-	// Get list of uns keys
-	std::vector<UnsInfo> GetUnsKeys();
+	// Get list of uns keys. With read_array_values = false, array entries carry key/type/dtype/shape
+	// only and their values are left to ReadUnsArrayAsStrings, which keeps discovery cheap.
+	std::vector<UnsInfo> GetUnsKeys(bool read_array_values = true);
+
+	// Read every element of a uns array dataset as strings (same formatting as GetUnsKeys)
+	std::vector<std::string> ReadUnsArrayAsStrings(const std::string &key);
 
 	// Read uns scalar value
 	Value ReadUnsScalar(const std::string &key);
@@ -249,8 +259,47 @@ private:
 	void ReadCompoundDatasetColumn(const std::string &path, const std::string &column_name, Vector &result,
 	                               idx_t offset, idx_t count);
 
-	// Get cached categories for a categorical column (reads from HDF5 only once)
-	const std::vector<std::string> &GetCachedCategories(const std::string &group_path);
+	// Cache for categorical mappings. categories[i] is NULL when is_null[i] is set (a category stored
+	// in a nullable-string-array group with its mask bit on).
+	struct CategoricalCache {
+		std::vector<std::string> categories;
+		std::vector<bool> is_null;
+	};
+
+	// Get cached categories for a categorical column (reads from HDF5 only once). The categories
+	// member may be a plain dataset or, for pandas string columns written with
+	// allow_write_nullable_strings, a nullable-string-array group (values + mask).
+	const CategoricalCache &GetCachedCategories(const std::string &group_path);
+
+	// How a group-valued obs/var column is encoded: AnnData's "encoding-type" attribute, falling back
+	// to the datasets present (categories+codes, or values+mask). Cached per group path.
+	enum class ColumnGroupEncoding { CATEGORICAL, NULLABLE, UNKNOWN };
+	ColumnGroupEncoding GetColumnGroupEncoding(const std::string &group_path);
+	std::unordered_map<std::string, ColumnGroupEncoding> group_encoding_cache;
+
+	// Read a string attribute of an object; "" when absent or not a string
+	std::string ReadStringAttribute(hid_t obj_id, const std::string &attr_name);
+
+	// Fill col.type / col.is_categorical for a group-valued obs/var column; a malformed group binds as
+	// VARCHAR (and reads as NULL) instead of aborting discovery
+	void SetGroupColumnType(const std::string &group_path, ColumnInfo &col);
+	void SetGroupColumnTypeUnchecked(const std::string &group_path, ColumnInfo &col);
+
+	// Read one column of a new-format (group of datasets) obs/var frame at frame_path
+	void ReadDataFrameColumn(const std::string &frame_path, const std::string &column_name, Vector &result,
+	                         idx_t offset, idx_t count);
+
+	// Read a categorical group column (codes mapped through the cached categories)
+	void ReadCategoricalColumn(const std::string &group_path, Vector &result, idx_t offset, idx_t count);
+
+	// Read a nullable (values + mask) group column: values first, then NULL wherever mask is set
+	void ReadNullableColumn(const std::string &group_path, Vector &result, idx_t offset, idx_t count);
+
+	// Read rows [offset, offset + count) of a 1-D dataset into a DuckDB vector. Integers and floats are
+	// written through Vector::SetValue, so they cast to whatever type the vector was bound (or
+	// harmonized) to. HDF5 enums (h5py booleans) fill a BOOLEAN vector directly, become "True"/"False"
+	// in a VARCHAR vector, and are cast for anything else.
+	void ReadDatasetRange(const std::string &dataset_path, Vector &result, idx_t offset, idx_t count);
 
 	// Path-parameterized helpers for var/varm (shared between main and raw)
 	size_t GetVarCountAtPath(const std::string &var_path, const std::string &x_path);
@@ -265,11 +314,6 @@ private:
 	void ReadVarmMatrixAtPath(const std::string &varm_path, const std::string &matrix_name, idx_t row_start,
 	                          idx_t row_count, idx_t col_idx, Vector &result);
 
-	// Cache for categorical mappings
-	struct CategoricalCache {
-		std::vector<std::string> categories;
-		std::vector<int> codes;
-	};
 	std::unordered_map<std::string, CategoricalCache> categorical_cache;
 };
 

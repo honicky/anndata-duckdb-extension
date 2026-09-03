@@ -11,6 +11,10 @@
 
 namespace duckdb {
 
+// Defined with the uns helpers below; reads a whole 1-D dataset as strings
+static std::vector<std::string> ReadArrayAsStrings(hid_t file_handle, const std::string &path, hid_t dtype,
+                                                   hsize_t total_size, H5T_class_t type_class);
+
 // ============================================================================
 // Phase 2: Core Infrastructure - Constructor/Destructor and Helper Methods
 // ============================================================================
@@ -126,17 +130,56 @@ std::vector<std::string> H5ReaderMultithreaded::GetGroupMembers(const std::strin
 
 // Helper method to get cached categories for a categorical column
 // This avoids re-reading categories from HDF5 for every chunk
-const std::vector<std::string> &H5ReaderMultithreaded::GetCachedCategories(const std::string &group_path) {
+const H5ReaderMultithreaded::CategoricalCache &
+H5ReaderMultithreaded::GetCachedCategories(const std::string &group_path) {
 	// Check if we already have this in the cache
 	auto it = categorical_cache.find(group_path);
 	if (it != categorical_cache.end()) {
-		return it->second.categories;
+		return it->second;
 	}
 
 	// Read categories from HDF5 and cache them
 	std::vector<std::string> categories;
+	std::vector<bool> is_null;
 
-	H5DatasetHandle cat_dataset(*file_handle, group_path + "/categories");
+	std::string categories_path = group_path + "/categories";
+	if (H5GetObjectType(*file_handle, categories_path) == H5O_TYPE_GROUP) {
+		// nullable-string-array: values + mask (pandas string columns under allow_write_nullable_strings)
+		H5DatasetHandle values(*file_handle, categories_path + "/values");
+		H5DataspaceHandle values_space(values.get());
+		hsize_t n = 0;
+		H5Sget_simple_extent_dims(values_space.get(), &n, nullptr);
+		H5TypeHandle values_type(values.get(), H5TypeHandle::TypeClass::DATASET);
+		H5T_class_t values_class = H5Tget_class(values_type.get());
+		categories = ReadArrayAsStrings(*file_handle, categories_path + "/values", values_type.get(), n, values_class);
+		if (values_class == H5T_ENUM) {
+			// h5py booleans: spell them like every other boolean column ("True"/"False")
+			for (auto &category : categories) {
+				category = category == "true" ? "True" : category == "false" ? "False" : category;
+			}
+		}
+		is_null.assign(categories.size(), false);
+		if (H5LinkExists(*file_handle, categories_path + "/mask")) {
+			// Size the buffer by the mask's own extent: a mask longer than values must not overrun it
+			H5DatasetHandle mask(*file_handle, categories_path + "/mask");
+			H5DataspaceHandle mask_space(mask.get());
+			hssize_t n_mask = H5Sget_simple_extent_npoints(mask_space.get());
+			if (n_mask > 0) {
+				std::vector<int8_t> mask_buf(static_cast<size_t>(n_mask));
+				H5Dread(mask.get(), H5T_NATIVE_INT8, H5S_ALL, H5S_ALL, H5P_DEFAULT, mask_buf.data());
+				size_t n_apply = std::min(mask_buf.size(), categories.size());
+				for (size_t i = 0; i < n_apply; i++) {
+					is_null[i] = mask_buf[i] != 0;
+				}
+			}
+		}
+		CategoricalCache entry;
+		entry.categories = std::move(categories);
+		entry.is_null = std::move(is_null);
+		return categorical_cache[group_path] = std::move(entry);
+	}
+
+	H5DatasetHandle cat_dataset(*file_handle, categories_path);
 	H5DataspaceHandle cat_space(cat_dataset.get());
 	hsize_t cat_dims[1];
 	H5Sget_simple_extent_dims(cat_space.get(), cat_dims, nullptr);
@@ -176,7 +219,13 @@ const std::vector<std::string> &H5ReaderMultithreaded::GetCachedCategories(const
 	} else if (cat_class == H5T_INTEGER) {
 		// Integer categories
 		size_t int_size = H5Tget_size(cat_dtype.get());
-		if (int_size <= 4) {
+		if (H5Tget_sign(cat_dtype.get()) == H5T_SGN_NONE) {
+			std::vector<uint64_t> uint_cats(cat_dims[0]);
+			H5Dread(cat_dataset.get(), H5T_NATIVE_UINT64, H5S_ALL, H5S_ALL, H5P_DEFAULT, uint_cats.data());
+			for (size_t i = 0; i < cat_dims[0]; i++) {
+				categories.emplace_back(std::to_string(uint_cats[i]));
+			}
+		} else if (int_size <= 4) {
 			std::vector<int32_t> int_cats(cat_dims[0]);
 			H5Dread(cat_dataset.get(), H5T_NATIVE_INT32, H5S_ALL, H5S_ALL, H5P_DEFAULT, int_cats.data());
 			for (size_t i = 0; i < cat_dims[0]; i++) {
@@ -210,8 +259,9 @@ const std::vector<std::string> &H5ReaderMultithreaded::GetCachedCategories(const
 	// Store in cache and return reference
 	CategoricalCache cache_entry;
 	cache_entry.categories = std::move(categories);
+	cache_entry.is_null.assign(cache_entry.categories.size(), false);
 	auto result = categorical_cache.emplace(group_path, std::move(cache_entry));
-	return result.first->second.categories;
+	return result.first->second;
 }
 
 // Check if a path is a compound dataset (older AnnData format)
@@ -245,7 +295,7 @@ H5ReaderMultithreaded::GetCompoundDatasetColumns(const std::string &path, const 
 	// Add index column as the first column
 	ColumnInfo idx_col;
 	idx_col.name = idx_col_name;
-	idx_col.original_name = idx_col_name;
+	idx_col.original_name = "/" + idx_col_name; // see OBS_INDEX_ORIGINAL_NAME
 	idx_col.type = LogicalType::BIGINT;
 	idx_col.is_categorical = false;
 	columns.push_back(idx_col);
@@ -456,16 +506,17 @@ LogicalType H5ReaderMultithreaded::H5TypeToDuckDBType(hid_t h5_type) {
 	switch (type_class) {
 	case H5T_INTEGER: {
 		size_t size = H5Tget_size(h5_type);
+		bool is_unsigned = H5Tget_sign(h5_type) == H5T_SGN_NONE;
 		if (size <= 1) {
-			return LogicalType::TINYINT;
+			return is_unsigned ? LogicalType::UTINYINT : LogicalType::TINYINT;
 		}
 		if (size <= 2) {
-			return LogicalType::SMALLINT;
+			return is_unsigned ? LogicalType::USMALLINT : LogicalType::SMALLINT;
 		}
 		if (size <= 4) {
-			return LogicalType::INTEGER;
+			return is_unsigned ? LogicalType::UINTEGER : LogicalType::INTEGER;
 		}
-		return LogicalType::BIGINT;
+		return is_unsigned ? LogicalType::UBIGINT : LogicalType::BIGINT;
 	}
 	case H5T_FLOAT: {
 		size_t size = H5Tget_size(h5_type);
@@ -710,7 +761,7 @@ std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetObsColu
 	// Add obs_idx as the first column (row index)
 	ColumnInfo idx_col;
 	idx_col.name = "obs_idx";
-	idx_col.original_name = "obs_idx";
+	idx_col.original_name = OBS_INDEX_ORIGINAL_NAME;
 	idx_col.type = LogicalType::BIGINT;
 	idx_col.is_categorical = false;
 	columns.push_back(idx_col);
@@ -739,9 +790,8 @@ std::vector<H5ReaderMultithreaded::ColumnInfo> H5ReaderMultithreaded::GetObsColu
 			// Check if it's categorical (has codes and categories)
 			std::string member_path = "/obs/" + member;
 			if (H5GetObjectType(*file_handle, member_path) == H5O_TYPE_GROUP) {
-				col.is_categorical = true;
-				col.type = LogicalType::VARCHAR;
-				// Note: Categories are loaded lazily during query execution, not during schema discovery
+				// Categorical or nullable column (categories are loaded lazily at scan time)
+				SetGroupColumnType(member_path, col);
 			} else if (IsDatasetPresent("/obs", member)) {
 				// Direct dataset
 				H5DatasetHandle dataset(*file_handle, "/obs/" + member);
@@ -784,7 +834,7 @@ H5ReaderMultithreaded::GetVarColumnsAtPath(const std::string &var_path, const st
 	// Add idx column as the first column (row index)
 	ColumnInfo idx_col;
 	idx_col.name = idx_col_name;
-	idx_col.original_name = idx_col_name;
+	idx_col.original_name = "/" + idx_col_name; // see OBS_INDEX_ORIGINAL_NAME
 	idx_col.type = LogicalType::BIGINT;
 	idx_col.is_categorical = false;
 	columns.push_back(idx_col);
@@ -813,9 +863,8 @@ H5ReaderMultithreaded::GetVarColumnsAtPath(const std::string &var_path, const st
 			// Check if it's categorical
 			std::string member_path = var_path + "/" + member;
 			if (H5GetObjectType(*file_handle, member_path) == H5O_TYPE_GROUP) {
-				col.is_categorical = true;
-				col.type = LogicalType::VARCHAR;
-				// Note: Categories are loaded lazily during query execution, not during schema discovery
+				// Categorical or nullable column (categories are loaded lazily at scan time)
+				SetGroupColumnType(member_path, col);
 			} else if (IsDatasetPresent(var_path, member)) {
 				// Direct dataset
 				H5DatasetHandle dataset(*file_handle, var_path + "/" + member);
@@ -837,8 +886,8 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 	auto h5_lock = H5GlobalLock::Acquire();
 
 	try {
-		// Handle obs_idx column (row index)
-		if (column_name == "obs_idx") {
+		// Synthetic obs_idx column (row index)
+		if (column_name == OBS_INDEX_ORIGINAL_NAME) {
 			auto obs_data = compat::FlatVectorGetData<int64_t>(result);
 			auto &obs_validity = compat::FlatVectorValidity(result);
 			obs_validity.SetAllValid(count);
@@ -854,214 +903,382 @@ void H5ReaderMultithreaded::ReadObsColumn(const std::string &column_name, Vector
 			return;
 		}
 
-		// Newer format: /obs is a group with separate datasets per column
-		// Check if it's a categorical column
-		std::string group_path = "/obs/" + column_name;
-		if (H5GetObjectType(*file_handle, group_path) == H5O_TYPE_GROUP) {
-			// Handle categorical columns
-			try {
-				// Get cached categories (reads from HDF5 only on first call)
-				const auto &categories = GetCachedCategories(group_path);
+		// Newer format: /obs is a group with one dataset (or group) per column
+		ReadDataFrameColumn("/obs", column_name, result, offset, count);
+	} catch (const std::exception &e) {
+		throw IOException("Failed to read obs column '" + column_name + "': " + e.what());
+	}
+}
 
-				// Read codes for the requested range
-				H5DatasetHandle codes_dataset(*file_handle, group_path + "/codes");
-				H5DataspaceHandle codes_space(codes_dataset.get());
-
-				// Now read the codes for the requested range - detect code dtype
-				hsize_t h_offset[1] = {static_cast<hsize_t>(offset)};
-				hsize_t h_count[1] = {static_cast<hsize_t>(count)};
-
-				H5Sselect_hyperslab(codes_space.get(), H5S_SELECT_SET, h_offset, nullptr, h_count, nullptr);
-				H5DataspaceHandle mem_space(1, h_count);
-
-				H5TypeHandle codes_dtype(codes_dataset.get(), H5TypeHandle::TypeClass::DATASET);
-				size_t code_size = H5Tget_size(codes_dtype.get());
-
-				// Read codes with appropriate size
-				std::vector<int32_t> codes_i32(count);
-				if (code_size == 1) {
-					std::vector<int8_t> codes_i8(count);
-					H5Dread(codes_dataset.get(), H5T_NATIVE_INT8, mem_space.get(), codes_space.get(), H5P_DEFAULT,
-					        codes_i8.data());
-					for (idx_t i = 0; i < count; i++) {
-						codes_i32[i] = codes_i8[i];
-					}
-				} else if (code_size == 2) {
-					std::vector<int16_t> codes_i16(count);
-					H5Dread(codes_dataset.get(), H5T_NATIVE_INT16, mem_space.get(), codes_space.get(), H5P_DEFAULT,
-					        codes_i16.data());
-					for (idx_t i = 0; i < count; i++) {
-						codes_i32[i] = codes_i16[i];
-					}
-				} else {
-					H5Dread(codes_dataset.get(), H5T_NATIVE_INT32, mem_space.get(), codes_space.get(), H5P_DEFAULT,
-					        codes_i32.data());
-				}
-
-				// Map codes to categories and set in result vector
-				auto cat_data = compat::FlatVectorGetData<string_t>(result);
-				auto &cat_validity = compat::FlatVectorValidity(result);
-				cat_validity.SetAllValid(count);
-				for (idx_t i = 0; i < count; i++) {
-					int32_t code = codes_i32[i];
-					if (code >= 0 && static_cast<size_t>(code) < categories.size()) {
-						cat_data[i] = StringVector::AddString(result, categories[code]);
-					} else {
-						cat_validity.SetInvalid(i);
-					}
-				}
-			} catch (...) {
-				// If reading as categorical fails, try as regular dataset
+std::string H5ReaderMultithreaded::ReadStringAttribute(hid_t obj_id, const std::string &attr_name) {
+	if (H5Aexists(obj_id, attr_name.c_str()) <= 0) {
+		return "";
+	}
+	H5AttributeHandle attr(obj_id, attr_name);
+	hid_t atype = H5Aget_type(attr.get());
+	std::string value;
+	if (H5Tget_class(atype) == H5T_STRING) {
+		if (H5Tis_variable_str(atype)) {
+			char *vlen_str = nullptr;
+			H5Aread(attr.get(), atype, &vlen_str);
+			if (vlen_str) {
+				value = vlen_str;
+				hid_t space = H5Aget_space(attr.get());
+				H5Dvlen_reclaim(atype, space, H5P_DEFAULT, &vlen_str);
+				H5Sclose(space);
 			}
-		} else if (IsDatasetPresent("/obs", column_name)) {
-			// Direct dataset (non-categorical)
-			H5DatasetHandle dataset(*file_handle, "/obs/" + column_name);
-			H5DataspaceHandle dataspace(dataset.get());
-			H5TypeHandle dtype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
+		} else {
+			size_t size = H5Tget_size(atype);
+			std::vector<char> buffer(size + 1, 0);
+			H5Aread(attr.get(), atype, buffer.data());
+			value = std::string(buffer.data());
+		}
+	}
+	H5Tclose(atype);
+	return value;
+}
 
-			// Set up hyperslab for partial read
-			hsize_t h_offset[1] = {static_cast<hsize_t>(offset)};
-			hsize_t h_count[1] = {static_cast<hsize_t>(count)};
-			H5Sselect_hyperslab(dataspace.get(), H5S_SELECT_SET, h_offset, nullptr, h_count, nullptr);
+H5ReaderMultithreaded::ColumnGroupEncoding
+H5ReaderMultithreaded::GetColumnGroupEncoding(const std::string &group_path) {
+	auto it = group_encoding_cache.find(group_path);
+	if (it != group_encoding_cache.end()) {
+		return it->second;
+	}
 
-			// Create memory dataspace
-			H5DataspaceHandle mem_space(1, h_count);
+	// The attribute names the layout, but the datasets it implies must actually be there: a group
+	// that claims nullable-integer without a values dataset is UNKNOWN (binds VARCHAR, reads NULL)
+	// rather than a scan-time failure. Files without the attribute are classified by structure.
+	ColumnGroupEncoding encoding = ColumnGroupEncoding::UNKNOWN;
+	H5GroupHandle group(*file_handle, group_path);
+	std::string encoding_type = ReadStringAttribute(group.get(), "encoding-type");
+	bool has_categories = H5LinkExists(group.get(), "categories") && H5LinkExists(group.get(), "codes");
+	bool has_values_mask = H5LinkExists(group.get(), "values") && H5LinkExists(group.get(), "mask");
+	if (encoding_type == "categorical" && has_categories) {
+		encoding = ColumnGroupEncoding::CATEGORICAL;
+	} else if (encoding_type.rfind("nullable-", 0) == 0 && has_values_mask) {
+		encoding = ColumnGroupEncoding::NULLABLE;
+	} else if (has_categories) {
+		encoding = ColumnGroupEncoding::CATEGORICAL; // older files without the attribute
+	} else if (has_values_mask) {
+		encoding = ColumnGroupEncoding::NULLABLE;
+	}
 
-			// Read based on data type
-			H5T_class_t type_class = H5Tget_class(dtype.get());
+	group_encoding_cache[group_path] = encoding;
+	return encoding;
+}
 
-			if (type_class == H5T_STRING) {
-				if (H5Tis_variable_str(dtype.get())) {
-					// Variable-length strings
-					std::vector<char *> str_buffer(count);
-					H5Dread(dataset.get(), dtype.get(), mem_space.get(), dataspace.get(), H5P_DEFAULT,
-					        str_buffer.data());
+void H5ReaderMultithreaded::SetGroupColumnType(const std::string &group_path, ColumnInfo &col) {
+	col.is_categorical = false;
+	col.type = LogicalType::VARCHAR;
+	try {
+		SetGroupColumnTypeUnchecked(group_path, col);
+	} catch (const std::exception &) {
+		// A malformed group (e.g. nullable-integer without a values dataset) must not abort schema
+		// discovery for the columns after it: bind it as VARCHAR and let the scan NULL-fill it
+		col.is_categorical = false;
+		col.type = LogicalType::VARCHAR;
+		group_encoding_cache[group_path] = ColumnGroupEncoding::UNKNOWN;
+	}
+}
 
-					// Ensure vector is properly initialized
-					result.SetVectorType(VectorType::FLAT_VECTOR);
-					auto string_vec = compat::FlatVectorGetData<string_t>(result);
-					auto &validity = compat::FlatVectorValidity(result);
-					validity.SetAllValid(count); // Start with all valid
+void H5ReaderMultithreaded::SetGroupColumnTypeUnchecked(const std::string &group_path, ColumnInfo &col) {
+	switch (GetColumnGroupEncoding(group_path)) {
+	case ColumnGroupEncoding::CATEGORICAL:
+		col.is_categorical = true;
+		col.type = LogicalType::VARCHAR;
+		break;
+	case ColumnGroupEncoding::NULLABLE: {
+		// The value dataset decides the type; an HDF5 enum is h5py's bool
+		H5DatasetHandle values(*file_handle, group_path + "/values");
+		H5TypeHandle dtype(values.get(), H5TypeHandle::TypeClass::DATASET);
+		col.type = H5Tget_class(dtype.get()) == H5T_ENUM ? LogicalType::BOOLEAN : H5TypeToDuckDBType(dtype.get());
+		break;
+	}
+	default:
+		// Unrecognised group layout: the column binds as VARCHAR and reads as NULL
+		col.type = LogicalType::VARCHAR;
+		break;
+	}
+}
 
-					for (idx_t i = 0; i < count; i++) {
-						if (str_buffer[i] != nullptr) {
-							string_vec[i] = StringVector::AddString(result, str_buffer[i]);
-						} else {
-							// Mark as NULL in the validity mask
-							validity.SetInvalid(i);
-						}
-					}
+void H5ReaderMultithreaded::ReadDataFrameColumn(const std::string &frame_path, const std::string &column_name,
+                                                Vector &result, idx_t offset, idx_t count) {
+	std::string column_path = frame_path + "/" + column_name;
+	if (H5GetObjectType(*file_handle, column_path) == H5O_TYPE_GROUP) {
+		switch (GetColumnGroupEncoding(column_path)) {
+		case ColumnGroupEncoding::CATEGORICAL:
+			ReadCategoricalColumn(column_path, result, offset, count);
+			return;
+		case ColumnGroupEncoding::NULLABLE:
+			ReadNullableColumn(column_path, result, offset, count);
+			return;
+		default: {
+			// Unrecognised group layout - NULL rather than garbage
+			result.SetVectorType(VectorType::FLAT_VECTOR);
+			auto &validity = compat::FlatVectorValidity(result);
+			for (idx_t i = 0; i < count; i++) {
+				validity.SetInvalid(i);
+			}
+			return;
+		}
+		}
+	}
+	if (IsDatasetPresent(frame_path, column_name)) {
+		ReadDatasetRange(column_path, result, offset, count);
+	}
+}
 
-					// Reclaim HDF5 memory after we've copied the strings
-					H5Dvlen_reclaim(dtype.get(), mem_space.get(), H5P_DEFAULT, str_buffer.data());
+void H5ReaderMultithreaded::ReadCategoricalColumn(const std::string &group_path, Vector &result, idx_t offset,
+                                                  idx_t count) {
+	// Get cached categories (reads from HDF5 only on first call)
+	const auto &cache = GetCachedCategories(group_path);
+	const auto &categories = cache.categories;
 
-#ifdef DEBUG
-					// Verify the vector is valid
-					Vector::Verify(result, count);
-#endif
+	// Read codes for the requested range - detect code dtype
+	H5DatasetHandle codes_dataset(*file_handle, group_path + "/codes");
+	H5DataspaceHandle codes_space(codes_dataset.get());
+
+	hsize_t h_offset[1] = {static_cast<hsize_t>(offset)};
+	hsize_t h_count[1] = {static_cast<hsize_t>(count)};
+
+	H5Sselect_hyperslab(codes_space.get(), H5S_SELECT_SET, h_offset, nullptr, h_count, nullptr);
+	H5DataspaceHandle mem_space(1, h_count);
+
+	H5TypeHandle codes_dtype(codes_dataset.get(), H5TypeHandle::TypeClass::DATASET);
+	size_t code_size = H5Tget_size(codes_dtype.get());
+
+	// Read codes with appropriate size
+	std::vector<int32_t> codes_i32(count);
+	if (code_size == 1) {
+		std::vector<int8_t> codes_i8(count);
+		H5Dread(codes_dataset.get(), H5T_NATIVE_INT8, mem_space.get(), codes_space.get(), H5P_DEFAULT, codes_i8.data());
+		for (idx_t i = 0; i < count; i++) {
+			codes_i32[i] = codes_i8[i];
+		}
+	} else if (code_size == 2) {
+		std::vector<int16_t> codes_i16(count);
+		H5Dread(codes_dataset.get(), H5T_NATIVE_INT16, mem_space.get(), codes_space.get(), H5P_DEFAULT,
+		        codes_i16.data());
+		for (idx_t i = 0; i < count; i++) {
+			codes_i32[i] = codes_i16[i];
+		}
+	} else {
+		H5Dread(codes_dataset.get(), H5T_NATIVE_INT32, mem_space.get(), codes_space.get(), H5P_DEFAULT,
+		        codes_i32.data());
+	}
+
+	// Map codes to categories and set in result vector
+	auto cat_data = compat::FlatVectorGetData<string_t>(result);
+	auto &cat_validity = compat::FlatVectorValidity(result);
+	cat_validity.SetAllValid(count);
+	for (idx_t i = 0; i < count; i++) {
+		int32_t code = codes_i32[i];
+		if (code >= 0 && static_cast<size_t>(code) < categories.size() && !cache.is_null[code]) {
+			cat_data[i] = StringVector::AddString(result, categories[code]);
+		} else {
+			cat_validity.SetInvalid(i);
+		}
+	}
+}
+
+void H5ReaderMultithreaded::ReadNullableColumn(const std::string &group_path, Vector &result, idx_t offset,
+                                               idx_t count) {
+	// values: an HDF5 enum here is h5py's bool; ReadDatasetRange writes it in the vector's own type
+	ReadDatasetRange(group_path + "/values", result, offset, count);
+
+	// mask: bool array, true where the value is missing
+	H5DatasetHandle mask_dataset(*file_handle, group_path + "/mask");
+	H5DataspaceHandle mask_space(mask_dataset.get());
+	hsize_t h_offset[1] = {static_cast<hsize_t>(offset)};
+	hsize_t h_count[1] = {static_cast<hsize_t>(count)};
+	H5Sselect_hyperslab(mask_space.get(), H5S_SELECT_SET, h_offset, nullptr, h_count, nullptr);
+	H5DataspaceHandle mem_space(1, h_count);
+	std::vector<int8_t> mask(count);
+	H5Dread(mask_dataset.get(), H5T_NATIVE_INT8, mem_space.get(), mask_space.get(), H5P_DEFAULT, mask.data());
+
+	auto &validity = compat::FlatVectorValidity(result);
+	for (idx_t i = 0; i < count; i++) {
+		if (mask[i] != 0) {
+			validity.SetInvalid(i);
+		}
+	}
+}
+
+void H5ReaderMultithreaded::ReadDatasetRange(const std::string &dataset_path, Vector &result, idx_t offset,
+                                             idx_t count) {
+	H5DatasetHandle dataset(*file_handle, dataset_path);
+	H5DataspaceHandle dataspace(dataset.get());
+	H5TypeHandle dtype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
+
+	// Set up hyperslab for partial read
+	hsize_t h_offset[1] = {static_cast<hsize_t>(offset)};
+	hsize_t h_count[1] = {static_cast<hsize_t>(count)};
+	H5Sselect_hyperslab(dataspace.get(), H5S_SELECT_SET, h_offset, nullptr, h_count, nullptr);
+
+	// Create memory dataspace
+	H5DataspaceHandle mem_space(1, h_count);
+
+	// Read based on data type
+	H5T_class_t type_class = H5Tget_class(dtype.get());
+
+	if (type_class == H5T_STRING) {
+		if (H5Tis_variable_str(dtype.get())) {
+			// Variable-length strings
+			std::vector<char *> str_buffer(count);
+			H5Dread(dataset.get(), dtype.get(), mem_space.get(), dataspace.get(), H5P_DEFAULT, str_buffer.data());
+
+			// Ensure vector is properly initialized
+			result.SetVectorType(VectorType::FLAT_VECTOR);
+			auto string_vec = compat::FlatVectorGetData<string_t>(result);
+			auto &validity = compat::FlatVectorValidity(result);
+			validity.SetAllValid(count); // Start with all valid
+
+			for (idx_t i = 0; i < count; i++) {
+				if (str_buffer[i] != nullptr) {
+					string_vec[i] = StringVector::AddString(result, str_buffer[i]);
 				} else {
-					// Fixed-length strings
-					size_t str_size = H5Tget_size(dtype.get());
-					std::vector<char> buffer(count * str_size);
-					H5Dread(dataset.get(), dtype.get(), mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
-
-					// Ensure vector is properly initialized
-					result.SetVectorType(VectorType::FLAT_VECTOR);
-					auto string_vec = compat::FlatVectorGetData<string_t>(result);
-					auto &validity = compat::FlatVectorValidity(result);
-					validity.SetAllValid(count);
-
-					for (idx_t i = 0; i < count; i++) {
-						char *str_ptr = buffer.data() + i * str_size;
-						size_t len = strnlen(str_ptr, str_size);
-						string_vec[i] = StringVector::AddString(result, str_ptr, len);
-					}
-
-#ifdef DEBUG
-					// Verify the vector is valid
-					Vector::Verify(result, count);
-#endif
-				}
-			} else if (type_class == H5T_INTEGER) {
-				// Read integer data
-				size_t size = H5Tget_size(dtype.get());
-				if (size <= 1) {
-					std::vector<int8_t> buffer(count);
-					H5Dread(dataset.get(), H5T_NATIVE_INT8, mem_space.get(), dataspace.get(), H5P_DEFAULT,
-					        buffer.data());
-					for (idx_t i = 0; i < count; i++) {
-						result.SetValue(i, Value::TINYINT(buffer[i]));
-					}
-				} else if (size <= 2) {
-					std::vector<int16_t> buffer(count);
-					H5Dread(dataset.get(), H5T_NATIVE_INT16, mem_space.get(), dataspace.get(), H5P_DEFAULT,
-					        buffer.data());
-					for (idx_t i = 0; i < count; i++) {
-						result.SetValue(i, Value::SMALLINT(buffer[i]));
-					}
-				} else if (size <= 4) {
-					std::vector<int32_t> buffer(count);
-					H5Dread(dataset.get(), H5T_NATIVE_INT32, mem_space.get(), dataspace.get(), H5P_DEFAULT,
-					        buffer.data());
-					for (idx_t i = 0; i < count; i++) {
-						result.SetValue(i, Value::INTEGER(buffer[i]));
-					}
-				} else {
-					std::vector<int64_t> buffer(count);
-					H5Dread(dataset.get(), H5T_NATIVE_INT64, mem_space.get(), dataspace.get(), H5P_DEFAULT,
-					        buffer.data());
-					for (idx_t i = 0; i < count; i++) {
-						result.SetValue(i, Value::BIGINT(buffer[i]));
-					}
-				}
-			} else if (type_class == H5T_FLOAT) {
-				// Read floating-point data
-				size_t size = H5Tget_size(dtype.get());
-				if (size <= 4) {
-					std::vector<float> buffer(count);
-					H5Dread(dataset.get(), H5T_NATIVE_FLOAT, mem_space.get(), dataspace.get(), H5P_DEFAULT,
-					        buffer.data());
-					for (idx_t i = 0; i < count; i++) {
-						result.SetValue(i, Value::FLOAT(buffer[i]));
-					}
-				} else {
-					std::vector<double> buffer(count);
-					H5Dread(dataset.get(), H5T_NATIVE_DOUBLE, mem_space.get(), dataspace.get(), H5P_DEFAULT,
-					        buffer.data());
-					for (idx_t i = 0; i < count; i++) {
-						result.SetValue(i, Value::DOUBLE(buffer[i]));
-					}
-				}
-			} else if (type_class == H5T_ENUM) {
-				// HDF5 ENUM is often used for boolean types in AnnData
-				// Read as int8 and convert to string "true"/"false"
-				std::vector<int8_t> buffer(count);
-				H5Dread(dataset.get(), H5T_NATIVE_INT8, mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
-
-				// Ensure vector is properly initialized for strings
-				result.SetVectorType(VectorType::FLAT_VECTOR);
-				auto string_vec = compat::FlatVectorGetData<string_t>(result);
-				auto &validity = compat::FlatVectorValidity(result);
-				validity.SetAllValid(count);
-
-				for (idx_t i = 0; i < count; i++) {
-					if (buffer[i] == 0) {
-						string_vec[i] = StringVector::AddString(result, "False");
-					} else {
-						string_vec[i] = StringVector::AddString(result, "True");
-					}
-				}
-			} else {
-				// Unknown type - set all values to NULL
-				result.SetVectorType(VectorType::FLAT_VECTOR);
-				auto &validity = compat::FlatVectorValidity(result);
-				for (idx_t i = 0; i < count; i++) {
+					// Mark as NULL in the validity mask
 					validity.SetInvalid(i);
 				}
 			}
+
+			// Reclaim HDF5 memory after we've copied the strings
+			H5Dvlen_reclaim(dtype.get(), mem_space.get(), H5P_DEFAULT, str_buffer.data());
+
+#ifdef DEBUG
+			// Verify the vector is valid
+			Vector::Verify(result, count);
+#endif
+		} else {
+			// Fixed-length strings
+			size_t str_size = H5Tget_size(dtype.get());
+			std::vector<char> buffer(count * str_size);
+			H5Dread(dataset.get(), dtype.get(), mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
+
+			// Ensure vector is properly initialized
+			result.SetVectorType(VectorType::FLAT_VECTOR);
+			auto string_vec = compat::FlatVectorGetData<string_t>(result);
+			auto &validity = compat::FlatVectorValidity(result);
+			validity.SetAllValid(count);
+
+			for (idx_t i = 0; i < count; i++) {
+				char *str_ptr = buffer.data() + i * str_size;
+				size_t len = strnlen(str_ptr, str_size);
+				string_vec[i] = StringVector::AddString(result, str_ptr, len);
+			}
+
+#ifdef DEBUG
+			// Verify the vector is valid
+			Vector::Verify(result, count);
+#endif
 		}
-	} catch (const std::exception &e) {
-		throw IOException("Failed to read obs column '" + column_name + "': " + e.what());
+	} else if (type_class == H5T_INTEGER && H5Tget_sign(dtype.get()) == H5T_SGN_NONE) {
+		// Unsigned integers: read with the unsigned memory type (a signed read saturates) into the
+		// matching unsigned value; SetValue casts if the vector was harmonized to a wider type
+		size_t size = H5Tget_size(dtype.get());
+		if (size <= 1) {
+			std::vector<uint8_t> buffer(count);
+			H5Dread(dataset.get(), H5T_NATIVE_UINT8, mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
+			for (idx_t i = 0; i < count; i++) {
+				result.SetValue(i, Value::UTINYINT(buffer[i]));
+			}
+		} else if (size <= 2) {
+			std::vector<uint16_t> buffer(count);
+			H5Dread(dataset.get(), H5T_NATIVE_UINT16, mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
+			for (idx_t i = 0; i < count; i++) {
+				result.SetValue(i, Value::USMALLINT(buffer[i]));
+			}
+		} else if (size <= 4) {
+			std::vector<uint32_t> buffer(count);
+			H5Dread(dataset.get(), H5T_NATIVE_UINT32, mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
+			for (idx_t i = 0; i < count; i++) {
+				result.SetValue(i, Value::UINTEGER(buffer[i]));
+			}
+		} else {
+			std::vector<uint64_t> buffer(count);
+			H5Dread(dataset.get(), H5T_NATIVE_UINT64, mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
+			for (idx_t i = 0; i < count; i++) {
+				result.SetValue(i, Value::UBIGINT(buffer[i]));
+			}
+		}
+	} else if (type_class == H5T_INTEGER) {
+		// Read integer data
+		size_t size = H5Tget_size(dtype.get());
+		if (size <= 1) {
+			std::vector<int8_t> buffer(count);
+			H5Dread(dataset.get(), H5T_NATIVE_INT8, mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
+			for (idx_t i = 0; i < count; i++) {
+				result.SetValue(i, Value::TINYINT(buffer[i]));
+			}
+		} else if (size <= 2) {
+			std::vector<int16_t> buffer(count);
+			H5Dread(dataset.get(), H5T_NATIVE_INT16, mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
+			for (idx_t i = 0; i < count; i++) {
+				result.SetValue(i, Value::SMALLINT(buffer[i]));
+			}
+		} else if (size <= 4) {
+			std::vector<int32_t> buffer(count);
+			H5Dread(dataset.get(), H5T_NATIVE_INT32, mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
+			for (idx_t i = 0; i < count; i++) {
+				result.SetValue(i, Value::INTEGER(buffer[i]));
+			}
+		} else {
+			std::vector<int64_t> buffer(count);
+			H5Dread(dataset.get(), H5T_NATIVE_INT64, mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
+			for (idx_t i = 0; i < count; i++) {
+				result.SetValue(i, Value::BIGINT(buffer[i]));
+			}
+		}
+	} else if (type_class == H5T_FLOAT) {
+		// Read floating-point data
+		size_t size = H5Tget_size(dtype.get());
+		if (size <= 4) {
+			std::vector<float> buffer(count);
+			H5Dread(dataset.get(), H5T_NATIVE_FLOAT, mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
+			for (idx_t i = 0; i < count; i++) {
+				result.SetValue(i, Value::FLOAT(buffer[i]));
+			}
+		} else {
+			std::vector<double> buffer(count);
+			H5Dread(dataset.get(), H5T_NATIVE_DOUBLE, mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
+			for (idx_t i = 0; i < count; i++) {
+				result.SetValue(i, Value::DOUBLE(buffer[i]));
+			}
+		}
+	} else if (type_class == H5T_ENUM) {
+		// HDF5 ENUM is h5py's boolean. The vector's type decides the representation: BOOLEAN for
+		// nullable boolean columns, the historical "True"/"False" strings for plain boolean columns
+		// (bound as VARCHAR) and for any column harmonized to VARCHAR across files, and a cast for
+		// anything else.
+		std::vector<int8_t> buffer(count);
+		H5Dread(dataset.get(), H5T_NATIVE_INT8, mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
+
+		result.SetVectorType(VectorType::FLAT_VECTOR);
+		auto &validity = compat::FlatVectorValidity(result);
+		validity.SetAllValid(count);
+
+		if (result.GetType().id() == LogicalTypeId::BOOLEAN) {
+			auto bool_vec = compat::FlatVectorGetData<bool>(result);
+			for (idx_t i = 0; i < count; i++) {
+				bool_vec[i] = buffer[i] != 0;
+			}
+		} else if (result.GetType().id() == LogicalTypeId::VARCHAR) {
+			auto string_vec = compat::FlatVectorGetData<string_t>(result);
+			for (idx_t i = 0; i < count; i++) {
+				string_vec[i] = StringVector::AddString(result, buffer[i] == 0 ? "False" : "True");
+			}
+		} else {
+			for (idx_t i = 0; i < count; i++) {
+				result.SetValue(i, Value::BOOLEAN(buffer[i] != 0));
+			}
+		}
+	} else {
+		// Unknown type - set all values to NULL
+		result.SetVectorType(VectorType::FLAT_VECTOR);
+		auto &validity = compat::FlatVectorValidity(result);
+		for (idx_t i = 0; i < count; i++) {
+			validity.SetInvalid(i);
+		}
 	}
 }
 
@@ -1080,10 +1297,13 @@ void H5ReaderMultithreaded::ReadVarColumnAtPath(const std::string &var_path, con
 	auto h5_lock = H5GlobalLock::Acquire();
 
 	try {
-		// Handle var_idx column (row index)
-		if (column_name == "var_idx") {
+		// Synthetic var_idx column (row index)
+		if (column_name == VAR_INDEX_ORIGINAL_NAME) {
+			auto var_data = compat::FlatVectorGetData<int64_t>(result);
+			auto &var_validity = compat::FlatVectorValidity(result);
+			var_validity.SetAllValid(count);
 			for (idx_t i = 0; i < count; i++) {
-				result.SetValue(i, Value::BIGINT(offset + i));
+				var_data[i] = static_cast<int64_t>(offset + i);
 			}
 			return;
 		}
@@ -1094,212 +1314,8 @@ void H5ReaderMultithreaded::ReadVarColumnAtPath(const std::string &var_path, con
 			return;
 		}
 
-		// Newer format: var is a group with separate datasets per column
-		// Check if it's a categorical column
-		std::string group_path = var_path + "/" + column_name;
-		if (H5GetObjectType(*file_handle, group_path) == H5O_TYPE_GROUP) {
-			// Handle categorical columns - same logic as obs
-			try {
-				// Get cached categories (reads from HDF5 only on first call)
-				const auto &categories = GetCachedCategories(group_path);
-
-				// Read codes for the requested range
-				H5DatasetHandle codes_dataset(*file_handle, group_path + "/codes");
-				H5DataspaceHandle codes_space(codes_dataset.get());
-
-				// Now read the codes for the requested range - detect code dtype
-				hsize_t h_offset[1] = {static_cast<hsize_t>(offset)};
-				hsize_t h_count[1] = {static_cast<hsize_t>(count)};
-
-				H5Sselect_hyperslab(codes_space.get(), H5S_SELECT_SET, h_offset, nullptr, h_count, nullptr);
-				H5DataspaceHandle mem_space(1, h_count);
-
-				H5TypeHandle codes_dtype(codes_dataset.get(), H5TypeHandle::TypeClass::DATASET);
-				size_t code_size = H5Tget_size(codes_dtype.get());
-
-				// Read codes with appropriate size
-				std::vector<int32_t> codes_i32(count);
-				if (code_size == 1) {
-					std::vector<int8_t> codes_i8(count);
-					H5Dread(codes_dataset.get(), H5T_NATIVE_INT8, mem_space.get(), codes_space.get(), H5P_DEFAULT,
-					        codes_i8.data());
-					for (idx_t i = 0; i < count; i++) {
-						codes_i32[i] = codes_i8[i];
-					}
-				} else if (code_size == 2) {
-					std::vector<int16_t> codes_i16(count);
-					H5Dread(codes_dataset.get(), H5T_NATIVE_INT16, mem_space.get(), codes_space.get(), H5P_DEFAULT,
-					        codes_i16.data());
-					for (idx_t i = 0; i < count; i++) {
-						codes_i32[i] = codes_i16[i];
-					}
-				} else {
-					H5Dread(codes_dataset.get(), H5T_NATIVE_INT32, mem_space.get(), codes_space.get(), H5P_DEFAULT,
-					        codes_i32.data());
-				}
-
-				// Map codes to categories
-				auto cat_data = compat::FlatVectorGetData<string_t>(result);
-				auto &cat_validity = compat::FlatVectorValidity(result);
-				cat_validity.SetAllValid(count);
-				for (idx_t i = 0; i < count; i++) {
-					int32_t code = codes_i32[i];
-					if (code >= 0 && static_cast<size_t>(code) < categories.size()) {
-						cat_data[i] = StringVector::AddString(result, categories[code]);
-					} else {
-						cat_validity.SetInvalid(i);
-					}
-				}
-			} catch (...) {
-				// If reading as categorical fails, try as regular dataset
-			}
-		} else if (IsDatasetPresent(var_path, column_name)) {
-			// Direct dataset (non-categorical) - same logic as obs
-			H5DatasetHandle dataset(*file_handle, var_path + "/" + column_name);
-			H5DataspaceHandle dataspace(dataset.get());
-			H5TypeHandle dtype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
-
-			// Set up hyperslab for partial read
-			hsize_t h_offset[1] = {static_cast<hsize_t>(offset)};
-			hsize_t h_count[1] = {static_cast<hsize_t>(count)};
-			H5Sselect_hyperslab(dataspace.get(), H5S_SELECT_SET, h_offset, nullptr, h_count, nullptr);
-
-			// Create memory dataspace
-			H5DataspaceHandle mem_space(1, h_count);
-
-			// Read based on data type
-			H5T_class_t type_class = H5Tget_class(dtype.get());
-
-			if (type_class == H5T_STRING) {
-				if (H5Tis_variable_str(dtype.get())) {
-					// Variable-length strings
-					std::vector<char *> str_buffer(count);
-					H5Dread(dataset.get(), dtype.get(), mem_space.get(), dataspace.get(), H5P_DEFAULT,
-					        str_buffer.data());
-
-					// Ensure vector is properly initialized
-					result.SetVectorType(VectorType::FLAT_VECTOR);
-					auto string_vec = compat::FlatVectorGetData<string_t>(result);
-					auto &validity = compat::FlatVectorValidity(result);
-					validity.SetAllValid(count); // Start with all valid
-
-					for (idx_t i = 0; i < count; i++) {
-						if (str_buffer[i] != nullptr) {
-							string_vec[i] = StringVector::AddString(result, str_buffer[i]);
-						} else {
-							// Mark as NULL in the validity mask
-							validity.SetInvalid(i);
-						}
-					}
-
-					// Reclaim HDF5 memory after we've copied the strings
-					H5Dvlen_reclaim(dtype.get(), mem_space.get(), H5P_DEFAULT, str_buffer.data());
-
-#ifdef DEBUG
-					// Verify the vector is valid
-					Vector::Verify(result, count);
-#endif
-				} else {
-					// Fixed-length strings
-					size_t str_size = H5Tget_size(dtype.get());
-					std::vector<char> buffer(count * str_size);
-					H5Dread(dataset.get(), dtype.get(), mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
-
-					// Ensure vector is properly initialized
-					result.SetVectorType(VectorType::FLAT_VECTOR);
-					auto string_vec = compat::FlatVectorGetData<string_t>(result);
-					auto &validity = compat::FlatVectorValidity(result);
-					validity.SetAllValid(count);
-
-					for (idx_t i = 0; i < count; i++) {
-						char *str_ptr = buffer.data() + i * str_size;
-						size_t len = strnlen(str_ptr, str_size);
-						string_vec[i] = StringVector::AddString(result, str_ptr, len);
-					}
-
-#ifdef DEBUG
-					// Verify the vector is valid
-					Vector::Verify(result, count);
-#endif
-				}
-			} else if (type_class == H5T_INTEGER) {
-				// Read integer data
-				size_t size = H5Tget_size(dtype.get());
-				if (size <= 1) {
-					std::vector<int8_t> buffer(count);
-					H5Dread(dataset.get(), H5T_NATIVE_INT8, mem_space.get(), dataspace.get(), H5P_DEFAULT,
-					        buffer.data());
-					for (idx_t i = 0; i < count; i++) {
-						result.SetValue(i, Value::TINYINT(buffer[i]));
-					}
-				} else if (size <= 2) {
-					std::vector<int16_t> buffer(count);
-					H5Dread(dataset.get(), H5T_NATIVE_INT16, mem_space.get(), dataspace.get(), H5P_DEFAULT,
-					        buffer.data());
-					for (idx_t i = 0; i < count; i++) {
-						result.SetValue(i, Value::SMALLINT(buffer[i]));
-					}
-				} else if (size <= 4) {
-					std::vector<int32_t> buffer(count);
-					H5Dread(dataset.get(), H5T_NATIVE_INT32, mem_space.get(), dataspace.get(), H5P_DEFAULT,
-					        buffer.data());
-					for (idx_t i = 0; i < count; i++) {
-						result.SetValue(i, Value::INTEGER(buffer[i]));
-					}
-				} else {
-					std::vector<int64_t> buffer(count);
-					H5Dread(dataset.get(), H5T_NATIVE_INT64, mem_space.get(), dataspace.get(), H5P_DEFAULT,
-					        buffer.data());
-					for (idx_t i = 0; i < count; i++) {
-						result.SetValue(i, Value::BIGINT(buffer[i]));
-					}
-				}
-			} else if (type_class == H5T_FLOAT) {
-				// Read floating-point data
-				size_t size = H5Tget_size(dtype.get());
-				if (size <= 4) {
-					std::vector<float> buffer(count);
-					H5Dread(dataset.get(), H5T_NATIVE_FLOAT, mem_space.get(), dataspace.get(), H5P_DEFAULT,
-					        buffer.data());
-					for (idx_t i = 0; i < count; i++) {
-						result.SetValue(i, Value::FLOAT(buffer[i]));
-					}
-				} else {
-					std::vector<double> buffer(count);
-					H5Dread(dataset.get(), H5T_NATIVE_DOUBLE, mem_space.get(), dataspace.get(), H5P_DEFAULT,
-					        buffer.data());
-					for (idx_t i = 0; i < count; i++) {
-						result.SetValue(i, Value::DOUBLE(buffer[i]));
-					}
-				}
-			} else if (type_class == H5T_ENUM) {
-				// HDF5 ENUM is often used for boolean types in AnnData
-				// Read as int8 and convert to string "true"/"false"
-				std::vector<int8_t> buffer(count);
-				H5Dread(dataset.get(), H5T_NATIVE_INT8, mem_space.get(), dataspace.get(), H5P_DEFAULT, buffer.data());
-
-				// Ensure vector is properly initialized for strings
-				result.SetVectorType(VectorType::FLAT_VECTOR);
-				auto string_vec = compat::FlatVectorGetData<string_t>(result);
-				auto &validity = compat::FlatVectorValidity(result);
-				validity.SetAllValid(count);
-
-				for (idx_t i = 0; i < count; i++) {
-					if (buffer[i] == 0) {
-						string_vec[i] = StringVector::AddString(result, "False");
-					} else {
-						string_vec[i] = StringVector::AddString(result, "True");
-					}
-				}
-			} else {
-				// Unknown type - set all values to NULL
-				result.SetVectorType(VectorType::FLAT_VECTOR);
-				auto &validity = compat::FlatVectorValidity(result);
-				for (idx_t i = 0; i < count; i++) {
-					validity.SetInvalid(i);
-				}
-			}
-		}
+		// Newer format: var is a group with one dataset (or group) per column - same logic as obs
+		ReadDataFrameColumn(var_path, column_name, result, offset, count);
 	} catch (const std::exception &e) {
 		throw IOException("Failed to read var column '" + column_name + "': " + e.what());
 	}
@@ -1312,8 +1328,8 @@ std::string H5ReaderMultithreaded::ReadVarColumnString(const std::string &column
 std::string H5ReaderMultithreaded::ReadVarColumnStringAtPath(const std::string &var_path,
                                                              const std::string &column_name, idx_t index) {
 	try {
-		// Special handling for var_idx
-		if (column_name == "var_idx") {
+		// Special handling for the synthetic var_idx column
+		if (column_name == VAR_INDEX_ORIGINAL_NAME) {
 			return std::to_string(index);
 		}
 
@@ -1549,94 +1565,47 @@ std::vector<std::string> H5ReaderMultithreaded::GetVarNamesAtPath(const std::str
 					}
 				}
 			} else {
-				// Check if it's a categorical column (Group with codes/categories)
+				// Categorical column: a group with codes and categories, where the categories may themselves
+				// be a nullable-string-array group. GetCachedCategories handles both layouts.
 				std::string group_path = var_path + "/" + column_name;
-				std::string codes_path = group_path + "/codes";
-				std::string categories_path = group_path + "/categories";
+				if (H5GetObjectType(*file_handle, group_path) == H5O_TYPE_GROUP &&
+				    GetColumnGroupEncoding(group_path) == ColumnGroupEncoding::CATEGORICAL) {
+					const auto &cache = GetCachedCategories(group_path);
 
-				// Check if codes dataset exists
-				htri_t codes_exists = H5Lexists(*file_handle, codes_path.c_str(), H5P_DEFAULT);
-				htri_t categories_exists = H5Lexists(*file_handle, categories_path.c_str(), H5P_DEFAULT);
-
-				if (codes_exists > 0 && categories_exists > 0) {
-					// Read categories first
-					H5DatasetHandle cat_dataset(*file_handle, categories_path);
-					H5DataspaceHandle cat_space(cat_dataset.get());
-					hsize_t cat_dims[1];
-					H5Sget_simple_extent_dims(cat_space.get(), cat_dims, nullptr);
-
-					std::vector<std::string> categories;
-					categories.reserve(cat_dims[0]);
-
-					H5TypeHandle cat_dtype(cat_dataset.get(), H5TypeHandle::TypeClass::DATASET);
-					if (H5Tget_class(cat_dtype.get()) == H5T_STRING) {
-						if (H5Tis_variable_str(cat_dtype.get())) {
-							std::vector<char *> str_buffer(cat_dims[0]);
-							H5Dread(cat_dataset.get(), cat_dtype.get(), H5S_ALL, H5S_ALL, H5P_DEFAULT,
-							        str_buffer.data());
-							for (hsize_t i = 0; i < cat_dims[0]; i++) {
-								if (str_buffer[i]) {
-									categories.emplace_back(str_buffer[i]);
-								} else {
-									categories.emplace_back("");
-								}
-							}
-							H5Dvlen_reclaim(cat_dtype.get(), cat_space.get(), H5P_DEFAULT, str_buffer.data());
-						} else {
-							size_t str_size = H5Tget_size(cat_dtype.get());
-							std::vector<char> buffer(cat_dims[0] * str_size);
-							H5Dread(cat_dataset.get(), cat_dtype.get(), H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
-							for (hsize_t i = 0; i < cat_dims[0]; i++) {
-								char *str_ptr = buffer.data() + i * str_size;
-								size_t len = strnlen(str_ptr, str_size);
-								categories.emplace_back(str_ptr, len);
-							}
-						}
-					}
-
-					// Read codes and map to categories
-					H5DatasetHandle codes_dataset(*file_handle, codes_path);
+					H5DatasetHandle codes_dataset(*file_handle, group_path + "/codes");
 					H5DataspaceHandle codes_space(codes_dataset.get());
 					hsize_t codes_dims[1];
 					H5Sget_simple_extent_dims(codes_space.get(), codes_dims, nullptr);
 
-					if (codes_dims[0] == var_count && !categories.empty()) {
-						// Determine code type and read
+					if (codes_dims[0] == var_count && !cache.categories.empty()) {
+						// Read the codes at their stored width
+						std::vector<int32_t> codes(var_count);
 						H5TypeHandle codes_dtype(codes_dataset.get(), H5TypeHandle::TypeClass::DATASET);
 						size_t code_size = H5Tget_size(codes_dtype.get());
-
 						if (code_size == 1) {
-							std::vector<int8_t> codes(var_count);
-							H5Dread(codes_dataset.get(), H5T_NATIVE_INT8, H5S_ALL, H5S_ALL, H5P_DEFAULT, codes.data());
+							std::vector<int8_t> codes8(var_count);
+							H5Dread(codes_dataset.get(), H5T_NATIVE_INT8, H5S_ALL, H5S_ALL, H5P_DEFAULT, codes8.data());
 							for (idx_t i = 0; i < var_count; i++) {
-								int8_t code = codes[i];
-								if (code >= 0 && static_cast<size_t>(code) < categories.size()) {
-									names.push_back(categories[code]);
-								} else {
-									names.push_back("var_" + std::to_string(i));
-								}
+								codes[i] = codes8[i];
 							}
 						} else if (code_size == 2) {
-							std::vector<int16_t> codes(var_count);
-							H5Dread(codes_dataset.get(), H5T_NATIVE_INT16, H5S_ALL, H5S_ALL, H5P_DEFAULT, codes.data());
+							std::vector<int16_t> codes16(var_count);
+							H5Dread(codes_dataset.get(), H5T_NATIVE_INT16, H5S_ALL, H5S_ALL, H5P_DEFAULT,
+							        codes16.data());
 							for (idx_t i = 0; i < var_count; i++) {
-								int16_t code = codes[i];
-								if (code >= 0 && static_cast<size_t>(code) < categories.size()) {
-									names.push_back(categories[code]);
-								} else {
-									names.push_back("var_" + std::to_string(i));
-								}
+								codes[i] = codes16[i];
 							}
 						} else {
-							std::vector<int32_t> codes(var_count);
 							H5Dread(codes_dataset.get(), H5T_NATIVE_INT32, H5S_ALL, H5S_ALL, H5P_DEFAULT, codes.data());
-							for (idx_t i = 0; i < var_count; i++) {
-								int32_t code = codes[i];
-								if (code >= 0 && static_cast<size_t>(code) < categories.size()) {
-									names.push_back(categories[code]);
-								} else {
-									names.push_back("var_" + std::to_string(i));
-								}
+						}
+
+						for (idx_t i = 0; i < var_count; i++) {
+							int32_t code = codes[i];
+							if (code >= 0 && static_cast<size_t>(code) < cache.categories.size() &&
+							    !cache.is_null[code]) {
+								names.push_back(cache.categories[code]);
+							} else {
+								names.push_back("var_" + std::to_string(i)); // missing name (NA code or masked)
 							}
 						}
 						return names;
@@ -2832,6 +2801,12 @@ static std::vector<std::string> ReadArrayAsStrings(hid_t file_handle, const std:
 				result.emplace_back(str_ptr, len);
 			}
 		}
+	} else if (type_class == H5T_INTEGER && H5Tget_sign(dtype) == H5T_SGN_NONE) {
+		std::vector<uint64_t> buffer(total_size);
+		H5Dread(dataset.get(), H5T_NATIVE_UINT64, H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
+		for (hsize_t i = 0; i < total_size; i++) {
+			result.emplace_back(std::to_string(buffer[i]));
+		}
 	} else if (type_class == H5T_INTEGER) {
 		std::vector<int64_t> buffer(total_size);
 		H5Dread(dataset.get(), H5T_NATIVE_INT64, H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
@@ -2861,7 +2836,7 @@ static std::vector<std::string> ReadArrayAsStrings(hid_t file_handle, const std:
 // Helper function to recursively collect uns items
 static void CollectUnsItems(hid_t file_handle, const std::string &base_path, const std::string &key_prefix,
                             std::vector<H5ReaderMultithreaded::UnsInfo> &uns_keys,
-                            LogicalType (*H5TypeToDuckDBType)(hid_t)) {
+                            LogicalType (*H5TypeToDuckDBType)(hid_t), bool read_array_values) {
 	H5GroupHandle group(file_handle, base_path);
 
 	hsize_t num_objs;
@@ -2916,6 +2891,10 @@ static void CollectUnsItems(hid_t file_handle, const std::string &base_path, con
 						H5Dread(dataset.get(), dtype_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
 						info.value_str = std::string(buffer.data());
 					}
+				} else if (type_class == H5T_INTEGER && H5Tget_sign(dtype_id) == H5T_SGN_NONE) {
+					uint64_t value;
+					H5Dread(dataset.get(), H5T_NATIVE_UINT64, H5S_ALL, H5S_ALL, H5P_DEFAULT, &value);
+					info.value_str = std::to_string(value);
 				} else if (type_class == H5T_INTEGER) {
 					int64_t value;
 					H5Dread(dataset.get(), H5T_NATIVE_INT64, H5S_ALL, H5S_ALL, H5P_DEFAULT, &value);
@@ -2941,25 +2920,27 @@ static void CollectUnsItems(hid_t file_handle, const std::string &base_path, con
 				H5Sget_simple_extent_dims(dataspace.get(), dims.data(), nullptr);
 				info.shape = dims;
 
-				// Calculate total size and read array values
-				hsize_t total_size = 1;
-				for (int j = 0; j < rank; j++) {
-					total_size *= dims[j];
-				}
+				if (read_array_values) {
+					// Calculate total size and read array values
+					hsize_t total_size = 1;
+					for (int j = 0; j < rank; j++) {
+						total_size *= dims[j];
+					}
 
-				hid_t dtype_id = H5Dget_type(dataset.get());
-				info.array_values = ReadArrayAsStrings(file_handle, obj_path, dtype_id, total_size, type_class);
-				H5Tclose(dtype_id);
+					hid_t dtype_id = H5Dget_type(dataset.get());
+					info.array_values = ReadArrayAsStrings(file_handle, obj_path, dtype_id, total_size, type_class);
+					H5Tclose(dtype_id);
+				}
 			}
 			uns_keys.push_back(info);
 		} else if (obj_info.type == H5O_TYPE_GROUP) {
 			// Recursively process subgroup
-			CollectUnsItems(file_handle, obj_path, full_key, uns_keys, H5TypeToDuckDBType);
+			CollectUnsItems(file_handle, obj_path, full_key, uns_keys, H5TypeToDuckDBType, read_array_values);
 		}
 	}
 }
 
-std::vector<H5ReaderMultithreaded::UnsInfo> H5ReaderMultithreaded::GetUnsKeys() {
+std::vector<H5ReaderMultithreaded::UnsInfo> H5ReaderMultithreaded::GetUnsKeys(bool read_array_values) {
 	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
 	auto h5_lock = H5GlobalLock::Acquire();
 
@@ -2971,9 +2952,34 @@ std::vector<H5ReaderMultithreaded::UnsInfo> H5ReaderMultithreaded::GetUnsKeys() 
 	}
 
 	// Recursively collect all items with flattened paths
-	CollectUnsItems(*file_handle, "/uns", "", uns_keys, H5ReaderMultithreaded::H5TypeToDuckDBType);
+	CollectUnsItems(*file_handle, "/uns", "", uns_keys, H5ReaderMultithreaded::H5TypeToDuckDBType, read_array_values);
 
 	return uns_keys;
+}
+
+std::vector<std::string> H5ReaderMultithreaded::ReadUnsArrayAsStrings(const std::string &key) {
+	// Acquire global lock for HDF5 operations (no-op if library is threadsafe)
+	auto h5_lock = H5GlobalLock::Acquire();
+
+	std::string path = "/uns/" + key;
+	H5DatasetHandle dataset(*file_handle, path);
+	H5DataspaceHandle dataspace(dataset.get());
+	H5TypeHandle datatype(dataset.get(), H5TypeHandle::TypeClass::DATASET);
+
+	int rank = H5Sget_simple_extent_ndims(dataspace.get());
+	if (rank <= 0) {
+		return {}; // scalar dataset: nothing to read as an array
+	}
+	std::vector<hsize_t> dims(rank);
+	H5Sget_simple_extent_dims(dataspace.get(), dims.data(), nullptr);
+	hsize_t total_size = 1;
+	for (int j = 0; j < rank; j++) {
+		total_size *= dims[j];
+	}
+	if (total_size == 0) {
+		return {};
+	}
+	return ReadArrayAsStrings(*file_handle, path, datatype.get(), total_size, H5Tget_class(datatype.get()));
 }
 
 Value H5ReaderMultithreaded::ReadUnsScalar(const std::string &key) {
@@ -3018,6 +3024,11 @@ Value H5ReaderMultithreaded::ReadUnsScalar(const std::string &key) {
 			H5Dread(dataset.get(), dtype_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
 			result_value = Value(std::string(buffer.data()));
 		}
+	} else if (type_class == H5T_INTEGER && H5Tget_sign(dtype_id) == H5T_SGN_NONE) {
+		// Unsigned integer scalar
+		uint64_t value;
+		H5Dread(dataset.get(), H5T_NATIVE_UINT64, H5S_ALL, H5S_ALL, H5P_DEFAULT, &value);
+		result_value = Value::UBIGINT(value);
 	} else if (type_class == H5T_INTEGER) {
 		// Integer scalar
 		int64_t value;
@@ -3546,6 +3557,25 @@ H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseMatrixC
 					H5Dread(data_ds.get(), H5T_NATIVE_DOUBLE, data_mem_space.get(), data_space.get(), H5P_DEFAULT,
 					        row_data.data());
 				}
+			} else if (type_class == H5T_INTEGER && H5Tget_sign(data_dtype.get()) == H5T_SGN_NONE) {
+				// Unsigned data: a signed read would saturate at 2^31 / 2^63 (values above 2^53 still pass
+				// through the double staging buffer)
+				size_t data_size = H5Tget_size(data_dtype.get());
+				if (data_size <= 4) {
+					std::vector<uint32_t> uint_data(nnz);
+					H5Dread(data_ds.get(), H5T_NATIVE_UINT32, data_mem_space.get(), data_space.get(), H5P_DEFAULT,
+					        uint_data.data());
+					for (size_t i = 0; i < uint_data.size(); i++) {
+						row_data[i] = static_cast<double>(uint_data[i]);
+					}
+				} else {
+					std::vector<uint64_t> uint_data(nnz);
+					H5Dread(data_ds.get(), H5T_NATIVE_UINT64, data_mem_space.get(), data_space.get(), H5P_DEFAULT,
+					        uint_data.data());
+					for (size_t i = 0; i < uint_data.size(); i++) {
+						row_data[i] = static_cast<double>(uint_data[i]);
+					}
+				}
 			} else if (type_class == H5T_INTEGER) {
 				size_t data_size = H5Tget_size(data_dtype.get());
 				if (data_size <= 4) {
@@ -3665,6 +3695,25 @@ H5ReaderMultithreaded::SparseMatrixData H5ReaderMultithreaded::ReadSparseMatrixC
 					H5Dread(data_ds.get(), H5T_NATIVE_DOUBLE, data_mem_space.get(), data_space.get(), H5P_DEFAULT,
 					        col_data.data());
 				}
+			} else if (type_class == H5T_INTEGER && H5Tget_sign(data_dtype.get()) == H5T_SGN_NONE) {
+				// Unsigned data: a signed read would saturate at 2^31 / 2^63 (values above 2^53 still pass
+				// through the double staging buffer)
+				size_t data_size = H5Tget_size(data_dtype.get());
+				if (data_size <= 4) {
+					std::vector<uint32_t> uint_data(nnz);
+					H5Dread(data_ds.get(), H5T_NATIVE_UINT32, data_mem_space.get(), data_space.get(), H5P_DEFAULT,
+					        uint_data.data());
+					for (size_t i = 0; i < uint_data.size(); i++) {
+						col_data[i] = static_cast<double>(uint_data[i]);
+					}
+				} else {
+					std::vector<uint64_t> uint_data(nnz);
+					H5Dread(data_ds.get(), H5T_NATIVE_UINT64, data_mem_space.get(), data_space.get(), H5P_DEFAULT,
+					        uint_data.data());
+					for (size_t i = 0; i < uint_data.size(); i++) {
+						col_data[i] = static_cast<double>(uint_data[i]);
+					}
+				}
 			} else if (type_class == H5T_INTEGER) {
 				size_t data_size = H5Tget_size(data_dtype.get());
 				if (data_size <= 4) {
@@ -3716,6 +3765,18 @@ void H5ReaderMultithreaded::SetTypedValue(Vector &vec, idx_t row, double value) 
 	case LogicalTypeId::BIGINT:
 		vec.SetValue(row, Value::BIGINT(static_cast<int64_t>(value)));
 		break;
+	case LogicalTypeId::UTINYINT:
+		vec.SetValue(row, Value::UTINYINT(static_cast<uint8_t>(value)));
+		break;
+	case LogicalTypeId::USMALLINT:
+		vec.SetValue(row, Value::USMALLINT(static_cast<uint16_t>(value)));
+		break;
+	case LogicalTypeId::UINTEGER:
+		vec.SetValue(row, Value::UINTEGER(static_cast<uint32_t>(value)));
+		break;
+	case LogicalTypeId::UBIGINT:
+		vec.SetValue(row, Value::UBIGINT(static_cast<uint64_t>(value)));
+		break;
 	case LogicalTypeId::FLOAT:
 		vec.SetValue(row, Value::FLOAT(static_cast<float>(value)));
 		break;
@@ -3748,6 +3809,31 @@ void H5ReaderMultithreaded::InitializeZeros(Vector &vec, idx_t count) {
 	case LogicalTypeId::BIGINT:
 		for (idx_t i = 0; i < count; i++) {
 			vec.SetValue(i, Value::BIGINT(0));
+		}
+		break;
+	case LogicalTypeId::UTINYINT:
+		for (idx_t i = 0; i < count; i++) {
+			vec.SetValue(i, Value::UTINYINT(0));
+		}
+		break;
+	case LogicalTypeId::USMALLINT:
+		for (idx_t i = 0; i < count; i++) {
+			vec.SetValue(i, Value::USMALLINT(0));
+		}
+		break;
+	case LogicalTypeId::UINTEGER:
+		for (idx_t i = 0; i < count; i++) {
+			vec.SetValue(i, Value::UINTEGER(0));
+		}
+		break;
+	case LogicalTypeId::UBIGINT:
+		for (idx_t i = 0; i < count; i++) {
+			vec.SetValue(i, Value::UBIGINT(0));
+		}
+		break;
+	case LogicalTypeId::HUGEINT:
+		for (idx_t i = 0; i < count; i++) {
+			vec.SetValue(i, Value::HUGEINT(0));
 		}
 		break;
 	case LogicalTypeId::FLOAT:

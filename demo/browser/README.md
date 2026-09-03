@@ -22,9 +22,13 @@ https://honicky.github.io/anndata-duckdb-extension/preview/<branch-with-slashes-
 ```
 
 so the latest implementation is always viewable pre-merge without touching
-the root site. Previews are removed automatically when the PR closes
-(`CleanupPreview.yml`). The `gh-pages` branch is squashed to a single commit
-on every publish, so the bundled wasm artifacts never accumulate history.
+the root site. On a PR the preview link is posted as a **sticky PR comment**
+(one comment per PR, edited in place on every push, tagged with the commit
+it was built from); it is also written to the `deploy-demo` job summary on
+every deploy, PR or not. Previews are removed automatically when the PR
+closes (`CleanupPreview.yml`). The `gh-pages` branch is squashed to a single
+commit on every publish, so the bundled wasm artifacts never accumulate
+history.
 
 ## Run it locally
 
