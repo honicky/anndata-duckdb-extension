@@ -64,6 +64,7 @@
   <span class="status" id="status">booting&hellip;</span>
   <span class="spacer"></span>
   <button id="loadsample">Load sample .h5ad</button>
+  <button id="loadcensus" title="36 MB public CellxGene Census file, read lazily from S3">Census example (S3)</button>
   <label class="filebtn">Open .h5ad&hellip;<input id="filepick" type="file" accept=".h5ad,.h5" multiple hidden></label>
 </header>
 <div id="term"></div>
@@ -131,22 +132,136 @@ const SITE_BASE = new URL(".", location.href).href;
 // the URL directly, so the host must send CORS headers (with Range allowed in
 // the preflight) - e.g. the public CellxGene Census S3 bucket does. Hosts
 // that don't cannot be read by any in-browser tool.
+//
+// Plain s3:// URLs are left alone: duckdb-wasm resolves them itself (anonymous
+// or SigV4-signed via SET s3_*). Globs are the exception - duckdb-wasm cannot
+// list a bucket (its remote glob is a HEAD on the literal pattern), so the
+// page expands them: anonymous ListObjectsV2 on the prefix, each matching
+// object registered as a lazy URL under the name <bucket>/<key>, and the
+// pattern rewritten to <bucket>/<key-glob>. Names without a scheme are
+// glob-matched against registered files inside duckdb-wasm, so the
+// extension's multi-file scan sees exactly the listed objects. duckdb-wasm's
+// matcher only understands '*', so patterns using '?', '[..]' or '**' are
+// registered under a private <bucket>@<n>/ namespace and rewritten to
+// <literal-prefix>* there - still exactly the listed objects.
 const urlNames = new Map(); // url -> registered name
+const globNames = new Map(); // glob url -> rewritten pattern
+
+const CENSUS_PREFIX = "s3://cellxgene-census-public-us-west-2/cell-census/2025-11-17/h5ads/";
+const CENSUS_FILE = `${CENSUS_PREFIX}f6dafdd1-d746-407e-8019-4470e02d4cbd.h5ad`;
+
+// s3://bucket/key and virtual-hosted https://bucket.s3[.region].amazonaws.com/key
+function parseS3(url) {
+  let m = url.match(/^s3:\/\/([^/]+)\/(.*)$/);
+  if (m) return { bucket: m[1], key: m[2], region: null };
+  m = url.match(/^https?:\/\/(.+?)\.s3(?:[.-]([a-z0-9-]+))?\.amazonaws\.com\/(.*)$/i);
+  if (m) return { bucket: m[1], key: m[3], region: m[2] || null };
+  return null;
+}
+const s3Http = (bucket, key, region) =>
+  `https://${bucket}.s3.${region ? region + "." : ""}amazonaws.com/${key}`;
+
+// duckdb glob subset: ** spans directories, * and ? stay within one segment
+function globToRegex(glob) {
+  let re = "^";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "*") {
+      if (glob[i + 1] === "*") { re += ".*"; i++; } else re += "[^/]*";
+    } else if (c === "?") re += "[^/]";
+    else if (c === "[") { const j = glob.indexOf("]", i); if (j < 0) re += "\\["; else { re += glob.slice(i, j + 1); i = j; } }
+    else re += c.replace(/[.+^${}()|\\]/g, "\\$&");
+  }
+  return new RegExp(re + "$");
+}
+
+async function s3Region() {
+  try {
+    const r = await conn.query("SELECT current_setting('s3_region')");
+    const v = String(r.getChildAt(0)?.get(0) ?? "");
+    return v && v !== "null" ? v : null;
+  } catch { return null; }
+}
+
+async function listS3(bucket, prefix, region) {
+  const objects = [];
+  let token = null;
+  do {
+    const u = new URL(s3Http(bucket, "", region));
+    u.search = new URLSearchParams({
+      "list-type": "2", prefix, "max-keys": "1000", ...(token ? { "continuation-token": token } : {}),
+    }).toString();
+    const resp = await fetch(u);
+    if (!resp.ok) throw new Error(`ListObjectsV2 on ${u.host}: HTTP ${resp.status}`);
+    const doc = new DOMParser().parseFromString(await resp.text(), "application/xml");
+    for (const c of doc.getElementsByTagName("Contents")) {
+      objects.push({
+        key: c.getElementsByTagName("Key")[0].textContent,
+        size: Number(c.getElementsByTagName("Size")[0]?.textContent ?? 0),
+      });
+    }
+    token = doc.getElementsByTagName("NextContinuationToken")[0]?.textContent ?? null;
+  } while (token);
+  return objects;
+}
+
+const fmtBytes = (n) => n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${(n / 1e3).toFixed(1)} KB`;
+
+// Returns the rewritten pattern, or null (with an explanation printed).
+async function expandRemoteGlob(url) {
+  const s3 = parseS3(url);
+  if (!s3) {
+    line(`cannot expand '${url}': globs over remote files need an S3 URL`, "err");
+    line("(s3://bucket/prefix/*.h5ad or https://bucket.s3.<region>.amazonaws.com/prefix/*.h5ad);", "dim");
+    line("plain HTTP servers have no listing API for the browser to call.", "dim");
+    return null;
+  }
+  const region = s3.region ?? await s3Region();
+  const literal = s3.key.slice(0, s3.key.search(/[*?[]/));
+  const re = globToRegex(s3.key);
+  const objects = (await listS3(s3.bucket, literal, region)).filter((o) => re.test(o.key));
+  if (!objects.length) {
+    line(`no objects match '${url}'`, "err");
+    return null;
+  }
+  const starOnly = !/[?[]|\*\*/.test(s3.key);
+  const ns = starOnly ? s3.bucket : `${s3.bucket}@${globNames.size + 1}`;
+  for (const o of objects) {
+    const name = `${ns}/${o.key}`;
+    if (registered.includes(name)) continue;
+    await db.registerFileURL(name, s3Http(s3.bucket, o.key, region), duckdb.DuckDBDataProtocol.HTTP, false);
+    registered.push(name);
+  }
+  const total = objects.reduce((a, o) => a + o.size, 0);
+  line(`expanded ${url} -> ${objects.length} files (${fmtBytes(total)} on S3; lazy, queries read only the ranges they touch)`, "ok");
+  line("each row carries _file_name; anonymous listing - public buckets only", "dim");
+  return starOnly ? `${ns}/${s3.key}` : `${ns}/${literal}*`;
+}
+
 async function rewriteRemoteUrls(sql) {
   // never rewrite configuration statements - SET custom_extension_repository,
   // INSTALL ... FROM <url>, CREATE SECRET etc. legitimately contain URLs that
   // are not data files
   if (/^\s*(set|install|load|pragma|create\s+secret|force\s+install)\b/i.test(sql)) return sql;
-  const urls = [...new Set([...sql.matchAll(/'(https?:\/\/[^']+)'/g)].map((m) => m[1]))];
+  const urls = [...new Set([...sql.matchAll(/'((?:https?|s3):\/\/[^']+)'/g)].map((m) => m[1]))];
   for (const url of urls) {
-    let name = urlNames.get(url);
-    if (!name) {
-      name = (url.split("/").pop() || "remote.h5ad").split("?")[0];
-      for (let i = 2; registered.includes(name); i++) name = name.replace(/(~\d+)?$/, `~${i}`);
-      await db.registerFileURL(name, url, duckdb.DuckDBDataProtocol.HTTP, false);
-      registered.push(name);
-      urlNames.set(url, name);
-      line(`registered ${name} -> ${url} (lazy, HTTP range requests)`, "ok");
+    let name;
+    if (/[*?[]/.test(url)) {
+      name = globNames.get(url) ?? await expandRemoteGlob(url);
+      if (!name) continue;
+      globNames.set(url, name);
+    } else if (url.startsWith("s3://")) {
+      continue; // duckdb-wasm handles single s3:// objects natively
+    } else {
+      name = urlNames.get(url);
+      if (!name) {
+        name = (url.split("/").pop() || "remote.h5ad").split("?")[0];
+        for (let i = 2; registered.includes(name); i++) name = name.replace(/(~\d+)?$/, `~${i}`);
+        await db.registerFileURL(name, url, duckdb.DuckDBDataProtocol.HTTP, false);
+        registered.push(name);
+        urlNames.set(url, name);
+        line(`registered ${name} -> ${url} (lazy, HTTP range requests)`, "ok");
+      }
     }
     sql = sql.split(`'${url}'`).join(`'${name}'`);
   }
@@ -159,9 +274,10 @@ async function rewriteRemoteUrls(sql) {
 function corsHint() {
   line("remote files are fetched by the BROWSER, so the host must send CORS headers", "dim");
   line("(allow the Range request header) plus Range support and Content-Length.", "dim");
-  line("Known-good: the public CellxGene Census bucket. Hosts without CORS (e.g.", "dim");
-  line("datasets.cellxgene.cziscience.com) cannot be read by any in-browser tool -", "dim");
-  line("use the terminal extension, or download once and drag & drop.", "dim");
+  line("Known-good: the public CellxGene Census bucket (anonymous, no credentials), e.g.", "dim");
+  line(`  ${CENSUS_FILE}`, "dim");
+  line("Hosts without CORS (e.g. datasets.cellxgene.cziscience.com) cannot be read by any", "dim");
+  line("in-browser tool - use the terminal extension, or download once and drag & drop.", "dim");
 }
 
 async function run(sql, { echo = true } = {}) {
@@ -170,7 +286,7 @@ async function run(sql, { echo = true } = {}) {
   let remote = false;
   try {
     const rewritten = await rewriteRemoteUrls(sql);
-    remote = rewritten !== sql;
+    remote = rewritten !== sql || /'s3:\/\//.test(sql);
     sql = rewritten;
     const result = await conn.query(sql);
     const ms = (performance.now() - t0).toFixed(0);
@@ -225,10 +341,14 @@ Anything else runs as SQL. Useful starters:
 Files must be registered first (drag & drop, Open, or Load sample) -
 registration is lazy: queries read only the byte ranges they touch.
 http(s):// and s3:// URLs can be queried directly (host must send CORS + Range),
-e.g. the public CellxGene Census bucket:
-  ATTACH 'https://cellxgene-census-public-us-west-2.s3.us-west-2.amazonaws.com/cell-census/2023-07-25/h5ads/0895c838-e550-48a3-a777-dbcd35d30272.h5ad' AS census (TYPE ANNDATA);
-  SET s3_region='us-west-2'; SET s3_access_key_id='...'; SET s3_secret_access_key='...';
-  SELECT * FROM anndata_scan_obs('s3://bucket/file.h5ad') LIMIT 5;`;
+e.g. the public CellxGene Census bucket (anonymous, no credentials needed):
+  SELECT * FROM anndata_scan_obs('${CENSUS_FILE}') LIMIT 5;
+  ATTACH '${CENSUS_FILE}' AS census (TYPE ANNDATA);  SHOW ALL TABLES;
+Globs over a public S3 prefix are expanded by this page (anonymous listing;
+each match registered lazily) - rows carry _file_name:
+  SELECT _file_name, count(*) FROM anndata_scan_obs('${CENSUS_PREFIX}f6d*.h5ad') GROUP BY 1;
+Private buckets (single files only - glob listing is unsigned):
+  SET s3_region='us-west-2'; SET s3_access_key_id='...'; SET s3_secret_access_key='...';`;
 
 async function dot(cmd) {
   const [word, ...rest] = cmd.split(/\s+/);
@@ -247,7 +367,8 @@ async function dot(cmd) {
     // The HEAD/GET happens as sync XHR inside the duckdb-wasm worker, which
     // is created from a blob: URL - relative paths cannot resolve there.
     // Absolutize against the page origin first.
-    const url = /^[a-z][a-z0-9+.-]*:/i.test(rest[0]) ? rest[0] : new URL(rest[0], SITE_BASE).href;
+    let url = /^[a-z][a-z0-9+.-]*:/i.test(rest[0]) ? rest[0] : new URL(rest[0], SITE_BASE).href;
+    if (url.startsWith("s3://")) { const s3 = parseS3(url); url = s3Http(s3.bucket, s3.key, await s3Region()); }
     const baseName = (url.split("/").pop() || "remote.h5ad").split("?")[0];
     const freshName = (n) => {
       // an open file cannot be dropped (the extension may hold it in its
@@ -313,6 +434,16 @@ document.getElementById("loadsample").addEventListener("click", async () => {
     line(`sample load failed: ${e.message}`, "err");
   }
 });
+document.getElementById("loadcensus").addEventListener("click", async () => {
+  // A public CellxGene Census file read straight from S3 by the browser:
+  // nothing is downloaded up front, queries fetch only the ranges they touch.
+  line("D (Census example: public CellxGene Census bucket, anonymous S3 range requests)", "cmd");
+  const ok = await run(`SELECT * FROM anndata_info('${CENSUS_FILE}')`);
+  if (!ok) { corsHint(); return; }
+  line(`try:  SELECT cell_type, count(*) FROM anndata_scan_obs('${CENSUS_FILE}') GROUP BY 1 ORDER BY 2 DESC;`, "dim");
+  line(`      ATTACH '${CENSUS_FILE}' AS census (TYPE ANNDATA);  SHOW ALL TABLES;`, "dim");
+  line(`      SELECT _file_name, count(*) FROM anndata_scan_obs('${CENSUS_PREFIX}f6d*.h5ad') GROUP BY 1;  -- glob, 3 files`, "dim");
+});
 document.body.addEventListener("dragover", (e) => { e.preventDefault(); document.body.classList.add("dragging"); });
 document.body.addEventListener("dragleave", () => document.body.classList.remove("dragging"));
 document.body.addEventListener("drop", (e) => {
@@ -368,7 +499,7 @@ try {
     const extVersion = await one("SELECT anndata_version()");
     line(`anndata extension ${extVersion}`, "ok");
     line("");
-    line("Drop an .h5ad anywhere, use Open…, or click “Load sample .h5ad”. .help for more.", "dim");
+    line("Drop an .h5ad anywhere, use Open…, or click “Load sample .h5ad” / “Census example (S3)”. .help for more.", "dim");
     statusEl.textContent = `DuckDB ${engineVersion} · anndata ${extVersion} · ${arch}`;
     input.disabled = false; input.focus();
   }
