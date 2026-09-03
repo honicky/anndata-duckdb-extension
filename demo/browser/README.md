@@ -87,11 +87,39 @@ browser platform rule that binds every in-browser tool equally.
 
 Known-good: the **public CellxGene Census S3 bucket** - thousands of `.h5ad`
 files with correct CORS, verified live here up to **14.6 GB** (schema in
-~7 s, direct browser-to-S3 range requests):
+~7 s, direct browser-to-S3 range requests). Anonymous access, no credentials:
 
 ```
-https://cellxgene-census-public-us-west-2.s3.us-west-2.amazonaws.com/cell-census/2023-07-25/h5ads/<dataset-id>.h5ad
+s3://cellxgene-census-public-us-west-2/cell-census/2025-11-17/h5ads/<dataset-id>.h5ad
+https://cellxgene-census-public-us-west-2.s3.us-west-2.amazonaws.com/cell-census/2025-11-17/h5ads/<dataset-id>.h5ad
 ```
+
+The **Census example (S3)** button opens one such file
+(`f6dafdd1-d746-407e-8019-4470e02d4cbd.h5ad`, 36 MB, 3,699 cells) and prints
+starter queries.
+
+### Globs over S3
+
+duckdb-wasm cannot list a bucket - its remote "glob" is a HEAD request on the
+literal pattern - so `anndata_scan_obs('s3://bucket/prefix/*.h5ad')` fails
+inside the engine with *No files found that match the pattern*. The page works
+around this itself: a quoted URL containing `*`, `?` or `[` is expanded with an
+anonymous `ListObjectsV2` on the literal prefix (paginated, CORS permitting),
+each matching object is registered as a lazy URL named `<bucket>/<key>`, and
+the pattern in the SQL is rewritten to `<bucket>/<key-glob>`. Names without a
+scheme are glob-matched against registered files inside duckdb-wasm, so the
+extension's multi-file scan (with its `_file_name` column) sees exactly the
+listed objects:
+
+```sql
+SELECT _file_name, count(*) FROM anndata_scan_obs('s3://cellxgene-census-public-us-west-2/cell-census/2025-11-17/h5ads/f6d*.h5ad') GROUP BY 1;
+```
+
+Both `s3://bucket/...` and virtual-hosted `https://bucket.s3.<region>.amazonaws.com/...`
+forms work; `s3://` uses `SET s3_region` when set, else the global endpoint.
+The listing and the range requests are unsigned, so globs cover **public
+buckets only**; single `s3://` objects still go through duckdb-wasm's own S3
+path, which honours `SET s3_access_key_id` / `s3_secret_access_key`.
 
 Hosts that do not send CORS (e.g. `datasets.cellxgene.cziscience.com` -
 preflight returns 403; also `raw.githubusercontent.com`, which sends
@@ -107,8 +135,9 @@ SET s3_region='us-west-2'; SET s3_access_key_id='...'; SET s3_secret_access_key=
 SELECT * FROM anndata_scan_obs('s3://bucket/file.h5ad') LIMIT 5;
 ```
 
-(CORS must be configured on the bucket. Verified path: HTTP; S3 shares the
-same code path in duckdb-wasm but is not exercised by this repo's tests.)
+(CORS must be configured on the bucket. Anonymous `s3://` reads of the Census
+bucket are verified live; signed reads share the same duckdb-wasm code path
+but are not exercised by this repo's tests.)
 
 ## Limitations
 
