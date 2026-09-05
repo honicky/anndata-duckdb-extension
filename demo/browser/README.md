@@ -121,6 +121,10 @@ SELECT _file_name, count(*) FROM anndata_scan_obs('s3://cellxgene-census-public-
 
 Both `s3://bucket/...` and virtual-hosted `https://bucket.s3.<region>.amazonaws.com/...`
 forms work; `s3://` uses `SET s3_region` when set, else the global endpoint.
+Only the URL path is inspected for wildcards, so a presigned URL's
+`?X-Amz-...` query string is never mistaken for a glob - which also means a
+`?` wildcard needs the `s3://` form. Listed keys are percent-encoded per
+segment when building object URLs, so keys with `#`, `+` or spaces work.
 The listing and the range requests are unsigned, so globs cover **public
 buckets only**; single `s3://` objects still go through duckdb-wasm's own S3
 path, which honours `SET s3_access_key_id` / `s3_secret_access_key`.

@@ -150,16 +150,28 @@ const globNames = new Map(); // glob url -> rewritten pattern
 const CENSUS_PREFIX = "s3://cellxgene-census-public-us-west-2/cell-census/2025-11-17/h5ads/";
 const CENSUS_FILE = `${CENSUS_PREFIX}f6dafdd1-d746-407e-8019-4470e02d4cbd.h5ad`;
 
+// The part of a URL that can carry a glob: the whole s3:// key, or the HTTP
+// path. HTTP query strings (presigned URLs carry '?X-Amz-...') and fragments
+// are never globs - so a '?' wildcard needs the s3:// form.
+function urlPath(url) {
+  if (url.startsWith("s3://")) return url.slice(5);
+  try { return decodeURIComponent(new URL(url).pathname); } catch { return url; }
+}
+const hasGlob = (url) => /[*?[]/.test(urlPath(url));
+
 // s3://bucket/key and virtual-hosted https://bucket.s3[.region].amazonaws.com/key
+// (query string dropped; key returned decoded)
 function parseS3(url) {
-  let m = url.match(/^s3:\/\/([^/]+)\/(.*)$/);
-  if (m) return { bucket: m[1], key: m[2], region: null };
-  m = url.match(/^https?:\/\/(.+?)\.s3(?:[.-]([a-z0-9-]+))?\.amazonaws\.com\/(.*)$/i);
-  if (m) return { bucket: m[1], key: m[3], region: m[2] || null };
+  let m = urlPath(url).match(/^([^/]+)\/(.*)$/);
+  if (url.startsWith("s3://") && m) return { bucket: m[1], key: m[2], region: null };
+  m = url.match(/^https?:\/\/(.+?)\.s3(?:[.-]([a-z0-9-]+))?\.amazonaws\.com\//i);
+  if (m) return { bucket: m[1], key: urlPath(url).replace(/^\//, ""), region: m[2] || null };
   return null;
 }
+// Keys come back decoded from ListObjectsV2; encode each segment so reserved
+// characters ('#', '?', '+', ...) survive in the object URL.
 const s3Http = (bucket, key, region) =>
-  `https://${bucket}.s3.${region ? region + "." : ""}amazonaws.com/${key}`;
+  `https://${bucket}.s3.${region ? region + "." : ""}amazonaws.com/${key.split("/").map(encodeURIComponent).join("/")}`;
 
 // duckdb glob subset: ** spans directories, * and ? stay within one segment
 function globToRegex(glob) {
@@ -246,7 +258,7 @@ async function rewriteRemoteUrls(sql) {
   const urls = [...new Set([...sql.matchAll(/'((?:https?|s3):\/\/[^']+)'/g)].map((m) => m[1]))];
   for (const url of urls) {
     let name;
-    if (/[*?[]/.test(url)) {
+    if (hasGlob(url)) {
       name = globNames.get(url) ?? await expandRemoteGlob(url);
       if (!name) continue;
       globNames.set(url, name);
