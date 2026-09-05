@@ -94,9 +94,13 @@ s3://cellxgene-census-public-us-west-2/cell-census/2025-11-17/h5ads/<dataset-id>
 https://cellxgene-census-public-us-west-2.s3.us-west-2.amazonaws.com/cell-census/2025-11-17/h5ads/<dataset-id>.h5ad
 ```
 
-The **Census example (S3)** button opens one such file
-(`f6dafdd1-d746-407e-8019-4470e02d4cbd.h5ad`, 36 MB, 3,699 cells) and prints
-starter queries.
+The **Census examples (S3)** dropdown runs ready-made queries over three
+small files under one prefix (`f6d*.h5ad`, 127 MB on S3): a human airway B-cell
+dataset (`f6dafdd1…`, 3,699 cells, `obsm/X_umap`), a human thalamus dataset
+(`f6d9f2ad…`, 6,877 cells) and a mouse kidney Slide-seqV2 puck (`f6d0baa0…`,
+34,638 beads, `obsm/spatial`). The examples cover `anndata_info`, `obs`
+aggregates, globs over `obs` / `uns` / `var`, an `X` join for marker genes, an
+`obsm` join for UMAP centroids and spatial extents, and `ATTACH`.
 
 ### Globs over S3
 
