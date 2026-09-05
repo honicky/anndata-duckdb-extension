@@ -5,7 +5,8 @@ This extension provides DuckDB with the ability to read AnnData (`.h5ad`) files,
 **🧬 Try it in your browser — no install:** **https://honicky.github.io/anndata-duckdb-extension/**
 — a SQL shell running DuckDB-WASM entirely client-side: drag & drop an `.h5ad` (any size — reads
 are lazy), or query CORS-enabled remote files like the public
-[CellxGene Census](https://chanzuckerberg.github.io/cellxgene-census/) bucket directly.
+[CellxGene Census](https://chanzuckerberg.github.io/cellxgene-census/) bucket directly,
+single files or `s3://.../*.h5ad` globs.
 Source and details in [`demo/browser/`](demo/browser/).
 
 ## Quick Start
