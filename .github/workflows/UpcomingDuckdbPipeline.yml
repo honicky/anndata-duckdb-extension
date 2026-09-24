@@ -397,7 +397,7 @@ jobs:
       - name: Open or close release tracking issue
         uses: actions/github-script@v8
         env:
-          CURRENT: ${{ steps.versions.outputs.current }}
+          CURRENT: ${{ steps.pinned.outputs.current }}
           LATEST: ${{ steps.versions.outputs.latest }}
           UPDATE: ${{ steps.versions.outputs.update_available }}
         with:
