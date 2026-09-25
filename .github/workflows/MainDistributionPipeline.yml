@@ -44,6 +44,13 @@ jobs:
     name: Remote Access Tests
     needs: duckdb-stable-build
     runs-on: ubuntu-latest
+    env:
+      # minio/minio and minio/mc no longer exist on Docker Hub (pull fails with
+      # "repository does not exist" since ~2026-09). quay.io still serves the
+      # same images; their newest releases are from 2025-09. Pinned so a
+      # future removal fails loudly here rather than drifting.
+      MINIO_IMAGE: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+      MC_IMAGE: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
 
     steps:
       - uses: actions/checkout@v5
@@ -57,7 +64,7 @@ jobs:
             -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin \
             -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio server /data
+            "${MINIO_IMAGE}" server /data
 
           # Wait for MinIO to be ready
           for i in {1..30}; do
@@ -74,7 +81,7 @@ jobs:
           # Create bucket, set policy, and upload files
           docker run --rm --network host --entrypoint sh \
             -v "${{ github.workspace }}/test/data:/testdata:ro" \
-            minio/mc -c "
+            "${MC_IMAGE}" -c "
               mc alias set local http://localhost:9000 minioadmin minioadmin
               mc mb local/data
               mc anonymous set download local/data
@@ -83,7 +90,7 @@ jobs:
 
           # Verify files are accessible
           echo "Files available:"
-          docker run --rm --network host --entrypoint sh minio/mc -c "mc alias set local http://localhost:9000 minioadmin minioadmin && mc ls local/data/"
+          docker run --rm --network host --entrypoint sh "${MC_IMAGE}" -c "mc alias set local http://localhost:9000 minioadmin minioadmin && mc ls local/data/"
 
       - uses: actions/download-artifact@v7
         with:

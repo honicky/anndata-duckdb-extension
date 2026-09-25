@@ -24,6 +24,9 @@ BUCKET_NAME="data"
 # MinIO credentials
 MINIO_ROOT_USER="minioadmin"
 MINIO_ROOT_PASSWORD="minioadmin"
+# minio/minio and minio/mc are gone from Docker Hub; see MainDistributionPipeline.yml.
+MINIO_IMAGE="quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
+MC_IMAGE="quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z"
 
 print_env() {
     echo ""
@@ -79,7 +82,7 @@ start_minio() {
         -p ${MINIO_CONSOLE_PORT}:9001 \
         -e MINIO_ROOT_USER="${MINIO_ROOT_USER}" \
         -e MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD}" \
-        minio/minio server /data --console-address ":9001" \
+        "${MINIO_IMAGE}" server /data --console-address ":9001" \
         > /dev/null
 
     # Wait for MinIO to start
@@ -107,7 +110,7 @@ setup_bucket_and_files() {
     # Use mc with shell entrypoint to run multiple commands
     docker run --rm --network host --entrypoint sh \
         -v "${PROJECT_DIR}/test/data:/testdata:ro" \
-        minio/mc -c "
+        "${MC_IMAGE}" -c "
             mc alias set local http://localhost:${MINIO_PORT} ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD}
             mc mb local/${BUCKET_NAME} 2>/dev/null || true
             mc anonymous set download local/${BUCKET_NAME}
