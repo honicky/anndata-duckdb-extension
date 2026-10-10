@@ -1,0 +1,114 @@
+# name: test/sql/function_docs.test
+# description: Every function the extension registers is discoverable from duckdb_functions()
+# group: [sql]
+
+require anndata
+
+# An agent connected to the database can only learn what the extension offers by querying duckdb_functions(), so
+# every overload needs a description, an example, categories and real parameter names (not col0, col1, ...).
+
+# 2 scalar functions and 21 table function overloads
+query II
+SELECT function_type, count(*) FROM duckdb_functions()
+WHERE function_name LIKE 'anndata%'
+GROUP BY function_type ORDER BY function_type;
+----
+scalar	2
+table	21
+
+# No overload is missing its description (this also catches a description that fails to match its overload)
+query I
+SELECT count(*) FROM duckdb_functions()
+WHERE function_name LIKE 'anndata%' AND (description IS NULL OR description = '');
+----
+0
+
+# No overload is missing an example, and each example calls the function it documents
+query I
+SELECT count(*) FROM duckdb_functions()
+WHERE function_name LIKE 'anndata%'
+  AND (len(examples) = 0 OR examples[1] NOT LIKE 'SELECT %' || function_name || '(%');
+----
+0
+
+# No overload is missing categories
+query I
+SELECT count(*) FROM duckdb_functions()
+WHERE function_name LIKE 'anndata%' AND len(categories) = 0;
+----
+0
+
+# No overload still has a placeholder parameter name
+query I
+SELECT count(*) FROM duckdb_functions()
+WHERE function_name LIKE 'anndata%'
+  AND regexp_matches(array_to_string(parameters, ','), '(^|,)col[0-9]+(,|$)');
+----
+0
+
+# Each overload gets its own description, matched by its argument types: the named schema_mode parameter follows the
+# positional ones, and the optional positional arguments tell the overloads apart
+query T
+SELECT parameters FROM duckdb_functions() WHERE function_name = 'anndata_scan_obs';
+----
+[path, schema_mode]
+
+query T
+SELECT parameters FROM duckdb_functions() WHERE function_name = 'anndata_scan_x' ORDER BY len(parameters);
+----
+[path, schema_mode]
+[path, var_name_column, schema_mode]
+
+query T
+SELECT parameters FROM duckdb_functions() WHERE function_name = 'anndata_scan_layers' ORDER BY len(parameters);
+----
+[path]
+[path, layer_name, schema_mode]
+[path, layer_name, var_name_column, schema_mode]
+
+query T
+SELECT parameters FROM duckdb_functions() WHERE function_name = 'anndata_info' ORDER BY len(parameters);
+----
+[path]
+[path, var_name_column, var_id_column]
+
+# The functions that used to report col0, col1
+query TT
+SELECT function_name, parameters FROM duckdb_functions()
+WHERE function_name IN ('anndata_scan_obsp', 'anndata_scan_varp', 'anndata_scan_uns', 'anndata_scan_raw_x',
+                        'anndata_scan_raw_var', 'anndata_scan_raw_varm')
+ORDER BY function_name, len(parameters);
+----
+anndata_scan_obsp	[path, matrix_name]
+anndata_scan_raw_var	[path]
+anndata_scan_raw_varm	[path]
+anndata_scan_raw_varm	[path, matrix_name]
+anndata_scan_raw_x	[path]
+anndata_scan_raw_x	[path, var_name_column]
+anndata_scan_uns	[path]
+anndata_scan_varp	[path, matrix_name]
+
+# The optional-argument overloads are described as such, not with their sibling's description
+query I
+SELECT count(*) FROM duckdb_functions()
+WHERE function_name = 'anndata_scan_layers' AND list_contains(parameters, 'var_name_column')
+  AND description LIKE '%var_name_column%';
+----
+1
+
+# The one-argument stubs that only raise an arity error say so
+query T
+SELECT function_name FROM duckdb_functions()
+WHERE function_name LIKE 'anndata%' AND description LIKE 'Not usable:%'
+ORDER BY function_name;
+----
+anndata_scan_layers
+anndata_scan_obsm
+anndata_scan_raw_varm
+anndata_scan_varm
+
+# Registering through CreateTableFunctionInfo leaves the functions callable
+query I
+SELECT count(*) FROM anndata_scan_obsm('test/data/test_obsm_varm.h5ad', 'X_pca');
+----
+100

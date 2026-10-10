@@ -5,6 +5,7 @@
 #include "include/schema_harmonizer.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include <fstream>
 #include <iostream>
 
@@ -2836,153 +2837,352 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 	compat::SetChunkCardinality(output, result_idx);
 }
 
+namespace {
+
+//! Registers all overloads of one table function as a single catalog entry, each overload with its own
+//! FunctionDescription (what duckdb_functions() reports as description, examples, categories and parameter names).
+//!
+//! The overloads have to be registered together. A second RegisterFunction() call for a name takes the
+//! ALTER_ON_CONFLICT path, and TableFunctionCatalogEntry::AlterEntry rebuilds the entry from the merged
+//! TableFunctionSet alone, which discards every FunctionDescription registered before or with the new overload.
+class DocumentedTableFunction {
+public:
+	DocumentedTableFunction(const string &name, vector<string> categories_p)
+	    : set(name), categories(std::move(categories_p)) {
+	}
+
+	//! Adds one overload. `argument_names` names its positional arguments in order; its named parameters
+	//! (schema_mode) are appended to the parameter names automatically.
+	void Add(const TableFunction &function, vector<string> argument_names, const string &description,
+	         const string &example) {
+		D_ASSERT(argument_names.size() == function.arguments.size());
+		FunctionDescription desc;
+		// The types select this description for the matching overload in duckdb_functions()
+		desc.parameter_types = function.arguments;
+		desc.parameter_names = std::move(argument_names);
+		for (auto &named_parameter : function.named_parameters) {
+			desc.parameter_names.emplace_back(named_parameter.first);
+		}
+		desc.description = description;
+		desc.examples.emplace_back(example);
+		desc.categories = categories;
+		descriptions.push_back(std::move(desc));
+		set.AddFunction(function);
+	}
+
+	void Register(ExtensionLoader &loader) {
+		CreateTableFunctionInfo info(std::move(set));
+		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+		info.descriptions = std::move(descriptions);
+		loader.RegisterFunction(std::move(info));
+	}
+
+private:
+	TableFunctionSet set;
+	vector<string> categories;
+	vector<FunctionDescription> descriptions;
+};
+
+} // namespace
+
 // Register the table functions
 void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
-	// Register anndata_scan_obs function with schema_mode named parameter for multi-file support
-	TableFunction obs_func("anndata_scan_obs", {LogicalType::VARCHAR}, AnndataScanner::ObsScan, AnndataScanner::ObsBind,
-	                       AnndataInitGlobal, AnndataInitLocal);
-	obs_func.name = "anndata_scan_obs";
-	obs_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
-	loader.RegisterFunction(obs_func);
+	// Every function name gets all of its overloads registered at once (see DocumentedTableFunction).
+	// The descriptions are what an agent connected to the database reads from duckdb_functions(), so they say what
+	// the function returns, not just what it is called.
 
-	// Register anndata_scan_var function with schema_mode named parameter for multi-file support
-	TableFunction var_func("anndata_scan_var", {LogicalType::VARCHAR}, AnndataScanner::VarScan, AnndataScanner::VarBind,
-	                       AnndataInitGlobal, AnndataInitLocal);
-	var_func.name = "anndata_scan_var";
-	var_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
-	loader.RegisterFunction(var_func);
+	// anndata_scan_obs: schema_mode named parameter for multi-file support
+	{
+		DocumentedTableFunction docs("anndata_scan_obs", {"anndata", "metadata"});
+		TableFunction obs_func("anndata_scan_obs", {LogicalType::VARCHAR}, AnndataScanner::ObsScan,
+		                       AnndataScanner::ObsBind, AnndataInitGlobal, AnndataInitLocal);
+		obs_func.name = "anndata_scan_obs";
+		obs_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+		docs.Add(obs_func, {"path"},
+		         "Scan the obs (per-cell metadata) DataFrame of one or more .h5ad files, one row per cell: obs_idx "
+		         "(0-based position) followed by the obs columns, including the _index cell-id column. path is a "
+		         "file, an s3:// or http(s):// URL, or a glob such as 'samples/*.h5ad', which adds a _file_name "
+		         "column; schema_mode ('intersection' by default, or 'union') sets how columns that differ between "
+		         "globbed files are combined.",
+		         "SELECT * FROM anndata_scan_obs('data.h5ad');");
+		docs.Register(loader);
+	}
 
-	// Register anndata_scan_x function with projection pushdown enabled
-	TableFunction x_func("anndata_scan_x", {LogicalType::VARCHAR}, AnndataScanner::XScan, AnndataScanner::XBind,
-	                     AnndataInitGlobalWithProjection, AnndataInitLocal);
-	x_func.name = "anndata_scan_x";
-	x_func.projection_pushdown = true;
-	x_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
-	loader.RegisterFunction(x_func);
+	// anndata_scan_var: schema_mode named parameter for multi-file support
+	{
+		DocumentedTableFunction docs("anndata_scan_var", {"anndata", "metadata"});
+		TableFunction var_func("anndata_scan_var", {LogicalType::VARCHAR}, AnndataScanner::VarScan,
+		                       AnndataScanner::VarBind, AnndataInitGlobal, AnndataInitLocal);
+		var_func.name = "anndata_scan_var";
+		var_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+		docs.Add(var_func, {"path"},
+		         "Scan the var (per-gene metadata) DataFrame of one or more .h5ad files, one row per gene: var_idx "
+		         "(0-based position) followed by the var columns, including the _index gene-id column. path and "
+		         "schema_mode work as in anndata_scan_obs; a glob returns the genes of every file and adds a "
+		         "_file_name column.",
+		         "SELECT * FROM anndata_scan_var('data.h5ad');");
+		docs.Register(loader);
+	}
 
-	// Also register with optional var_name_column parameter
-	TableFunction x_func_with_param("anndata_scan_x", {LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                AnndataScanner::XScan, AnndataScanner::XBind, AnndataInitGlobalWithProjection,
-	                                AnndataInitLocal);
-	x_func_with_param.name = "anndata_scan_x";
-	x_func_with_param.projection_pushdown = true;
-	x_func_with_param.named_parameters["schema_mode"] = LogicalType::VARCHAR;
-	loader.RegisterFunction(x_func_with_param);
+	// anndata_scan_x: projection pushdown enabled, optional var_name_column
+	{
+		DocumentedTableFunction docs("anndata_scan_x", {"anndata", "expression"});
+		TableFunction x_func("anndata_scan_x", {LogicalType::VARCHAR}, AnndataScanner::XScan, AnndataScanner::XBind,
+		                     AnndataInitGlobalWithProjection, AnndataInitLocal);
+		x_func.name = "anndata_scan_x";
+		x_func.projection_pushdown = true;
+		x_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+		docs.Add(x_func, {"path"},
+		         "Scan the expression matrix X in wide form: one row per cell with obs_idx and one DOUBLE column per "
+		         "gene, named from the var index (_index), with 0 where a sparse matrix stores nothing. Selecting "
+		         "only a few gene columns reads only those. path and schema_mode work as in anndata_scan_obs; with a "
+		         "glob, 'intersection' keeps the genes present in every file and 'union' keeps all of them (NULL "
+		         "where a file lacks the gene).",
+		         "SELECT obs_idx, CD3D, CD8A FROM anndata_scan_x('data.h5ad');");
 
-	// Register anndata_scan_obsm function (2 parameters - correct usage)
-	TableFunction obsm_func("anndata_scan_obsm", {LogicalType::VARCHAR, LogicalType::VARCHAR}, AnndataScanner::ObsmScan,
-	                        AnndataScanner::ObsmBind, AnndataInitGlobal, AnndataInitLocal);
-	obsm_func.name = "anndata_scan_obsm";
-	obsm_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
-	loader.RegisterFunction(obsm_func);
+		// Also register with optional var_name_column parameter
+		TableFunction x_func_with_param("anndata_scan_x", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+		                                AnndataScanner::XScan, AnndataScanner::XBind, AnndataInitGlobalWithProjection,
+		                                AnndataInitLocal);
+		x_func_with_param.name = "anndata_scan_x";
+		x_func_with_param.projection_pushdown = true;
+		x_func_with_param.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+		docs.Add(x_func_with_param, {"path", "var_name_column"},
+		         "Scan the expression matrix X in wide form like anndata_scan_x(path), but name the gene columns "
+		         "from the var column var_name_column (for example 'gene_symbols') instead of the var index.",
+		         "SELECT * FROM anndata_scan_x('data.h5ad', 'gene_symbols');");
+		docs.Register(loader);
+	}
 
-	// Register anndata_scan_obsm function (1 parameter - error message)
-	TableFunction obsm_func_error("anndata_scan_obsm", {LogicalType::VARCHAR}, DummyScan, ObsmBindError,
-	                              AnndataInitGlobal, AnndataInitLocal);
-	obsm_func_error.name = "anndata_scan_obsm";
-	loader.RegisterFunction(obsm_func_error);
+	// anndata_scan_obsm
+	{
+		DocumentedTableFunction docs("anndata_scan_obsm", {"anndata", "embedding"});
+		// 2 parameters - correct usage
+		TableFunction obsm_func("anndata_scan_obsm", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+		                        AnndataScanner::ObsmScan, AnndataScanner::ObsmBind, AnndataInitGlobal,
+		                        AnndataInitLocal);
+		obsm_func.name = "anndata_scan_obsm";
+		obsm_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+		docs.Add(obsm_func, {"path", "matrix_name"},
+		         "Scan one obsm matrix of per-cell embeddings or coordinates, such as 'X_pca' or 'X_umap', one row "
+		         "per cell: obs_idx plus one DOUBLE column per dimension, named <matrix_name>_0, <matrix_name>_1, "
+		         "and so on. path works as in anndata_scan_obs; when globbed files have different numbers of "
+		         "dimensions, schema_mode 'intersection' keeps the fewest and 'union' the most.",
+		         "SELECT obs_idx, X_umap_0, X_umap_1 FROM anndata_scan_obsm('data.h5ad', 'X_umap');");
 
-	// Register anndata_scan_varm function (2 parameters - correct usage)
-	TableFunction varm_func("anndata_scan_varm", {LogicalType::VARCHAR, LogicalType::VARCHAR}, AnndataScanner::VarmScan,
-	                        AnndataScanner::VarmBind, AnndataInitGlobal, AnndataInitLocal);
-	varm_func.name = "anndata_scan_varm";
-	varm_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
-	loader.RegisterFunction(varm_func);
+		// 1 parameter - error message
+		TableFunction obsm_func_error("anndata_scan_obsm", {LogicalType::VARCHAR}, DummyScan, ObsmBindError,
+		                              AnndataInitGlobal, AnndataInitLocal);
+		obsm_func_error.name = "anndata_scan_obsm";
+		docs.Add(obsm_func_error, {"path"},
+		         "Not usable: always fails with an error because the matrix name is missing. Call "
+		         "anndata_scan_obsm(path, matrix_name) instead.",
+		         "SELECT * FROM anndata_scan_obsm('data.h5ad', 'X_pca');");
+		docs.Register(loader);
+	}
 
-	// Register anndata_scan_varm function (1 parameter - error message)
-	TableFunction varm_func_error("anndata_scan_varm", {LogicalType::VARCHAR}, DummyScan, VarmBindError,
-	                              AnndataInitGlobal, AnndataInitLocal);
-	varm_func_error.name = "anndata_scan_varm";
-	loader.RegisterFunction(varm_func_error);
+	// anndata_scan_varm
+	{
+		DocumentedTableFunction docs("anndata_scan_varm", {"anndata", "embedding"});
+		// 2 parameters - correct usage
+		TableFunction varm_func("anndata_scan_varm", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+		                        AnndataScanner::VarmScan, AnndataScanner::VarmBind, AnndataInitGlobal,
+		                        AnndataInitLocal);
+		varm_func.name = "anndata_scan_varm";
+		varm_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+		docs.Add(varm_func, {"path", "matrix_name"},
+		         "Scan one varm matrix of per-gene loadings or embeddings, such as 'PCs', one row per gene: var_idx "
+		         "plus one DOUBLE column per dimension, named <matrix_name>_0, <matrix_name>_1, and so on. path and "
+		         "schema_mode work as in anndata_scan_obsm.",
+		         "SELECT * FROM anndata_scan_varm('data.h5ad', 'PCs');");
 
-	// Register anndata_scan_layers function (2 parameters) with projection pushdown enabled
-	TableFunction layers_func("anndata_scan_layers", {LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                          AnndataScanner::LayerScan, AnndataScanner::LayerBind, AnndataInitGlobalWithProjection,
-	                          AnndataInitLocal);
-	layers_func.name = "anndata_scan_layers";
-	layers_func.projection_pushdown = true;
-	layers_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
-	loader.RegisterFunction(layers_func);
+		// 1 parameter - error message
+		TableFunction varm_func_error("anndata_scan_varm", {LogicalType::VARCHAR}, DummyScan, VarmBindError,
+		                              AnndataInitGlobal, AnndataInitLocal);
+		varm_func_error.name = "anndata_scan_varm";
+		docs.Add(varm_func_error, {"path"},
+		         "Not usable: always fails with an error because the matrix name is missing. Call "
+		         "anndata_scan_varm(path, matrix_name) instead.",
+		         "SELECT * FROM anndata_scan_varm('data.h5ad', 'PCs');");
+		docs.Register(loader);
+	}
 
-	// Register anndata_scan_layers function (3 parameters - with custom var column)
-	TableFunction layers_func_custom(
-	    "anndata_scan_layers", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
-	    AnndataScanner::LayerScan, AnndataScanner::LayerBind, AnndataInitGlobalWithProjection, AnndataInitLocal);
-	layers_func_custom.name = "anndata_scan_layers";
-	layers_func_custom.projection_pushdown = true;
-	layers_func_custom.named_parameters["schema_mode"] = LogicalType::VARCHAR;
-	loader.RegisterFunction(layers_func_custom);
+	// anndata_scan_layers: projection pushdown enabled
+	{
+		DocumentedTableFunction docs("anndata_scan_layers", {"anndata", "expression"});
+		// 2 parameters
+		TableFunction layers_func("anndata_scan_layers", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+		                          AnndataScanner::LayerScan, AnndataScanner::LayerBind, AnndataInitGlobalWithProjection,
+		                          AnndataInitLocal);
+		layers_func.name = "anndata_scan_layers";
+		layers_func.projection_pushdown = true;
+		layers_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+		docs.Add(layers_func, {"path", "layer_name"},
+		         "Scan one layer (an alternative expression matrix such as raw counts or normalized values) in the "
+		         "same wide form as anndata_scan_x: one row per cell with obs_idx and one DOUBLE column per gene, "
+		         "named from the var index (_index). Selecting only a few gene columns reads only those. path and "
+		         "schema_mode work as in anndata_scan_x; anndata_info lists a file's layer names.",
+		         "SELECT * FROM anndata_scan_layers('data.h5ad', 'counts');");
 
-	// Register anndata_scan_layers function (1 parameter - error message)
-	TableFunction layers_func_error("anndata_scan_layers", {LogicalType::VARCHAR}, DummyScan, LayerBindError,
-	                                AnndataInitGlobal, AnndataInitLocal);
-	layers_func_error.name = "anndata_scan_layers";
-	loader.RegisterFunction(layers_func_error);
+		// 3 parameters - with custom var column
+		TableFunction layers_func_custom(
+		    "anndata_scan_layers", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+		    AnndataScanner::LayerScan, AnndataScanner::LayerBind, AnndataInitGlobalWithProjection, AnndataInitLocal);
+		layers_func_custom.name = "anndata_scan_layers";
+		layers_func_custom.projection_pushdown = true;
+		layers_func_custom.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+		docs.Add(layers_func_custom, {"path", "layer_name", "var_name_column"},
+		         "Scan one layer in wide form like anndata_scan_layers(path, layer_name), but name the gene columns "
+		         "from the var column var_name_column (for example 'gene_symbols') instead of the var index.",
+		         "SELECT * FROM anndata_scan_layers('data.h5ad', 'counts', 'gene_symbols');");
 
-	// Register anndata_scan_uns function
-	TableFunction uns_func("anndata_scan_uns", {LogicalType::VARCHAR}, AnndataScanner::UnsScan, AnndataScanner::UnsBind,
-	                       AnndataInitGlobal, AnndataInitLocal);
-	uns_func.name = "anndata_scan_uns";
-	loader.RegisterFunction(uns_func);
+		// 1 parameter - error message
+		TableFunction layers_func_error("anndata_scan_layers", {LogicalType::VARCHAR}, DummyScan, LayerBindError,
+		                                AnndataInitGlobal, AnndataInitLocal);
+		layers_func_error.name = "anndata_scan_layers";
+		docs.Add(layers_func_error, {"path"},
+		         "Not usable: always fails with an error because the layer name is missing. Call "
+		         "anndata_scan_layers(path, layer_name) instead.",
+		         "SELECT * FROM anndata_scan_layers('data.h5ad', 'counts');");
+		docs.Register(loader);
+	}
 
-	// Register anndata_scan_obsp function
-	TableFunction obsp_func("anndata_scan_obsp", {LogicalType::VARCHAR, LogicalType::VARCHAR}, AnndataScanner::ObspScan,
-	                        AnndataScanner::ObspBind, AnndataInitGlobal, AnndataInitLocal);
-	obsp_func.name = "anndata_scan_obsp";
-	loader.RegisterFunction(obsp_func);
+	// anndata_scan_uns
+	{
+		DocumentedTableFunction docs("anndata_scan_uns", {"anndata", "metadata"});
+		TableFunction uns_func("anndata_scan_uns", {LogicalType::VARCHAR}, AnndataScanner::UnsScan,
+		                       AnndataScanner::UnsBind, AnndataInitGlobal, AnndataInitLocal);
+		uns_func.name = "anndata_scan_uns";
+		docs.Add(uns_func, {"path"},
+		         "Scan the uns (unstructured annotations) group, one row per entry, with nested groups flattened "
+		         "into '/'-separated keys: key, type ('scalar' or 'array'), dtype, shape and value (a UNION of "
+		         "scalar VARCHAR or arr VARCHAR[]). path works as in anndata_scan_obs; with a glob each file's "
+		         "entries are concatenated and tagged with _file_name.",
+		         "SELECT * FROM anndata_scan_uns('data.h5ad');");
+		docs.Register(loader);
+	}
 
-	// Register anndata_scan_varp function
-	TableFunction varp_func("anndata_scan_varp", {LogicalType::VARCHAR, LogicalType::VARCHAR}, AnndataScanner::VarpScan,
-	                        AnndataScanner::VarpBind, AnndataInitGlobal, AnndataInitLocal);
-	varp_func.name = "anndata_scan_varp";
-	loader.RegisterFunction(varp_func);
+	// anndata_scan_obsp
+	{
+		DocumentedTableFunction docs("anndata_scan_obsp", {"anndata", "graph"});
+		TableFunction obsp_func("anndata_scan_obsp", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+		                        AnndataScanner::ObspScan, AnndataScanner::ObspBind, AnndataInitGlobal,
+		                        AnndataInitLocal);
+		obsp_func.name = "anndata_scan_obsp";
+		docs.Add(obsp_func, {"path", "matrix_name"},
+		         "Scan one obsp matrix of pairwise cell-to-cell values, such as the neighbor graph 'connectivities' "
+		         "or 'distances', one row per stored entry: obs_idx_1, obs_idx_2 and value (FLOAT). path works as in "
+		         "anndata_scan_obs; with a glob the rows of every file are concatenated, not harmonized, and tagged "
+		         "with _file_name.",
+		         "SELECT * FROM anndata_scan_obsp('data.h5ad', 'connectivities');");
+		docs.Register(loader);
+	}
 
-	// Register anndata_info function (table function)
-	TableFunction info_func("anndata_info", {LogicalType::VARCHAR}, AnndataScanner::InfoScan, AnndataScanner::InfoBind,
-	                        AnndataInitGlobal, AnndataInitLocal);
-	info_func.name = "anndata_info";
-	loader.RegisterFunction(info_func);
+	// anndata_scan_varp
+	{
+		DocumentedTableFunction docs("anndata_scan_varp", {"anndata", "graph"});
+		TableFunction varp_func("anndata_scan_varp", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+		                        AnndataScanner::VarpScan, AnndataScanner::VarpBind, AnndataInitGlobal,
+		                        AnndataInitLocal);
+		varp_func.name = "anndata_scan_varp";
+		docs.Add(varp_func, {"path", "matrix_name"},
+		         "Scan one varp matrix of pairwise gene-to-gene values, such as 'correlations', one row per stored "
+		         "entry: var_idx_1, var_idx_2 and value. path works as in anndata_scan_obs; with a glob the rows of "
+		         "every file are concatenated, not harmonized, and tagged with _file_name.",
+		         "SELECT * FROM anndata_scan_varp('data.h5ad', 'correlations');");
+		docs.Register(loader);
+	}
 
-	// Also register with optional var_name_column and var_id_column parameters
-	TableFunction info_func_with_params(
-	    "anndata_info", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR}, AnndataScanner::InfoScan,
-	    AnndataScanner::InfoBind, AnndataInitGlobal, AnndataInitLocal);
-	info_func_with_params.name = "anndata_info";
-	loader.RegisterFunction(info_func_with_params);
+	// anndata_info (table function)
+	{
+		DocumentedTableFunction docs("anndata_info", {"anndata", "introspection"});
+		TableFunction info_func("anndata_info", {LogicalType::VARCHAR}, AnndataScanner::InfoScan,
+		                        AnndataScanner::InfoBind, AnndataInitGlobal, AnndataInitLocal);
+		info_func.name = "anndata_info";
+		docs.Add(info_func, {"path"},
+		         "Summarize an .h5ad file as property/value rows: n_obs, n_vars, the shape and sparsity of X, the "
+		         "groups present, and the names of its layers and of its obsm, varm, obsp and varp matrices. Run it "
+		         "first to see what a file holds before scanning it. path works as in anndata_scan_obs; with a glob "
+		         "every file contributes its own rows, tagged with _file_name.",
+		         "SELECT * FROM anndata_info('data.h5ad');");
 
-	// Register anndata_scan_raw_x function with projection pushdown
-	TableFunction raw_x_func("anndata_scan_raw_x", {LogicalType::VARCHAR}, AnndataScanner::RawXScan,
-	                         AnndataScanner::RawXBind, AnndataInitGlobalWithProjection, AnndataInitLocal);
-	raw_x_func.name = "anndata_scan_raw_x";
-	raw_x_func.projection_pushdown = true;
-	loader.RegisterFunction(raw_x_func);
+		// Also register with optional var_name_column and var_id_column parameters
+		TableFunction info_func_with_params(
+		    "anndata_info", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+		    AnndataScanner::InfoScan, AnndataScanner::InfoBind, AnndataInitGlobal, AnndataInitLocal);
+		info_func_with_params.name = "anndata_info";
+		docs.Add(info_func_with_params, {"path", "var_name_column", "var_id_column"},
+		         "Summarize an .h5ad file like anndata_info(path), but report var_name_column and var_id_column as "
+		         "the var columns that hold gene names and gene ids (both default to _index).",
+		         "SELECT * FROM anndata_info('data.h5ad', 'gene_symbols', 'gene_ids');");
+		docs.Register(loader);
+	}
 
-	// Register anndata_scan_raw_x with optional var_name_column parameter
-	TableFunction raw_x_func_param("anndata_scan_raw_x", {LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                               AnndataScanner::RawXScan, AnndataScanner::RawXBind, AnndataInitGlobalWithProjection,
-	                               AnndataInitLocal);
-	raw_x_func_param.name = "anndata_scan_raw_x";
-	raw_x_func_param.projection_pushdown = true;
-	loader.RegisterFunction(raw_x_func_param);
+	// anndata_scan_raw_x: projection pushdown enabled; reads a single file (no glob support)
+	{
+		DocumentedTableFunction docs("anndata_scan_raw_x", {"anndata", "expression"});
+		TableFunction raw_x_func("anndata_scan_raw_x", {LogicalType::VARCHAR}, AnndataScanner::RawXScan,
+		                         AnndataScanner::RawXBind, AnndataInitGlobalWithProjection, AnndataInitLocal);
+		raw_x_func.name = "anndata_scan_raw_x";
+		raw_x_func.projection_pushdown = true;
+		docs.Add(raw_x_func, {"path"},
+		         "Scan the expression matrix stored in the raw slot (raw/X, typically the counts for all genes "
+		         "before filtering) in wide form: one row per cell with obs_idx and one DOUBLE column per raw gene, "
+		         "named from the raw/var index. Reads a single file, not a glob, and fails if the file has no raw "
+		         "section.",
+		         "SELECT * FROM anndata_scan_raw_x('data.h5ad');");
 
-	// Register anndata_scan_raw_var function
-	TableFunction raw_var_func("anndata_scan_raw_var", {LogicalType::VARCHAR}, AnndataScanner::RawVarScan,
-	                           AnndataScanner::RawVarBind, AnndataInitGlobal, AnndataInitLocal);
-	raw_var_func.name = "anndata_scan_raw_var";
-	loader.RegisterFunction(raw_var_func);
+		// Optional var_name_column parameter
+		TableFunction raw_x_func_param("anndata_scan_raw_x", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+		                               AnndataScanner::RawXScan, AnndataScanner::RawXBind,
+		                               AnndataInitGlobalWithProjection, AnndataInitLocal);
+		raw_x_func_param.name = "anndata_scan_raw_x";
+		raw_x_func_param.projection_pushdown = true;
+		docs.Add(raw_x_func_param, {"path", "var_name_column"},
+		         "Scan the raw expression matrix in wide form like anndata_scan_raw_x(path), but name the gene "
+		         "columns from the raw/var column var_name_column instead of the raw/var index.",
+		         "SELECT * FROM anndata_scan_raw_x('data.h5ad', 'gene_ids');");
+		docs.Register(loader);
+	}
 
-	// Register anndata_scan_raw_varm function (2 parameters)
-	TableFunction raw_varm_func("anndata_scan_raw_varm", {LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                            AnndataScanner::RawVarmScan, AnndataScanner::RawVarmBind, AnndataInitGlobal,
-	                            AnndataInitLocal);
-	raw_varm_func.name = "anndata_scan_raw_varm";
-	loader.RegisterFunction(raw_varm_func);
+	// anndata_scan_raw_var: single file only
+	{
+		DocumentedTableFunction docs("anndata_scan_raw_var", {"anndata", "metadata"});
+		TableFunction raw_var_func("anndata_scan_raw_var", {LogicalType::VARCHAR}, AnndataScanner::RawVarScan,
+		                           AnndataScanner::RawVarBind, AnndataInitGlobal, AnndataInitLocal);
+		raw_var_func.name = "anndata_scan_raw_var";
+		docs.Add(raw_var_func, {"path"},
+		         "Scan the var DataFrame of the raw slot (raw/var), one row per raw gene: var_idx (0-based position) "
+		         "followed by the raw/var columns. Reads a single file, not a glob, and fails if the file has no raw "
+		         "section.",
+		         "SELECT * FROM anndata_scan_raw_var('data.h5ad');");
+		docs.Register(loader);
+	}
 
-	// Register anndata_scan_raw_varm function (1 parameter - error message)
-	TableFunction raw_varm_func_error("anndata_scan_raw_varm", {LogicalType::VARCHAR}, DummyScan, RawVarmBindError,
-	                                  AnndataInitGlobal, AnndataInitLocal);
-	raw_varm_func_error.name = "anndata_scan_raw_varm";
-	loader.RegisterFunction(raw_varm_func_error);
+	// anndata_scan_raw_varm: single file only
+	{
+		DocumentedTableFunction docs("anndata_scan_raw_varm", {"anndata", "embedding"});
+		// 2 parameters
+		TableFunction raw_varm_func("anndata_scan_raw_varm", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+		                            AnndataScanner::RawVarmScan, AnndataScanner::RawVarmBind, AnndataInitGlobal,
+		                            AnndataInitLocal);
+		raw_varm_func.name = "anndata_scan_raw_varm";
+		docs.Add(raw_varm_func, {"path", "matrix_name"},
+		         "Scan one varm matrix of the raw slot (raw/varm), one row per raw gene: var_idx plus one DOUBLE "
+		         "column per dimension, named <matrix_name>_0, <matrix_name>_1, and so on. Reads a single file, not "
+		         "a glob, and fails if the file has no raw section.",
+		         "SELECT * FROM anndata_scan_raw_varm('data.h5ad', 'PCs');");
+
+		// 1 parameter - error message
+		TableFunction raw_varm_func_error("anndata_scan_raw_varm", {LogicalType::VARCHAR}, DummyScan, RawVarmBindError,
+		                                  AnndataInitGlobal, AnndataInitLocal);
+		raw_varm_func_error.name = "anndata_scan_raw_varm";
+		docs.Add(raw_varm_func_error, {"path"},
+		         "Not usable: always fails with an error because the matrix name is missing. Call "
+		         "anndata_scan_raw_varm(path, matrix_name) instead.",
+		         "SELECT * FROM anndata_scan_raw_varm('data.h5ad', 'PCs');");
+		docs.Register(loader);
+	}
 }
 
 } // namespace duckdb
