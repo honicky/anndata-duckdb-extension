@@ -1,0 +1,4 @@
+# Pinned S3 test server used by scripts/start-test-server.sh and the "Remote Access Tests" CI job.
+# moto replaced MinIO, whose container images are no longer publicly pullable.
+moto[server]==5.2.3
+boto3==1.43.111
