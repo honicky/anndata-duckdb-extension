@@ -309,6 +309,20 @@ FROM anndata_scan_uns('samples/*.h5ad')
 WHERE key = 'pca/params/n_comps';
 ```
 
+#### Discovering the Functions from SQL
+
+Every function carries a description, a runnable example, categories and real parameter names in
+`duckdb_functions()`, so a SQL connection (or an AI agent using one) can look up what the extension
+offers without this README:
+
+```sql
+LOAD anndata;
+SELECT function_name, parameters, description, examples[1] AS example
+FROM duckdb_functions()
+WHERE function_name LIKE 'anndata%'
+ORDER BY function_name, len(parameters);
+```
+
 ### Gene Name Column Configuration
 
 When attaching an AnnData file, the extension automatically detects which `var` columns contain gene names and IDs using heuristics. You can override this with explicit options:

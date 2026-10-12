@@ -7,6 +7,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/main/config.hpp"
+#include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
 #include "duckdb/storage/storage_extension.hpp"
 
 // LZF filter for reading LZF-compressed HDF5 datasets (common in h5ad files)
@@ -26,6 +27,21 @@ static void AnndataVersionFunction(DataChunk &args, ExpressionState &state, Vect
 // Scalar function that returns a hello world message
 static void AnndataHelloFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	result.SetValue(0, Value("Hello from AnnData DuckDB Extension v" ANNDATA_EXTENSION_VERSION "!"));
+}
+
+// Registers a scalar function together with the FunctionDescription that duckdb_functions() reports for it
+static void RegisterDocumentedScalarFunction(ExtensionLoader &loader, const ScalarFunction &function,
+                                             string description, string example) {
+	FunctionDescription desc;
+	desc.description = std::move(description);
+	desc.examples.emplace_back(std::move(example));
+	desc.categories = {"anndata", "utility"};
+
+	CreateScalarFunctionInfo info(function);
+	// Same conflict behavior as the plain RegisterFunction(ScalarFunction) overload
+	info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+	info.descriptions.push_back(std::move(desc));
+	loader.RegisterFunction(std::move(info));
 }
 
 // Forward declaration
@@ -52,10 +68,15 @@ static void LoadInternal(ExtensionLoader &loader) {
 #endif
 
 	// Register the version function
-	loader.RegisterFunction(ScalarFunction("anndata_version", {}, LogicalType::VARCHAR, AnndataVersionFunction));
+	RegisterDocumentedScalarFunction(
+	    loader, ScalarFunction("anndata_version", {}, LogicalType::VARCHAR, AnndataVersionFunction),
+	    "Return the version string of the loaded anndata extension.", "SELECT anndata_version();");
 
 	// Register the hello function
-	loader.RegisterFunction(ScalarFunction("anndata_hello", {}, LogicalType::VARCHAR, AnndataHelloFunction));
+	RegisterDocumentedScalarFunction(
+	    loader, ScalarFunction("anndata_hello", {}, LogicalType::VARCHAR, AnndataHelloFunction),
+	    "Return a greeting that includes the extension version; a quick check that the extension is loaded.",
+	    "SELECT anndata_hello();");
 
 	// Register the AnnData table functions
 	RegisterAnndataTableFunctions(loader);
