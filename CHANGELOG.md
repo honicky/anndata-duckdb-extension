@@ -53,6 +53,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line in the job summary. It now keeps a sticky PR comment up to date with the link and the PR head
   commit it was built from (also used for the gh-pages deploy commit and the job summary), so a PR
   can be exercised in the browser without downloading artifacts.
+- **Every function is now documented in `duckdb_functions()`** (honicky/anndata-duckdb-extension#43). An
+  agent or tool connected to a database can only learn what an extension offers by querying
+  `duckdb_functions()`, and all 15 functions reported `description = NULL`, no `examples`, and (for
+  7 of them) `col0`, `col1` instead of parameter names. Each of the 23 overloads (21 table, 2 scalar) now carries a
+  one-sentence description of what it returns, one runnable example, categories (`anndata` plus a
+  component tag such as `expression`, `embedding`, `graph` or `metadata`) and real parameter names
+  (`path`, `matrix_name`, `layer_name`, `var_name_column`, `var_id_column`, `schema_mode`), so
+  `SELECT function_name, parameters, description, examples FROM duckdb_functions() WHERE function_name
+  LIKE 'anndata%'` is a usable reference. The one-argument `anndata_scan_obsm` / `varm` / `layers` /
+  `raw_varm` overloads, which exist only to raise a "requires a matrix/layer name" error, say so.
+  A table function's overloads are now registered as one `TableFunctionSet` per name through
+  `CreateTableFunctionInfo` rather than one `RegisterFunction` call per overload: DuckDB rebuilds the
+  catalog entry from the merged set alone when a second overload arrives and drops every description,
+  so the documentation has to travel with the whole set. `test/sql/function_docs.test` fails if an
+  overload loses its description, example, categories or parameter names.
 
 ### Fixed
 - **`anndata_scan_obs` / `anndata_scan_var` crashed on a pattern that matched exactly one file** with
