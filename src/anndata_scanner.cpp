@@ -2847,8 +2847,7 @@ namespace {
 //! TableFunctionSet alone, which discards every FunctionDescription registered before or with the new overload.
 class DocumentedTableFunction {
 public:
-	DocumentedTableFunction(const string &name, vector<string> categories_p)
-	    : set(name), categories(std::move(categories_p)) {
+	explicit DocumentedTableFunction(vector<string> categories_p) : categories(std::move(categories_p)) {
 	}
 
 	//! Adds one overload. `argument_names` names its positional arguments in order; its named parameters
@@ -2867,18 +2866,25 @@ public:
 		desc.examples.emplace_back(example);
 		desc.categories = categories;
 		descriptions.push_back(std::move(desc));
-		set.AddFunction(function);
+		if (!set) {
+			// The set takes its name from the first overload. Constructing it from a function, rather than from a
+			// name, is what compiles both before and after DuckDB changed function names to Identifier.
+			set = make_uniq<TableFunctionSet>(function);
+		} else {
+			set->AddFunction(function);
+		}
 	}
 
 	void Register(ExtensionLoader &loader) {
-		CreateTableFunctionInfo info(std::move(set));
+		D_ASSERT(set);
+		CreateTableFunctionInfo info(std::move(*set));
 		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
 		info.descriptions = std::move(descriptions);
 		loader.RegisterFunction(std::move(info));
 	}
 
 private:
-	TableFunctionSet set;
+	unique_ptr<TableFunctionSet> set;
 	vector<string> categories;
 	vector<FunctionDescription> descriptions;
 };
@@ -2893,7 +2899,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 
 	// anndata_scan_obs: schema_mode named parameter for multi-file support
 	{
-		DocumentedTableFunction docs("anndata_scan_obs", {"anndata", "metadata"});
+		DocumentedTableFunction docs({"anndata", "metadata"});
 		TableFunction obs_func("anndata_scan_obs", {LogicalType::VARCHAR}, AnndataScanner::ObsScan,
 		                       AnndataScanner::ObsBind, AnndataInitGlobal, AnndataInitLocal);
 		obs_func.name = "anndata_scan_obs";
@@ -2910,7 +2916,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 
 	// anndata_scan_var: schema_mode named parameter for multi-file support
 	{
-		DocumentedTableFunction docs("anndata_scan_var", {"anndata", "metadata"});
+		DocumentedTableFunction docs({"anndata", "metadata"});
 		TableFunction var_func("anndata_scan_var", {LogicalType::VARCHAR}, AnndataScanner::VarScan,
 		                       AnndataScanner::VarBind, AnndataInitGlobal, AnndataInitLocal);
 		var_func.name = "anndata_scan_var";
@@ -2926,7 +2932,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 
 	// anndata_scan_x: projection pushdown enabled, optional var_name_column
 	{
-		DocumentedTableFunction docs("anndata_scan_x", {"anndata", "expression"});
+		DocumentedTableFunction docs({"anndata", "expression"});
 		TableFunction x_func("anndata_scan_x", {LogicalType::VARCHAR}, AnndataScanner::XScan, AnndataScanner::XBind,
 		                     AnndataInitGlobalWithProjection, AnndataInitLocal);
 		x_func.name = "anndata_scan_x";
@@ -2956,7 +2962,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 
 	// anndata_scan_obsm
 	{
-		DocumentedTableFunction docs("anndata_scan_obsm", {"anndata", "embedding"});
+		DocumentedTableFunction docs({"anndata", "embedding"});
 		// 2 parameters - correct usage
 		TableFunction obsm_func("anndata_scan_obsm", {LogicalType::VARCHAR, LogicalType::VARCHAR},
 		                        AnndataScanner::ObsmScan, AnndataScanner::ObsmBind, AnndataInitGlobal,
@@ -2983,7 +2989,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 
 	// anndata_scan_varm
 	{
-		DocumentedTableFunction docs("anndata_scan_varm", {"anndata", "embedding"});
+		DocumentedTableFunction docs({"anndata", "embedding"});
 		// 2 parameters - correct usage
 		TableFunction varm_func("anndata_scan_varm", {LogicalType::VARCHAR, LogicalType::VARCHAR},
 		                        AnndataScanner::VarmScan, AnndataScanner::VarmBind, AnndataInitGlobal,
@@ -3009,7 +3015,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 
 	// anndata_scan_layers: projection pushdown enabled
 	{
-		DocumentedTableFunction docs("anndata_scan_layers", {"anndata", "expression"});
+		DocumentedTableFunction docs({"anndata", "expression"});
 		// 2 parameters
 		TableFunction layers_func("anndata_scan_layers", {LogicalType::VARCHAR, LogicalType::VARCHAR},
 		                          AnndataScanner::LayerScan, AnndataScanner::LayerBind, AnndataInitGlobalWithProjection,
@@ -3049,7 +3055,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 
 	// anndata_scan_uns
 	{
-		DocumentedTableFunction docs("anndata_scan_uns", {"anndata", "metadata"});
+		DocumentedTableFunction docs({"anndata", "metadata"});
 		TableFunction uns_func("anndata_scan_uns", {LogicalType::VARCHAR}, AnndataScanner::UnsScan,
 		                       AnndataScanner::UnsBind, AnndataInitGlobal, AnndataInitLocal);
 		uns_func.name = "anndata_scan_uns";
@@ -3064,7 +3070,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 
 	// anndata_scan_obsp
 	{
-		DocumentedTableFunction docs("anndata_scan_obsp", {"anndata", "graph"});
+		DocumentedTableFunction docs({"anndata", "graph"});
 		TableFunction obsp_func("anndata_scan_obsp", {LogicalType::VARCHAR, LogicalType::VARCHAR},
 		                        AnndataScanner::ObspScan, AnndataScanner::ObspBind, AnndataInitGlobal,
 		                        AnndataInitLocal);
@@ -3080,7 +3086,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 
 	// anndata_scan_varp
 	{
-		DocumentedTableFunction docs("anndata_scan_varp", {"anndata", "graph"});
+		DocumentedTableFunction docs({"anndata", "graph"});
 		TableFunction varp_func("anndata_scan_varp", {LogicalType::VARCHAR, LogicalType::VARCHAR},
 		                        AnndataScanner::VarpScan, AnndataScanner::VarpBind, AnndataInitGlobal,
 		                        AnndataInitLocal);
@@ -3095,7 +3101,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 
 	// anndata_info (table function)
 	{
-		DocumentedTableFunction docs("anndata_info", {"anndata", "introspection"});
+		DocumentedTableFunction docs({"anndata", "introspection"});
 		TableFunction info_func("anndata_info", {LogicalType::VARCHAR}, AnndataScanner::InfoScan,
 		                        AnndataScanner::InfoBind, AnndataInitGlobal, AnndataInitLocal);
 		info_func.name = "anndata_info";
@@ -3120,7 +3126,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 
 	// anndata_scan_raw_x: projection pushdown enabled; reads a single file (no glob support)
 	{
-		DocumentedTableFunction docs("anndata_scan_raw_x", {"anndata", "expression"});
+		DocumentedTableFunction docs({"anndata", "expression"});
 		TableFunction raw_x_func("anndata_scan_raw_x", {LogicalType::VARCHAR}, AnndataScanner::RawXScan,
 		                         AnndataScanner::RawXBind, AnndataInitGlobalWithProjection, AnndataInitLocal);
 		raw_x_func.name = "anndata_scan_raw_x";
@@ -3147,7 +3153,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 
 	// anndata_scan_raw_var: single file only
 	{
-		DocumentedTableFunction docs("anndata_scan_raw_var", {"anndata", "metadata"});
+		DocumentedTableFunction docs({"anndata", "metadata"});
 		TableFunction raw_var_func("anndata_scan_raw_var", {LogicalType::VARCHAR}, AnndataScanner::RawVarScan,
 		                           AnndataScanner::RawVarBind, AnndataInitGlobal, AnndataInitLocal);
 		raw_var_func.name = "anndata_scan_raw_var";
@@ -3161,7 +3167,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 
 	// anndata_scan_raw_varm: single file only
 	{
-		DocumentedTableFunction docs("anndata_scan_raw_varm", {"anndata", "embedding"});
+		DocumentedTableFunction docs({"anndata", "embedding"});
 		// 2 parameters
 		TableFunction raw_varm_func("anndata_scan_raw_varm", {LogicalType::VARCHAR, LogicalType::VARCHAR},
 		                            AnndataScanner::RawVarmScan, AnndataScanner::RawVarmBind, AnndataInitGlobal,
