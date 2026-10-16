@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-14
+
 ### Added
 - **Glob patterns for `anndata_scan_uns` and `anndata_info`.** These were the only two table
   functions that still rejected a wildcard: `anndata_scan_uns('samples/*.h5ad')` and
