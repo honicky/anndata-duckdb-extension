@@ -74,8 +74,10 @@ jobs:
           ls -la /tmp/extension/
 
           # Download DuckDB CLI to /tmp to avoid conflict with duckdb/ submodule
-          wget -q https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb_cli-linux-amd64.zip -O /tmp/duckdb_cli.zip
-          unzip -o -q /tmp/duckdb_cli.zip -d /tmp/duckdb-cli
+          # (DuckDB 2.0 ships the CLI as duckdb-cli-<platform>.tar.gz, not duckdb_cli-<platform>.zip)
+          wget -q https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz -O /tmp/duckdb_cli.tar.gz
+          mkdir -p /tmp/duckdb-cli
+          tar -xzf /tmp/duckdb_cli.tar.gz -C /tmp/duckdb-cli
           chmod +x /tmp/duckdb-cli/duckdb
 
           # Setup extension directory (no gunzip needed - file is not compressed)
