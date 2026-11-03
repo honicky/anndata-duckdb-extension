@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-03
+
 ### Changed
 - **Built against DuckDB v2.0.0 (LTS).** The `duckdb` submodule and every `duckdb_version:` / artifact-name /
   CLI-download-URL / extension-path / `git checkout` reference in `MainDistributionPipeline.yml` moved from
@@ -31,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory scoping that v1.5.5's dropped), which surfaced three pre-existing violations. Fixed them:
   `src/vfd/h5fd_duckdb_fs.cpp` (clang-format), `CMakeLists.txt` (cmake-format; layout only) and
   `test/python/create_test_nullable.py` (black).
+- CI: the remote access tests download the DuckDB CLI from DuckDB 2.0's renamed release asset
+  (`duckdb-cli-linux-amd64.tar.gz`; the old `duckdb_cli-linux-amd64.zip` name returns 404).
 
 ## [0.15.0] - 2026-10-14
 
