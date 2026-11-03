@@ -7,7 +7,7 @@
     "test": "node run_node.mjs"
   },
   "dependencies": {
-    "@duckdb/duckdb-wasm": "1.33.1-dev64.0",
+    "@duckdb/duckdb-wasm": "1.33.1-dev114.0",
     "web-worker": "1.2.0"
   }
 }

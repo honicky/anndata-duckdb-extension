@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Built against DuckDB v2.0.0 (LTS).** The `duckdb` submodule and every `duckdb_version:` / artifact-name /
+  CLI-download-URL / extension-path / `git checkout` reference in `MainDistributionPipeline.yml` moved from
+  v1.5.5 to v2.0.0. Builds of this version load only in DuckDB 2.0; DuckDB 1.5.x users stay on 0.15.0.
+  Three DuckDB API changes needed source fixes:
+  1. `TableFunction::named_parameters` and `TableFunction::arguments` are gone; parameters now live on the
+     function's `FunctionSignature`. `schema_mode` is declared as a keyword-only parameter with default
+     `'intersection'` (without a default, DuckDB 2.0 makes a keyword-only parameter required, which broke
+     every one-argument call such as `anndata_scan_obs(path)`). The default is the same mode used before
+     when the parameter was omitted, so behavior is unchanged.
+  2. `duckdb_functions()` now reports the signature's parameter names, not the ones in the registered
+     `FunctionDescription`, so the positional parameters are renamed from the constructor's `col0`, `col1`
+     placeholders to their documented names (`path`, `layer_name`, `var_name_column`, ...).
+  3. `CreateViewInfo::FromSelect` takes a `Parser&` instead of a `ClientContext&`; the ATTACH catalog builds
+     one from the context.
+- **WASM: moved to the DuckDB 2.0 build of duckdb-wasm (`1.33.1-dev114.0`).** That build replaces the separate
+  mvp and eh bundles with a single-threaded `base` bundle, which loads `wasm_eh` extensions, plus a `threads`
+  bundle. The Node load smoke test, the symbol-contract check and the in-browser demo now use the `base`
+  bundle, and the CI WASM checks and the demo deploy cover `wasm_eh` only. `wasm_mvp` artifacts are still
+  built by `extension-ci-tools`, but no DuckDB 2.0 duckdb-wasm build can load them.
+- `make format` now checks this extension's `src/` and `test/` (DuckDB 2.0's `format-check` recipe honors the
+  directory scoping that v1.5.5's dropped), which surfaced three pre-existing violations. Fixed them:
+  `src/vfd/h5fd_duckdb_fs.cpp` (clang-format), `CMakeLists.txt` (cmake-format; layout only) and
+  `test/python/create_test_nullable.py` (black).
+
 ## [0.15.0] - 2026-10-14
 
 ### Added

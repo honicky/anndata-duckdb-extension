@@ -105,7 +105,7 @@ private:
 //===--------------------------------------------------------------------===//
 
 struct H5FDDuckdbFile {
-	H5FD_t pub;                       // must be first: HDF5 casts H5FD_t* <-> this
+	H5FD_t pub; // must be first: HDF5 casts H5FD_t* <-> this
 	unique_ptr<FileHandle> handle;
 	std::unique_ptr<VfdBlockCache> cache; // remote handles only
 	haddr_t eoa = 0;
@@ -158,7 +158,8 @@ static H5FD_t *H5FD_duckdb_open(const char *name, unsigned flags, hid_t /*fapl_i
 				StashError("File not found (or empty): " + p +
 				           ". In DuckDB-WASM a file must be registered before use, e.g. "
 				           "db.registerFileHandle('" +
-				           base + "', file, DuckDBDataProtocol.BROWSER_FILEREADER, false) or "
+				           base +
+				           "', file, DuckDBDataProtocol.BROWSER_FILEREADER, false) or "
 				           "db.registerFileBuffer('" +
 				           base + "', new Uint8Array(bytes)).");
 			}
@@ -230,8 +231,7 @@ static haddr_t H5FD_duckdb_get_eof(const H5FD_t *file, H5FD_mem_t /*type*/) {
 	return reinterpret_cast<const H5FDDuckdbFile *>(file)->eof;
 }
 
-static herr_t H5FD_duckdb_read(H5FD_t *_file, H5FD_mem_t type, hid_t /*dxpl*/, haddr_t addr, size_t size,
-                               void *buf) {
+static herr_t H5FD_duckdb_read(H5FD_t *_file, H5FD_mem_t type, hid_t /*dxpl*/, haddr_t addr, size_t size, void *buf) {
 	auto *file = reinterpret_cast<H5FDDuckdbFile *>(_file);
 	try {
 		if (size == 0) {

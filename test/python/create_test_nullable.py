@@ -130,7 +130,10 @@ def main():
     adata = ad.AnnData(X=X, obs=obs, var=var)
     # A CSR layer of uint32 counts with values beyond the signed 32-bit range, and a uint64 uns scalar
     adata.layers['counts_u32'] = sparse.csr_matrix(
-        np.array([[0, 4000000000, 4294967295], [0, 0, 3], [2147483648, 0, 0], [0, 0, 0], [0, 0, 0], [0, 7, 0]], dtype=np.uint32)
+        np.array(
+            [[0, 4000000000, 4294967295], [0, 0, 3], [2147483648, 0, 0], [0, 0, 0], [0, 0, 0], [0, 7, 0]],
+            dtype=np.uint32,
+        )
     )
     adata.uns['big_u64'] = np.uint64(2**64 - 1)
     adata.uns['u64_arr'] = np.array([2**64 - 1, 5], dtype=np.uint64)

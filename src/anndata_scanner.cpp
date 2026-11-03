@@ -2839,6 +2839,15 @@ void AnndataScanner::InfoScan(ClientContext &context, TableFunctionInput &data, 
 
 namespace {
 
+//! Declares the keyword-only schema_mode parameter. DuckDB 2.0 keeps named parameters on the signature, which is
+//! why this replaces the TableFunction::named_parameters map of earlier versions.
+void AddSchemaModeParameter(TableFunction &function) {
+	// Optional: a keyword-only parameter without a default would be required. ParseSchemaMode() treats the
+	// default the same as an absent parameter.
+	function.GetSignature().AddKeywordOnly(Identifier("schema_mode"), LogicalType::VARCHAR,
+	                                       Value(std::string("intersection")));
+}
+
 //! Registers all overloads of one table function as a single catalog entry, each overload with its own
 //! FunctionDescription (what duckdb_functions() reports as description, examples, categories and parameter names).
 //!
@@ -2852,15 +2861,34 @@ public:
 
 	//! Adds one overload. `argument_names` names its positional arguments in order; its named parameters
 	//! (schema_mode) are appended to the parameter names automatically.
-	void Add(const TableFunction &function, vector<string> argument_names, const string &description,
-	         const string &example) {
-		D_ASSERT(argument_names.size() == function.arguments.size());
+	void Add(TableFunction &function, vector<string> argument_names, const string &description, const string &example) {
+		// DuckDB 2.0 reports the signature's parameter names, so name the positional parameters as documented
+		// rather than the col<N> placeholders the constructor gives them
+		auto &signature = function.GetSignature();
+		idx_t position = 0;
+		for (idx_t i = 0; i < signature.GetParameterCount(); i++) {
+			auto &parameter = signature.GetParameter(i);
+			if (parameter.GetKind() == FunctionParameterKind::STANDARD ||
+			    parameter.GetKind() == FunctionParameterKind::POSITIONAL_ONLY) {
+				D_ASSERT(position < argument_names.size());
+				parameter.SetName(Identifier(argument_names[position++]));
+			}
+		}
+		D_ASSERT(position == argument_names.size());
+		const auto &parameters = signature.GetParameters();
 		FunctionDescription desc;
 		// The types select this description for the matching overload in duckdb_functions()
-		desc.parameter_types = function.arguments;
+		for (auto &parameter : parameters) {
+			if (parameter.GetKind() == FunctionParameterKind::STANDARD ||
+			    parameter.GetKind() == FunctionParameterKind::POSITIONAL_ONLY) {
+				desc.parameter_types.push_back(parameter.GetType());
+			}
+		}
 		desc.parameter_names = std::move(argument_names);
-		for (auto &named_parameter : function.named_parameters) {
-			desc.parameter_names.emplace_back(named_parameter.first);
+		for (auto &parameter : parameters) {
+			if (parameter.GetKind() == FunctionParameterKind::KEYWORD_ONLY) {
+				desc.parameter_names.emplace_back(parameter.GetName().GetIdentifierName());
+			}
 		}
 		desc.description = description;
 		desc.examples.emplace_back(example);
@@ -2903,7 +2931,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 		TableFunction obs_func("anndata_scan_obs", {LogicalType::VARCHAR}, AnndataScanner::ObsScan,
 		                       AnndataScanner::ObsBind, AnndataInitGlobal, AnndataInitLocal);
 		obs_func.name = "anndata_scan_obs";
-		obs_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+		AddSchemaModeParameter(obs_func);
 		docs.Add(obs_func, {"path"},
 		         "Scan the obs (per-cell metadata) DataFrame of one or more .h5ad files, one row per cell: obs_idx "
 		         "(0-based position) followed by the obs columns, including the _index cell-id column. path is a "
@@ -2920,7 +2948,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 		TableFunction var_func("anndata_scan_var", {LogicalType::VARCHAR}, AnndataScanner::VarScan,
 		                       AnndataScanner::VarBind, AnndataInitGlobal, AnndataInitLocal);
 		var_func.name = "anndata_scan_var";
-		var_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+		AddSchemaModeParameter(var_func);
 		docs.Add(var_func, {"path"},
 		         "Scan the var (per-gene metadata) DataFrame of one or more .h5ad files, one row per gene: var_idx "
 		         "(0-based position) followed by the var columns, including the _index gene-id column. path and "
@@ -2937,7 +2965,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 		                     AnndataInitGlobalWithProjection, AnndataInitLocal);
 		x_func.name = "anndata_scan_x";
 		x_func.projection_pushdown = true;
-		x_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+		AddSchemaModeParameter(x_func);
 		docs.Add(x_func, {"path"},
 		         "Scan the expression matrix X in wide form: one row per cell with obs_idx and one DOUBLE column per "
 		         "gene, named from the var index (_index), with 0 where a sparse matrix stores nothing. Selecting "
@@ -2952,7 +2980,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 		                                AnndataInitLocal);
 		x_func_with_param.name = "anndata_scan_x";
 		x_func_with_param.projection_pushdown = true;
-		x_func_with_param.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+		AddSchemaModeParameter(x_func_with_param);
 		docs.Add(x_func_with_param, {"path", "var_name_column"},
 		         "Scan the expression matrix X in wide form like anndata_scan_x(path), but name the gene columns "
 		         "from the var column var_name_column (for example 'gene_symbols') instead of the var index.",
@@ -2968,7 +2996,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 		                        AnndataScanner::ObsmScan, AnndataScanner::ObsmBind, AnndataInitGlobal,
 		                        AnndataInitLocal);
 		obsm_func.name = "anndata_scan_obsm";
-		obsm_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+		AddSchemaModeParameter(obsm_func);
 		docs.Add(obsm_func, {"path", "matrix_name"},
 		         "Scan one obsm matrix of per-cell embeddings or coordinates, such as 'X_pca' or 'X_umap', one row "
 		         "per cell: obs_idx plus one DOUBLE column per dimension, named <matrix_name>_0, <matrix_name>_1, "
@@ -2995,7 +3023,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 		                        AnndataScanner::VarmScan, AnndataScanner::VarmBind, AnndataInitGlobal,
 		                        AnndataInitLocal);
 		varm_func.name = "anndata_scan_varm";
-		varm_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+		AddSchemaModeParameter(varm_func);
 		docs.Add(varm_func, {"path", "matrix_name"},
 		         "Scan one varm matrix of per-gene loadings or embeddings, such as 'PCs', one row per gene: var_idx "
 		         "plus one DOUBLE column per dimension, named <matrix_name>_0, <matrix_name>_1, and so on. path and "
@@ -3022,7 +3050,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 		                          AnndataInitLocal);
 		layers_func.name = "anndata_scan_layers";
 		layers_func.projection_pushdown = true;
-		layers_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+		AddSchemaModeParameter(layers_func);
 		docs.Add(layers_func, {"path", "layer_name"},
 		         "Scan one layer (an alternative expression matrix such as raw counts or normalized values) in the "
 		         "same wide form as anndata_scan_x: one row per cell with obs_idx and one DOUBLE column per gene, "
@@ -3036,7 +3064,7 @@ void RegisterAnndataTableFunctions(ExtensionLoader &loader) {
 		    AnndataScanner::LayerScan, AnndataScanner::LayerBind, AnndataInitGlobalWithProjection, AnndataInitLocal);
 		layers_func_custom.name = "anndata_scan_layers";
 		layers_func_custom.projection_pushdown = true;
-		layers_func_custom.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+		AddSchemaModeParameter(layers_func_custom);
 		docs.Add(layers_func_custom, {"path", "layer_name", "var_name_column"},
 		         "Scan one layer in wide form like anndata_scan_layers(path, layer_name), but name the gene columns "
 		         "from the var column var_name_column (for example 'gene_symbols') instead of the var index.",

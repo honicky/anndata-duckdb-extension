@@ -18,11 +18,11 @@ Run locally (after a `make wasm_eh` build with emsdk active):
     cd test/wasm && npm install
     HOME="$(mktemp -d)" node run_node.mjs \
         ../../build/wasm_eh/extension/anndata/anndata.duckdb_extension.wasm \
-        wasm_eh v1.5.5 "$(cat ../../VERSION)"
+        wasm_eh v2.0.0 "$(cat ../../VERSION)"
 
 **Version pins**: `@duckdb/duckdb-wasm` in `package.json` must carry the same
 DuckDB version as `duckdb_version:` in `MainDistributionPipeline.yml`
-(1.33.1-dev64.0 -> v1.5.5). The harness asserts this and fails loudly on
+(1.33.1-dev114.0 -> v2.0.0). The harness asserts this and fails loudly on
 drift. `web-worker` stays pinned at 1.2.0.
 
 Not covered here: `wasm_threads` (no Node COI worker exists - browser tier
