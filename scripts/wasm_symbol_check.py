@@ -18,10 +18,10 @@ instantiated against a given duckdb-wasm main module:
 It is a pure-Python wasm binary parser: no wabt / llvm tooling required.
 
 Usage:
-  wasm_symbol_check.py side.wasm --main duckdb-eh.wasm \
+  wasm_symbol_check.py side.wasm --main duckdb-base.wasm \
       [--allowlist test/wasm/allowed_undefined.txt] \
       [--expect-init anndata_duckdb_cpp_init] \
-      [--expect-platform wasm_eh] [--expect-duckdb v1.5.5] \
+      [--expect-platform wasm_eh] [--expect-duckdb v2.0.0] \
       [--min-size 2000000] [--max-size 12000000]
 
 Exit code 0 = pass, 1 = fail (with per-check diagnostics).
@@ -197,7 +197,7 @@ def main():
     ap.add_argument("--allowlist", help="file of allowed-unresolved symbol patterns")
     ap.add_argument("--expect-init", default="anndata_duckdb_cpp_init")
     ap.add_argument("--expect-platform", help="expected metadata platform field, e.g. wasm_eh")
-    ap.add_argument("--expect-duckdb", help="expected metadata duckdb_version field, e.g. v1.5.5")
+    ap.add_argument("--expect-duckdb", help="expected metadata duckdb_version field, e.g. v2.0.0")
     ap.add_argument("--min-size", type=int, default=2_000_000,
                     help="size floor: HDF5 statically linked cannot be smaller (default 2MB)")
     ap.add_argument("--max-size", type=int, default=12_000_000,

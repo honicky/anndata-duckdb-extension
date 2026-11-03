@@ -12,6 +12,7 @@
 #include "duckdb/catalog/catalog_entry/duck_schema_entry.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
+#include "duckdb/parser/parser.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/enums/access_mode.hpp"
 #include <iostream>
@@ -109,7 +110,9 @@ unique_ptr<CatalogEntry> AnndataDefaultGenerator::CreateDefaultEntry(ClientConte
 #endif
 	result->sql = GenerateViewSQL(info);
 
-	auto view_info = CreateViewInfo::FromSelect(context, std::move(result));
+	// DuckDB 2.0 binds the view's SELECT through a Parser rather than the ClientContext
+	Parser parser(context);
+	auto view_info = CreateViewInfo::FromSelect(parser, std::move(result));
 	return make_uniq_base<CatalogEntry, ViewCatalogEntry>(catalog, schema, *view_info);
 }
 

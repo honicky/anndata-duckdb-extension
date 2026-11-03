@@ -17,7 +17,7 @@ jobs:
     name: Build extension binaries
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
-      duckdb_version: v1.5.5
+      duckdb_version: v2.0.0
       ci_tools_version: main
       extension_name: anndata
       opt_in_archs: 'linux_amd64_musl'
@@ -34,7 +34,7 @@ jobs:
     name: Code Quality Check
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
     with:
-      duckdb_version: v1.5.5
+      duckdb_version: v2.0.0
       ci_tools_version: main
       extension_name: anndata
       format_checks: 'format;tidy'
@@ -64,7 +64,7 @@ jobs:
 
       - uses: actions/download-artifact@v7
         with:
-          name: anndata-v1.5.5-extension-linux_amd64
+          name: anndata-v2.0.0-extension-linux_amd64
           path: /tmp/extension
 
       - name: Setup DuckDB with extension
@@ -74,13 +74,15 @@ jobs:
           ls -la /tmp/extension/
 
           # Download DuckDB CLI to /tmp to avoid conflict with duckdb/ submodule
-          wget -q https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip -O /tmp/duckdb_cli.zip
-          unzip -o -q /tmp/duckdb_cli.zip -d /tmp/duckdb-cli
+          # (DuckDB 2.0 ships the CLI as duckdb-cli-<platform>.tar.gz, not duckdb_cli-<platform>.zip)
+          wget -q https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz -O /tmp/duckdb_cli.tar.gz
+          mkdir -p /tmp/duckdb-cli
+          tar -xzf /tmp/duckdb_cli.tar.gz -C /tmp/duckdb-cli
           chmod +x /tmp/duckdb-cli/duckdb
 
           # Setup extension directory (no gunzip needed - file is not compressed)
-          mkdir -p ~/.duckdb/extensions/v1.5.5/linux_amd64
-          cp /tmp/extension/anndata.duckdb_extension ~/.duckdb/extensions/v1.5.5/linux_amd64/
+          mkdir -p ~/.duckdb/extensions/v2.0.0/linux_amd64
+          cp /tmp/extension/anndata.duckdb_extension ~/.duckdb/extensions/v2.0.0/linux_amd64/
 
       - name: Run remote access tests
         run: |
@@ -132,26 +134,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # On pull_request the upstream build runs in reduced_ci_mode, which
-        # builds only wasm_eh among the wasm arches - a wasm_mvp leg would fail
-        # at download-artifact. Full coverage on push/dispatch, eh-only on PRs.
-        include: ${{ github.event_name == 'pull_request'
-          && fromJSON('[{"duckdb_arch":"wasm_eh","main_module":"duckdb-eh.wasm"}]')
-          || fromJSON('[{"duckdb_arch":"wasm_mvp","main_module":"duckdb-mvp.wasm"},{"duckdb_arch":"wasm_eh","main_module":"duckdb-eh.wasm"}]') }}
+        # DuckDB 2.0 builds of duckdb-wasm ship no mvp bundle, so only wasm_eh
+        # (served by the "base" bundle) can be load-tested. wasm_threads needs a
+        # COI worker that duckdb-wasm does not ship for Node.
+        include:
+          - duckdb_arch: wasm_eh
+            main_module: duckdb-base.wasm
 
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/download-artifact@v7
         with:
-          name: anndata-v1.5.5-extension-${{ matrix.duckdb_arch }}
+          name: anndata-v2.0.0-extension-${{ matrix.duckdb_arch }}
           path: /tmp/extension
 
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install duckdb-wasm (pin must carry DuckDB v1.5.5 - see test/wasm/README.md)
+      - name: Install duckdb-wasm (pin must carry DuckDB v2.0.0 - see test/wasm/README.md)
         working-directory: test/wasm
         run: npm install
 
@@ -162,7 +164,7 @@ jobs:
             --main test/wasm/node_modules/@duckdb/duckdb-wasm/dist/${{ matrix.main_module }} \
             --allowlist test/wasm/allowed_undefined.txt \
             --expect-platform ${{ matrix.duckdb_arch }} \
-            --expect-duckdb v1.5.5
+            --expect-duckdb v2.0.0
 
       - name: Load smoke test (INSTALL + LOAD + version + functions)
         working-directory: test/wasm
@@ -171,7 +173,7 @@ jobs:
           # bodies (including error bodies) under ~/.duckdb/extensions/.
           HOME="$(mktemp -d)" node run_node.mjs \
             /tmp/extension/anndata.duckdb_extension.wasm \
-            ${{ matrix.duckdb_arch }} v1.5.5 "$(cat ../../VERSION)" \
+            ${{ matrix.duckdb_arch }} v2.0.0 "$(cat ../../VERSION)" \
             ../data/test_small.h5ad
 
   # Deploy the in-browser demo (demo/browser/) to GitHub Pages.
@@ -189,8 +191,8 @@ jobs:
   # HTML marker) - that is where reviewers look. It is also written to the
   # job summary on every deploy, PR or not.
   #
-  # PR runs build only wasm_eh (reduced CI), so the wasm_mvp artifact is
-  # optional - every modern browser selects the eh bundle anyway.
+  # Only the wasm_eh artifact is deployed: DuckDB 2.0 builds of duckdb-wasm
+  # load wasm_eh (base bundle) or wasm_threads extensions, never wasm_mvp.
   # Once the wasm build is published to community-extensions, the bundled
   # artifact (and the custom_extension_repository line in index.html) can go.
   deploy-demo:
@@ -213,24 +215,14 @@ jobs:
 
       - uses: actions/download-artifact@v7
         with:
-          name: anndata-v1.5.5-extension-wasm_eh
+          name: anndata-v2.0.0-extension-wasm_eh
           path: /tmp/wasm_eh
-
-      - uses: actions/download-artifact@v7
-        continue-on-error: true
-        with:
-          name: anndata-v1.5.5-extension-wasm_mvp
-          path: /tmp/wasm_mvp
 
       - name: Assemble site content
         run: |
-          mkdir -p content/extension/v1.5.5/wasm_eh content/data
+          mkdir -p content/extension/v2.0.0/wasm_eh content/data
           cp demo/browser/index.html content/
-          cp /tmp/wasm_eh/anndata.duckdb_extension.wasm content/extension/v1.5.5/wasm_eh/
-          if [ -f /tmp/wasm_mvp/anndata.duckdb_extension.wasm ]; then
-            mkdir -p content/extension/v1.5.5/wasm_mvp
-            cp /tmp/wasm_mvp/anndata.duckdb_extension.wasm content/extension/v1.5.5/wasm_mvp/
-          fi
+          cp /tmp/wasm_eh/anndata.duckdb_extension.wasm content/extension/v2.0.0/wasm_eh/
           cp test/data/test_small.h5ad content/data/
 
       - name: Publish to gh-pages
@@ -403,11 +395,11 @@ jobs:
       - name: Checkout DuckDB to version
         run: |
           cd duckdb
-          git checkout v1.5.5
+          git checkout v2.0.0
 
       - uses: actions/download-artifact@v7
         with:
-          name: anndata-v1.5.5-extension-${{matrix.duckdb_arch}}
+          name: anndata-v2.0.0-extension-${{matrix.duckdb_arch}}
           path: /tmp/extension
           
       - name: Deploy

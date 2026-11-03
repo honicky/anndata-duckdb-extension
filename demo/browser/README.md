@@ -53,12 +53,12 @@ SELECT cell_type, count(*) FROM d.obs GROUP BY 1;
 
 ## How it works
 
-- `@duckdb/duckdb-wasm` is loaded from jsDelivr, **pinned to `1.33.1-dev64.0`**,
-  the build that carries DuckDB v1.5.5 - the same version the extension is
+- `@duckdb/duckdb-wasm` is loaded from jsDelivr, **pinned to `1.33.1-dev114.0`**,
+  the build that carries DuckDB v2.0.0 - the same version the extension is
   built against. The pin must move in lockstep with `duckdb_version`
   (`test/wasm/README.md`).
 - The extension is served by `serve.py` from your local `build/<arch>/repository/`
-  at `/extension/v1.5.5/<arch>/anndata.duckdb_extension.wasm`, and loaded via
+  at `/extension/v2.0.0/<arch>/anndata.duckdb_extension.wasm`, and loaded via
   `SET custom_extension_repository` + `INSTALL anndata; LOAD anndata`
   (`allowUnsignedExtensions` - local builds are unsigned).
 - Files are opened by the extension through a ranged HDF5 driver backed by

@@ -8,7 +8,7 @@
 // This is the test that would have caught the bug where every published wasm
 // artifact failed at dlopen with unresolved H5* symbols (issue #24).
 //
-// Usage: node run_node.mjs <path-to-extension.wasm> <arch: wasm_mvp|wasm_eh> \
+// Usage: node run_node.mjs <path-to-extension.wasm> <arch: wasm_eh> \
 //            <expected-duckdb-version> <expected-extension-version> [fixture.h5ad]
 //
 // With the optional 5th argument, the fixture is registered via
@@ -21,7 +21,7 @@
 //
 // Version pins (package.json) move in lockstep with duckdb_version in
 // .github/workflows/MainDistributionPipeline.yml:
-//   @duckdb/duckdb-wasm 1.33.1-dev64.0  ->  DuckDB v1.5.5
+//   @duckdb/duckdb-wasm 1.33.1-dev114.0  ->  DuckDB v2.0.0
 //   web-worker pinned 1.2.0 (1.5.x cannot load the CJS worker bundles)
 
 import { createServer } from "node:http";
@@ -35,13 +35,14 @@ const require = createRequire(import.meta.url);
 
 const [extPath, arch, expectDuckdb, expectExt, fixturePath] = process.argv.slice(2);
 if (!extPath || !arch || !expectDuckdb || !expectExt) {
-  console.error("usage: run_node.mjs <extension.wasm> <wasm_mvp|wasm_eh> <duckdb-version> <ext-version>");
+  console.error("usage: run_node.mjs <extension.wasm> <wasm_eh> <duckdb-version> <ext-version>");
   process.exit(2);
 }
 
 const BUNDLES = {
-  wasm_mvp: { main: "duckdb-mvp.wasm", worker: "duckdb-node-mvp.worker.cjs" },
-  wasm_eh: { main: "duckdb-eh.wasm", worker: "duckdb-node-eh.worker.cjs" },
+  // DuckDB 2.0 builds of duckdb-wasm ship one single-threaded bundle ("base"),
+  // which loads wasm_eh extensions; the separate mvp and eh bundles are gone.
+  wasm_eh: { main: "duckdb-base.wasm", worker: "duckdb-node-base.worker.cjs" },
   // wasm_threads needs a COI worker, which @duckdb/duckdb-wasm does not ship
   // for Node - it is untestable here (browser tier only).
 };
