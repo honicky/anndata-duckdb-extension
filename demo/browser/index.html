@@ -75,10 +75,10 @@
 </div>
 
 <script type="module">
-// Pinned to the duckdb-wasm build that carries DuckDB v1.5.5, matching the
-// extension artifact served from /extension/v1.5.5/... (see test/wasm/README.md
+// Pinned to the duckdb-wasm build that carries DuckDB v2.0.0, matching the
+// extension artifact served from /extension/v2.0.0/... (see test/wasm/README.md
 // for the lockstep rule).
-import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev64.0/+esm";
+import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev114.0/+esm";
 
 const term = document.getElementById("term");
 const input = document.getElementById("sql");
@@ -530,7 +530,8 @@ try {
   line("");
   statusEl.textContent = "selecting bundle…";
   const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
-  const arch = /coi/.test(bundle.mainModule) ? "wasm_threads" : /eh/.test(bundle.mainModule) ? "wasm_eh" : "wasm_mvp";
+  // DuckDB 2.0 bundles: "threads" (cross-origin isolated) or "base", which loads wasm_eh extensions
+  const arch = /threads/.test(bundle.mainModule) ? "wasm_threads" : "wasm_eh";
   const workerUrl = URL.createObjectURL(
     new Blob([`importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
   const worker = new Worker(workerUrl);
