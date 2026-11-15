@@ -33,6 +33,10 @@
 #      `version` / `ref` at duckdb/community-extensions against our latest
 #      release tag → `community-ext-stale` issue with a ready-to-paste diff;
 #      auto-closes when upstream catches up.
+#   7. Community toolchain parity: compares the extension-ci-tools ref and
+#      DuckDB version hardcoded in duckdb/community-extensions' build.yml, and
+#      our descriptor's `excluded_platforms`, against MainDistributionPipeline
+#      → `community-toolchain-drift` issue; auto-closes when they match.
 #
 name: Upcoming DuckDB Pipeline (main)
 on:
@@ -755,4 +759,163 @@ jobs:
                 issue_number: open[0].number, title, body,
               });
               core.notice(`Updated descriptor issue #${open[0].number}`);
+            }
+
+  # ── Monitor 4: community toolchain parity ───────────────────────────
+  # duckdb/community-extensions builds our descriptor's `ref` with ITS OWN
+  # toolchain: the extension-ci-tools branch and DuckDB version hardcoded in its
+  # .github/workflows/build.yml, plus the `excluded_platforms` in our descriptor.
+  # Our MainDistributionPipeline pins the same values so a green release run
+  # predicts a green community build. This job opens a
+  # `community-toolchain-drift` issue when they diverge (typically: upstream moved
+  # to a new release branch / DuckDB version, or the descriptor's exclusions lag
+  # our `exclude_archs`), and auto-closes it once they match again.
+  check-community-toolchain:
+    name: Check community toolchain parity
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compare community build toolchain vs ours
+        id: parity
+        run: |
+          set -uo pipefail
+          BASE=https://raw.githubusercontent.com/duckdb/community-extensions/main
+          BUILD_YML=$(curl -sfL "$BASE/.github/workflows/build.yml" || true)
+          DESC=$(curl -sfL "$BASE/extensions/anndata/description.yml" || true)
+          OURS=.github/workflows/MainDistributionPipeline.yml
+
+          # Semicolon-separated platform list → sorted, de-duplicated, ';'-joined.
+          norm() { printf '%s' "$1" | tr -d "\"' " | tr ';' '\n' | sed '/^$/d' | sort -u | paste -sd';' -; }
+
+          # Theirs: the reusable-workflow ref of the build job, the stable DuckDB
+          # version, and our descriptor's excluded_platforms.
+          THEIR_REF=$(printf '%s\n' "$BUILD_YML" | grep -oE '_extension_distribution\.yml@[^[:space:]]+' | head -1 | cut -d@ -f2)
+          THEIR_DUCKDB=$(printf '%s\n' "$BUILD_YML" | grep -oE "DUCKDB_LATEST_STABLE: *'[^']+'" | head -1 | cut -d"'" -f2)
+          THEIR_EXCL=$(norm "$(printf '%s\n' "$DESC" | grep -E '^[[:space:]]+excluded_platforms:' | head -1 | sed -E 's/^[^:]*:[[:space:]]*//; s/#.*//')")
+
+          # Ours: the first (= duckdb-stable-build) occurrence of each.
+          OUR_REF=$(grep -oE '_extension_distribution\.yml@[^[:space:]]+' "$OURS" | head -1 | cut -d@ -f2)
+          OUR_CI_TOOLS=$(grep -E '^[[:space:]]+ci_tools_version:' "$OURS" | head -1 | sed -E 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*#.*//')
+          OUR_DUCKDB=$(grep -E '^[[:space:]]+duckdb_version:' "$OURS" | head -1 | sed -E 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*#.*//')
+          OUR_EXCL=$(norm "$(grep -E '^[[:space:]]+exclude_archs:' "$OURS" | head -1 | sed -E 's/^[^:]*:[[:space:]]*//; s/#.*//')")
+
+          if [ -z "$BUILD_YML" ] || [ -z "$DESC" ] || [ -z "$THEIR_REF" ] || [ -z "$THEIR_DUCKDB" ] \
+             || [ -z "$OUR_REF" ] || [ -z "$OUR_DUCKDB" ]; then
+            STATUS=parse_error
+          elif [ "$THEIR_REF" = "$OUR_REF" ] && [ "$OUR_CI_TOOLS" = "$OUR_REF" ] \
+               && [ "$THEIR_DUCKDB" = "$OUR_DUCKDB" ] && [ "$THEIR_EXCL" = "$OUR_EXCL" ]; then
+            STATUS=in_sync
+          else
+            STATUS=drift
+          fi
+
+          {
+            echo "status=$STATUS"
+            echo "their_ref=$THEIR_REF";       echo "our_ref=$OUR_REF"
+            echo "our_ci_tools=$OUR_CI_TOOLS"
+            echo "their_duckdb=$THEIR_DUCKDB"; echo "our_duckdb=$OUR_DUCKDB"
+            echo "their_excl=$THEIR_EXCL";     echo "our_excl=$OUR_EXCL"
+          } | tee -a "$GITHUB_OUTPUT"
+
+      - name: Open or close toolchain drift issue
+        uses: actions/github-script@v8
+        env:
+          STATUS: ${{ steps.parity.outputs.status }}
+          THEIR_REF: ${{ steps.parity.outputs.their_ref }}
+          OUR_REF: ${{ steps.parity.outputs.our_ref }}
+          OUR_CI_TOOLS: ${{ steps.parity.outputs.our_ci_tools }}
+          THEIR_DUCKDB: ${{ steps.parity.outputs.their_duckdb }}
+          OUR_DUCKDB: ${{ steps.parity.outputs.our_duckdb }}
+          THEIR_EXCL: ${{ steps.parity.outputs.their_excl }}
+          OUR_EXCL: ${{ steps.parity.outputs.our_excl }}
+        with:
+          script: |
+            const label = 'community-toolchain-drift';
+            const e = process.env;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner, repo: context.repo.repo, name: label
+              });
+            } catch (err) {
+              if (err.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  name: label, color: 'd93f0b',
+                  description: 'Our CI toolchain no longer matches the one duckdb/community-extensions builds with',
+                });
+              } else { throw err; }
+            }
+
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: label, per_page: 100,
+            });
+
+            if (e.STATUS === 'in_sync') {
+              for (const issue of open) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo, issue_number: issue.number,
+                  body: `Toolchain matches community-extensions again (\`${e.OUR_REF}\`, DuckDB \`${e.OUR_DUCKDB}\`). Closing.`,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issue.number, state: 'closed',
+                });
+              }
+              core.notice('Community toolchain in sync.');
+              return;
+            }
+
+            const mark = (a, b) => (a === b ? '' : ' ⚠️');
+            const show = (v) => (v ? `\`${v}\`` : '_(none / unparsed)_');
+            const title = e.STATUS === 'parse_error'
+              ? 'Community toolchain parity check could not parse its inputs'
+              : `Community toolchain drift: community-extensions builds with ${e.THEIR_REF || '?'} / DuckDB ${e.THEIR_DUCKDB || '?'}`;
+            const body = [
+              e.STATUS === 'parse_error'
+                ? `The parity check could not extract every value (an empty cell below). The format of ` +
+                  `\`duckdb/community-extensions/.github/workflows/build.yml\` or of our ` +
+                  `\`MainDistributionPipeline.yml\` probably changed; update the parsing in ` +
+                  `\`UpcomingDuckdbPipeline.yml\` (job \`check-community-toolchain\`).`
+                : `\`duckdb/community-extensions\` builds our descriptor's \`ref\` with a toolchain that no longer ` +
+                  `matches \`MainDistributionPipeline.yml\`, so our green CI no longer predicts their build.`,
+              ``,
+              `| | community-extensions | ours |`,
+              `|---|---|---|`,
+              `| extension-ci-tools ref | ${show(e.THEIR_REF)} | ${show(e.OUR_REF)} (ci_tools_version ${show(e.OUR_CI_TOOLS)})${mark(e.THEIR_REF, e.OUR_REF)}${mark(e.OUR_REF, e.OUR_CI_TOOLS)} |`,
+              `| DuckDB version | ${show(e.THEIR_DUCKDB)} | ${show(e.OUR_DUCKDB)}${mark(e.THEIR_DUCKDB, e.OUR_DUCKDB)} |`,
+              `| excluded platforms (descriptor vs \`exclude_archs\`) | ${show(e.THEIR_EXCL)} | ${show(e.OUR_EXCL)}${mark(e.THEIR_EXCL, e.OUR_EXCL)} |`,
+              ``,
+              `### What to do`,
+              ``,
+              `- **ref / DuckDB version differ** → upstream moved to a new release line. Follow "Upgrading DuckDB ` +
+              `Version" in \`CLAUDE.md\`: move both \`uses: ...@<ref>\` lines and \`ci_tools_version\` in ` +
+              `\`MainDistributionPipeline.yml\` (and the \`extension-ci-tools\` submodule) to the new ref.`,
+              `- **Excluded platforms differ** → either the descriptor PR with the new \`excluded_platforms\` has not ` +
+              `merged yet (expected during a release; this closes when it does), or \`exclude_archs\` and the ` +
+              `descriptor need to be brought back in line.`,
+              ``,
+              `Run: ${runUrl}`,
+              ``,
+              `This issue will close automatically when all rows match.`,
+            ].join('\n');
+
+            if (open.length === 0) {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: [label],
+              });
+              core.notice(`Opened toolchain drift issue #${created.data.number}`);
+            } else {
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: open[0].number, title, body,
+              });
+              core.notice(`Updated toolchain drift issue #${open[0].number}`);
             }

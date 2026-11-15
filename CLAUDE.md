@@ -201,21 +201,22 @@ The `extension-ci-tools` dependency is used in TWO places that must be updated t
 
 **When updating extension-ci-tools:**
 
+Both track the **release branch that `duckdb/community-extensions` builds with** (currently `v2.0-cyanoptera`; see "Pinning policy" below), not `main`.
+
 ```bash
-# 1. Update the submodule to latest
+# 1. Update the submodule to the release branch's head
 cd extension-ci-tools
 git fetch origin
-git checkout origin/main  # or a specific version tag like origin/v1.4.3
+git checkout origin/v2.0-cyanoptera   # the branch named in community-extensions' build.yml
 cd ..
 
 # 2. Stage the submodule update
 git add extension-ci-tools
 
-# 3. Update the workflow file to match
-# Edit .github/workflows/MainDistributionPipeline.yml:
-#   - Change: uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
-#   - Change: ci_tools_version: main
-# (or use a specific version tag like @v1.4.3)
+# 3. Update the workflow file to match: BOTH `uses:` lines (build and code quality)
+#    and BOTH `ci_tools_version:` inputs in .github/workflows/MainDistributionPipeline.yml:
+#   uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
+#   ci_tools_version: v2.0-cyanoptera
 
 # 4. Commit both changes together
 git add .github/workflows/MainDistributionPipeline.yml
@@ -234,8 +235,10 @@ When upgrading DuckDB to a new version (e.g., v1.4.4 → v1.5.0), ALL of these m
 # Update DuckDB submodule to the target version tag
 cd duckdb && git fetch origin tag vX.Y.Z && git checkout vX.Y.Z && cd ..
 
-# Update extension-ci-tools submodule to latest main
-cd extension-ci-tools && git fetch origin && git checkout origin/main && cd ..
+# Update extension-ci-tools submodule to the release branch community-extensions
+# uses for the new DuckDB version (read it from the `uses: ...@<branch>` line in
+# https://github.com/duckdb/community-extensions/blob/main/.github/workflows/build.yml)
+cd extension-ci-tools && git fetch origin && git checkout origin/<release-branch> && cd ..
 
 git add duckdb extension-ci-tools
 ```
@@ -248,6 +251,8 @@ In `.github/workflows/MainDistributionPipeline.yml`, update ALL occurrences of t
 - DuckDB CLI download URL
 - Extension directory paths (`~/.duckdb/extensions/vX.Y.Z/`)
 - `git checkout vX.Y.Z` in the deploy job
+- Both `uses: duckdb/extension-ci-tools/...@<branch>` lines and both `ci_tools_version:` inputs → the release branch community-extensions now uses (the `community-toolchain-drift` issue names it)
+- The deploy job's `duckdb_arch` matrix must list only arches that `duckdb-stable-build` actually produces for the new version (v2.0.0 dropped `osx_amd64`; a missing artifact fails that deploy job)
 
 ### 3. Fix API breaking changes
 
@@ -289,6 +294,7 @@ A single workflow handles both upcoming-release tracking and stable-upstream mon
 4. **New stable DuckDB release** (`new-duckdb-release` label) — compares our pinned `duckdb_version` against the latest GitHub release. Opens an issue with an upgrade checklist; auto-closes when we catch up.
 5. **Stable CI health** (`ci-upstream-regression` label) — re-runs the full stable build matrix against `extension-ci-tools@main` to catch upstream CI-tooling regressions (e.g. runner-image migrations) even without a push. Auto-closes when green again.
 6. **Community-extensions descriptor freshness** (`community-ext-stale` label) — compares the published `version` / `ref` at `duckdb/community-extensions` against our latest **release tag** (the descriptor's `ref` is pinned to a tag SHA, not a moving branch head). Opens an issue with the exact descriptor diff when behind; auto-closes when upstream catches up.
+7. **Community toolchain parity** (`community-toolchain-drift` label) — reads the `extension-ci-tools` ref and `DUCKDB_LATEST_STABLE` hardcoded in `duckdb/community-extensions`' `.github/workflows/build.yml`, plus our descriptor's `excluded_platforms`, and compares them with `MainDistributionPipeline.yml` (`uses:` ref, `ci_tools_version`, `duckdb_version`, `exclude_archs`). Opens an issue with a theirs-vs-ours table when they diverge; auto-closes when they match. Expect it to open briefly during a release whose descriptor PR changes `excluded_platforms`.
 
 If the [Claude GitHub App](https://github.com/apps/claude) is installed, the `@claude` mentions in the failure issues trigger automated fix PRs against `main-distribution`. Without the app, the issues are tracking-only.
 
@@ -299,16 +305,21 @@ Reproduce the upcoming-release build locally:
 ```bash
 git fetch origin main-distribution && git checkout main-distribution
 git -C duckdb fetch origin main && git -C duckdb checkout origin/main
+git -C extension-ci-tools fetch origin main && git -C extension-ci-tools checkout origin/main
 rm -rf build/release && uv run make
 ```
 
-(The `extension-ci-tools` submodule already tracks `main`, so it does not need to be moved.)
+(The upcoming build uses `extension-ci-tools@main`, while the committed submodule tracks the stable release branch, so move it for the local repro. As with `duckdb`, don't commit that pointer change.)
 
 If you fix an API breakage that's only relevant to `duckdb/main`, **commit the fix on `main-distribution` only** — not on `main`. Do not commit the `duckdb` submodule pointer change; that submodule SHA on `main-distribution` should still match the stable `duckdb_version` in `MainDistributionPipeline.yml`. The override of the duckdb checkout for the upcoming build happens inside the workflow, not via the committed submodule pointer.
 
 ### Pinning policy
 
-`MainDistributionPipeline.yml` intentionally uses `@main` and `ci_tools_version: main` for `extension-ci-tools` — only `duckdb_version` is pinned (to the stable release we ship). This means a breaking change in upstream CI tooling will surface in the next stable PR run, not silently mask itself for weeks. If you do need to pin `extension-ci-tools` (e.g. to unblock a PR while a CI-tools fix is upstreamed), do so as a temporary `revert me` commit, not as the steady-state config.
+`MainDistributionPipeline.yml` pins `extension-ci-tools` to **the same release branch `duckdb/community-extensions` builds with** (`@v2.0-cyanoptera` / `ci_tools_version: v2.0-cyanoptera`), and its `exclude_archs` matches the descriptor's `excluded_platforms`. community-extensions builds our descriptor's `ref` with its own toolchain, so a green run on `@main` did not predict a green community build; matching their toolchain does.
+
+Early warning about upstream CI-tooling breakage is unchanged: the daily **Stable CI health** monitor still builds against `extension-ci-tools@main`, and `main-distribution` builds with `@main` against `duckdb/main`. The **Community toolchain parity** monitor opens a `community-toolchain-drift` issue when community-extensions moves to a new release branch or DuckDB version, which is the signal to re-pin.
+
+(Until November 2026 this file used `@main`. That changed after the v0.16.0 release, which needed a manual full-matrix run with community-extensions' inputs before its descriptor PR could be trusted.)
 
 ### vcpkg: where dependency versions actually come from
 
