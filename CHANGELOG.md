@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **CI uses the same toolchain as duckdb/community-extensions.**
+  - Change: `MainDistributionPipeline.yml` (both `uses:` lines and `ci_tools_version`) and the
+    `extension-ci-tools` submodule move from `main` to `v2.0-cyanoptera`, the branch hardcoded in
+    community-extensions' `build.yml`.
+  - Why: community-extensions builds our tag with its own toolchain, so green CI on `@main` did not
+    predict a green community build.
+  - Early warning: the daily Stable CI health job still builds against `extension-ci-tools@main`.
+  - New monitor: **Community toolchain parity** (UpcomingDuckdbPipeline, monitor 7) opens a
+    `community-toolchain-drift` issue when their ref, their DuckDB version, or our descriptor's
+    `excluded_platforms` stops matching ours.
+- **`wasm_mvp` and `wasm_threads` are excluded from the build** (`exclude_archs`), matching the
+  `excluded_platforms` now in the community descriptor.
+  - `wasm_mvp`: DuckDB 2.0's duckdb-wasm has no mvp bundle, so nothing can load it.
+  - `wasm_threads`: it builds without `-fwasm-exceptions` (upstream `WASM_COMPILE_TIME_EH_FLAGS` bug)
+    and duckdb-wasm ships no Node threads worker to test it with (spec/wasm-support-spec.md B4).
+  - Only `wasm_eh` is built, load-tested and published.
+
+### Fixed
+- **S3 deploy (#56):** `osx_amd64` removed from the deploy matrix (extension-ci-tools does not build it
+  for v2.0.0), and `fail-fast` disabled.
+  - What went wrong in v0.16.0: the missing `osx_amd64` artifact failed one deploy job, which cancelled
+    four other platform uploads.
+  - Re-runs of the cancelled jobs are cancelled again because they inherit the failed matrix.
+
 ## [0.16.0] - 2026-11-03
 
 ### Changed
